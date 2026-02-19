@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "Bash(npm create:*)",
+      "Bash(npm install:*)",
+      "Bash(go get:*)",
+      "Bash(GOPROXY=https://proxy.golang.org,direct go get:*)",
+      "Bash(GOPROXY=https://proxy.golang.org,direct go build:*)",
+      "Bash(GOPROXY=https://proxy.golang.org,direct go test:*)",
+      "Bash(npx vue-tsc:*)"
+    ]
+  }
+}
