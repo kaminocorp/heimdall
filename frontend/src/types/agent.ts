@@ -9,6 +9,7 @@ export interface AgentConfig {
 }
 
 export interface ChatMessage {
+  id: string
   role: 'user' | 'agent'
   content: string
   tool_calls?: string[]

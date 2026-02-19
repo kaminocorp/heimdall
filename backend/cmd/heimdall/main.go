@@ -9,18 +9,25 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/crimson-sun/heimdall/backend/internal/api"
-	"github.com/crimson-sun/heimdall/backend/internal/config"
+	"github.com/hejijunhao/heimdall/backend/internal/api"
+	"github.com/hejijunhao/heimdall/backend/internal/config"
 )
 
 func main() {
 	cfg := config.Load()
+	if err := cfg.Validate(); err != nil {
+		slog.Error("invalid configuration", "err", err)
+		os.Exit(1)
+	}
 
 	router := api.NewRouter(cfg)
 
 	srv := &http.Server{
-		Addr:    ":" + cfg.Port,
-		Handler: router,
+		Addr:         ":" + cfg.Port,
+		Handler:      router,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  120 * time.Second,
 	}
 
 	go func() {

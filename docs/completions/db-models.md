@@ -67,11 +67,11 @@ Agent behaviour configuration. Single row for MVP; becomes per-project if Heimda
 
 ```sql
 CREATE TABLE agent_config (
-    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    model       TEXT NOT NULL DEFAULT 'claude-sonnet-4-6',  -- LLM model identifier
-    mode        TEXT NOT NULL DEFAULT 'continuous',          -- "continuous" or "scheduled"
-    schedule    TEXT,                                         -- Cron expression (nullable, only used if mode = "scheduled")
-    system_prompt_override TEXT,                              -- Optional custom instructions appended to base prompt
+    id          INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),  -- Singleton row
+    model       TEXT NOT NULL DEFAULT 'claude-sonnet-4-6',      -- LLM model identifier
+    mode        TEXT NOT NULL DEFAULT 'continuous',              -- "continuous" or "scheduled"
+    schedule    TEXT,                                             -- Cron expression (nullable, only used if mode = "scheduled")
+    system_prompt_override TEXT,                                  -- Optional custom instructions appended to base prompt
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -159,7 +159,7 @@ Chat sessions between a user and the agent.
 ```sql
 CREATE TABLE conversations (
     id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    investigation_id  UUID REFERENCES investigations(id),  -- Nullable; links to investigation if chat spawned one
+    investigation_id  UUID REFERENCES investigations(id) ON DELETE SET NULL,  -- Nullable; links to investigation if chat spawned one
     title             TEXT,                                  -- Auto-generated or user-set
     messages          JSONB NOT NULL DEFAULT '[]'::jsonb,    -- [{role, content, timestamp}, ...]
     created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -200,7 +200,7 @@ Rolling 24-hour debug buffer. Stores raw ingested logs/events for internal obser
 ```sql
 CREATE TABLE log_buffer (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    connection_id   UUID NOT NULL REFERENCES connections(id),
+    connection_id   UUID NOT NULL REFERENCES connections(id) ON DELETE CASCADE,
     source_type     TEXT NOT NULL,           -- "server_logs", "db_events"
     severity        TEXT,                    -- Extracted severity if parseable (nullable)
     payload         JSONB NOT NULL,          -- Raw log/event as received

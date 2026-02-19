@@ -27,10 +27,15 @@ func (r *Registry) Get(id string) (Connector, bool) {
 	return c, ok
 }
 
-func (r *Registry) Remove(id string) {
+func (r *Registry) Remove(id string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	c, ok := r.connectors[id]
+	if !ok {
+		return nil
+	}
 	delete(r.connectors, id)
+	return c.Close()
 }
 
 func (r *Registry) All() map[string]Connector {

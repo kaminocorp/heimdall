@@ -1,341 +1,198 @@
-# Heimdall — Project Scaffolding
+# Scaffolding — Completion Notes
 
-The full directory structure to scaffold for the Heimdall monorepo. This covers every file and folder to create at project initialisation.
-
-Reference: [Blueprint](../plans/blueprint.md) | [Vision](../vision.md)
-
----
-
-## Root
-
-```
-heimdall/
-├── frontend/
-├── backend/
-├── docs/
-├── docker-compose.yml
-├── Makefile
-├── .gitignore
-└── README.md
-```
-
-### `Makefile`
-
-Root-level task runner for common operations across both projects.
-
-```makefile
-# Targets to include:
-dev-frontend     # Run frontend dev server
-dev-backend      # Run backend dev server
-dev              # Run both concurrently
-build-frontend   # Build frontend for production
-build-backend    # Build backend binary
-build            # Build both
-test             # Run all tests
-lint             # Lint both projects
-sqlc-generate    # Run sqlc generate (regenerate Go code from SQL)
-migrate-up       # Run DB migrations
-migrate-down     # Rollback last migration
-migrate-create   # Create a new migration file
-docker-up        # docker-compose up
-docker-down      # docker-compose down
-```
-
-### `docker-compose.yml`
-
-Optional — for containerised local dev if needed.
-
-```yaml
-services:
-  backend:      # Go backend (hot-reload via air)
-  frontend:     # Vue dev server (Vite)
-```
-
-> Note: No local Postgres. Heimdall connects directly to a remote database (Supabase or Fly.io Postgres). Connection string configured via environment variable.
-
-### `.gitignore`
-
-```
-# Go
-backend/tmp/
-backend/bin/
-
-# Node
-frontend/node_modules/
-frontend/dist/
-
-# Environment
-.env
-.env.local
-.env.*.local
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Docker
-docker-compose.override.yml
-```
+**Date:** 2026-02-19
+**Reference:** [Scaffolding Spec](../executing/scaffolding.md) | [Blueprint](../plans/blueprint.md) | [DB Models](../executing/db-models.md)
 
 ---
 
-## Frontend — `frontend/`
+## What Was Done
 
-Vue 3 + Vite + TypeScript
-
-```
-frontend/
-├── public/
-│   └── favicon.ico
-│
-├── src/
-│   ├── api/                        # API client layer
-│   │   ├── client.ts               #   Base HTTP client (axios/ofetch instance)
-│   │   ├── connections.ts           #   Connections API calls
-│   │   ├── agent.ts                 #   Agent config API calls
-│   │   ├── logs.ts                  #   Agent log API calls
-│   │   └── reports.ts               #   Reports API calls
-│   │
-│   ├── assets/                     # Static assets
-│   │   └── styles/
-│   │       └── main.css             #   Global styles / Tailwind entry
-│   │
-│   ├── components/                 # Reusable UI components
-│   │   ├── common/                 #   Shared/generic components
-│   │   │   ├── AppHeader.vue
-│   │   │   ├── AppSidebar.vue
-│   │   │   ├── StatusBadge.vue
-│   │   │   └── LoadingSpinner.vue
-│   │   │
-│   │   ├── connections/            #   Connection management
-│   │   │   ├── ConnectionCard.vue
-│   │   │   ├── ConnectionForm.vue
-│   │   │   └── ConnectionList.vue
-│   │   │
-│   │   ├── agent/                  #   Agent chat interface
-│   │   │   ├── ChatWindow.vue
-│   │   │   ├── ChatMessage.vue
-│   │   │   └── ChatInput.vue
-│   │   │
-│   │   ├── log/                    #   Agent log / master feed
-│   │   │   ├── LogFeed.vue
-│   │   │   ├── LogEntry.vue
-│   │   │   └── LogFilters.vue
-│   │   │
-│   │   └── reports/                #   Incident reports
-│   │       ├── ReportCard.vue
-│   │       ├── ReportDetail.vue
-│   │       └── ReportList.vue
-│   │
-│   ├── composables/                # Vue composables (shared logic)
-│   │   ├── useWebSocket.ts          #   WebSocket connection management
-│   │   ├── useAgent.ts              #   Agent chat state + actions
-│   │   └── useAuth.ts               #   Authentication state
-│   │
-│   ├── layouts/                    # Page layouts
-│   │   └── DefaultLayout.vue
-│   │
-│   ├── pages/                      # Route-level views
-│   │   ├── DashboardPage.vue
-│   │   ├── ConnectionsPage.vue
-│   │   ├── AgentConfigPage.vue
-│   │   ├── AgentChatPage.vue
-│   │   ├── AgentLogPage.vue
-│   │   ├── ReportsPage.vue
-│   │   └── LoginPage.vue
-│   │
-│   ├── router/
-│   │   └── index.ts                 #   Vue Router config
-│   │
-│   ├── stores/                     # Pinia stores
-│   │   ├── auth.ts
-│   │   ├── connections.ts
-│   │   ├── agent.ts
-│   │   └── logs.ts
-│   │
-│   ├── types/                      # TypeScript type definitions
-│   │   ├── connection.ts
-│   │   ├── agent.ts
-│   │   ├── log.ts
-│   │   ├── report.ts
-│   │   └── api.ts                   #   API request/response types
-│   │
-│   ├── utils/                      # Utility functions
-│   │   ├── format.ts                #   Date/time formatting, etc.
-│   │   └── constants.ts             #   App-wide constants
-│   │
-│   ├── App.vue                     # Root component
-│   └── main.ts                     # App entry point
-│
-├── index.html
-├── vite.config.ts
-├── tsconfig.json
-├── tsconfig.node.json
-├── eslint.config.js
-├── package.json
-└── tailwind.config.js
-```
-
-### Key decisions
-
-- **`api/` layer** — Dedicated directory for API calls rather than scattering fetch calls across components and stores. Each file maps to a backend resource.
-- **`composables/`** — `useWebSocket` is critical; it handles connection lifecycle, reconnection, and message routing for both agent chat and live log streaming.
-- **`pages/`** vs **`components/`** — Pages are route-level views (one per route). Components are reusable pieces composed within pages.
-- **`types/`** — Centralised TypeScript types shared across API layer, stores, and components.
+Full monorepo scaffolding implemented per the scaffolding specification. Both frontend and backend are initialised with all directories, stub files, dependencies, and configuration in place.
 
 ---
 
-## Backend — `backend/`
+## Root Level
 
-Go (standard project layout)
+| File | Notes |
+|------|-------|
+| `Makefile` | All targets from spec: `dev`, `dev-frontend`, `dev-backend`, `build`, `test`, `lint`, `sqlc-generate`, `migrate-up/down/create`, `docker-up/down` |
+| `docker-compose.yml` | Two services (backend, frontend). No local Postgres — connects to remote DB via env var. |
+| `.gitignore` | Go build artifacts, node_modules, .env files, IDE files, OS files |
+| `README.md` | Project overview, quick start commands, structure reference |
+
+---
+
+## Frontend
+
+**Stack:** Vue 3 + Vite + TypeScript + Pinia + Tailwind CSS v4 + Axios
+
+### Initialisation Approach
+
+`npm create vue@latest` was not usable non-interactively, so the project was scaffolded manually with an explicit `package.json` and config files. This produces the same result — a standard Vue 3 + Vite + TypeScript project — with full control over the structure.
+
+### Dependencies Installed
+
+**Runtime:** `vue`, `vue-router`, `pinia`, `axios`
+**Dev:** `vite`, `@vitejs/plugin-vue`, `typescript`, `vue-tsc`, `tailwindcss`, `@tailwindcss/vite`, `eslint`, `eslint-plugin-vue`, `@vue/tsconfig`, `@tsconfig/node22`
+
+### Directory Structure
+
+```
+frontend/src/
+├── api/                    # HTTP client layer (client.ts, connections.ts, agent.ts, logs.ts, reports.ts)
+├── assets/styles/          # main.css (Tailwind v4 entry via @import "tailwindcss")
+├── components/
+│   ├── common/             # AppHeader, AppSidebar, StatusBadge, LoadingSpinner
+│   ├── connections/        # ConnectionCard, ConnectionForm, ConnectionList
+│   ├── agent/              # ChatWindow, ChatMessage, ChatInput
+│   ├── log/                # LogFeed, LogEntry, LogFilters
+│   └── reports/            # ReportCard, ReportDetail, ReportList
+├── composables/            # useWebSocket, useAgent, useAuth
+├── layouts/                # DefaultLayout (sidebar + header + main)
+├── pages/                  # DashboardPage, ConnectionsPage, AgentConfigPage, AgentChatPage, AgentLogPage, ReportsPage, LoginPage
+├── router/                 # Vue Router with all routes (lazy-loaded)
+├── stores/                 # Pinia stores (auth, connections, agent, logs)
+├── types/                  # TypeScript types (connection, agent, log, report, api)
+├── utils/                  # format.ts (date helpers), constants.ts
+├── App.vue                 # Root component with DefaultLayout wrapper
+└── main.ts                 # Entry point (creates app, registers Pinia + Router)
+```
+
+### Configuration
+
+- `vite.config.ts` — Vue plugin, Tailwind plugin, `@` path alias, dev proxy for `/api` → `:8080` and `/ws` → `ws://localhost:8080`
+- `tsconfig.json` — project references setup (tsconfig.app.json + tsconfig.node.json)
+- `eslint.config.js` — flat config with vue/essential rules
+
+### Key Design Decisions
+
+- **API layer** (`src/api/`) isolates all HTTP calls. Each file maps to a backend resource.
+- **Composables** handle WebSocket lifecycle (`useWebSocket`) and agent chat state (`useAgent`).
+- **All components are functional stubs** with correct props/emits typing — ready to be wired up once the backend returns real data.
+- **Tailwind v4** used with the new `@import "tailwindcss"` syntax and `@tailwindcss/vite` plugin (no `tailwind.config.js` needed — Tailwind v4 uses CSS-based config).
+
+### Verification
+
+- `npx vue-tsc -b --noEmit` — clean, zero type errors.
+
+---
+
+## Backend
+
+**Stack:** Go 1.x + Chi v5 + pgx v5 + coder/websocket + anthropic-sdk-go + golang-migrate
+
+### Initialisation
+
+- Module: `github.com/crimson-sun/heimdall/backend`
+- Dependencies installed via `go get` with `GOPROXY=https://proxy.golang.org,direct` (direct DNS to `gopkg.in` was timing out)
+
+### Directory Structure
 
 ```
 backend/
-├── cmd/
-│   └── heimdall/
-│       └── main.go                  # Application entry point
-│
-├── internal/                       # Private application code
-│   ├── api/                        # HTTP layer
-│   │   ├── router.go               #   Route definitions
-│   │   ├── middleware/
-│   │   │   ├── auth.go              #   Authentication middleware
-│   │   │   ├── cors.go              #   CORS configuration
-│   │   │   └── logging.go           #   Request logging
-│   │   └── handlers/
-│   │       ├── connections.go       #   Connection CRUD handlers
-│   │       ├── agent.go             #   Agent config handlers
-│   │       ├── chat.go              #   WebSocket chat handler
-│   │       ├── logs.go              #   Agent log handlers
-│   │       ├── reports.go           #   Report handlers
-│   │       └── auth.go              #   Auth handlers
-│   │
-│   ├── agent/                      # Agent engine
-│   │   ├── agent.go                 #   Agent struct + lifecycle
-│   │   ├── loop.go                  #   Core tool-use loop
-│   │   ├── monitor.go               #   24/7 monitoring goroutine
-│   │   ├── tools.go                 #   Tool definitions + dispatch
-│   │   ├── tools_db.go              #   Database query tool impl
-│   │   ├── tools_logs.go            #   Log search tool impl
-│   │   ├── tools_codebase.go        #   Codebase search tool impl
-│   │   ├── tools_memory.go          #   Memory recall tool impl
-│   │   └── prompt.go                #   System prompt construction
-│   │
-│   ├── connectors/                 # External integration layer
-│   │   ├── connector.go             #   Connector interface definition
-│   │   ├── registry.go              #   Connector registry (manages active connections)
-│   │   ├── database/
-│   │   │   ├── postgres.go          #   PostgreSQL connector
-│   │   │   └── postgres_test.go
-│   │   ├── logs/
-│   │   │   ├── webhook.go           #   Webhook-based log ingestion
-│   │   │   ├── syslog.go            #   Syslog connector
-│   │   │   └── webhook_test.go
-│   │   └── codebase/
-│   │       ├── github.go            #   GitHub API connector
-│   │       └── github_test.go
-│   │
-│   ├── memory/                     # Elephantasm integration
-│   │   ├── client.go                #   HTTP client for Elephantasm API
-│   │   ├── types.go                 #   Memory/Event/Lesson structs
-│   │   └── memory.go                #   High-level memory operations
-│   │
-│   ├── db/                         # sqlc generated code (see docs/executing/db-models.md)
-│   │   ├── db.go                    #   DBTX interface + Queries struct (generated)
-│   │   ├── models.go                #   Go structs for all tables (generated)
-│   │   ├── connections.sql.go       #   Connection queries (generated)
-│   │   ├── agent_config.sql.go      #   Agent config queries (generated)
-│   │   ├── investigations.sql.go    #   Investigation queries (generated)
-│   │   ├── conversations.sql.go     #   Conversation queries (generated)
-│   │   ├── log_buffer.sql.go        #   Log buffer queries (generated)
-│   │   └── queries/                 #   Hand-written SQL (sqlc input)
-│   │       ├── connections.sql
-│   │       ├── agent_config.sql
-│   │       ├── investigations.sql
-│   │       ├── conversations.sql
-│   │       └── log_buffer.sql
-│   │
-│   ├── ws/                         # WebSocket management
-│   │   ├── hub.go                   #   Connection hub (manages all WS clients)
-│   │   ├── client.go                #   Individual client connection
-│   │   └── message.go               #   Message types + routing
-│   │
-│   ├── reports/                    # Report generation
-│   │   ├── generator.go             #   Report builder
-│   │   └── templates.go             #   Report structure/templates
-│   │
-│   └── config/                     # Application configuration
-│       └── config.go                #   Config struct + env loading
-│
-├── sqlc.yaml                       # sqlc configuration
-├── migrations/                     # SQL migration files (see docs/executing/db-models.md)
-│   ├── 001_create_connections.up.sql
-│   ├── 001_create_connections.down.sql
-│   ├── 002_create_agent_config.up.sql
-│   ├── 002_create_agent_config.down.sql
-│   ├── 003_create_investigations.up.sql
-│   ├── 003_create_investigations.down.sql
-│   ├── 004_create_conversations.up.sql
-│   ├── 004_create_conversations.down.sql
-│   ├── 005_create_log_buffer.up.sql
-│   └── 005_create_log_buffer.down.sql
-│
+├── cmd/heimdall/main.go           # Entry point: HTTP server with graceful shutdown
+├── internal/
+│   ├── config/config.go           # Env-based config (PORT, DATABASE_URL, ANTHROPIC_API_KEY)
+│   ├── api/
+│   │   ├── router.go              # Chi router with all routes
+│   │   ├── middleware/             # auth.go, cors.go, logging.go
+│   │   └── handlers/              # connections.go, agent.go, chat.go, logs.go, reports.go, auth.go
+│   ├── agent/
+│   │   ├── agent.go               # Agent struct + Start/Stop lifecycle
+│   │   ├── loop.go                # Tool-use loop (placeholder)
+│   │   ├── monitor.go             # 24/7 monitoring goroutine (placeholder)
+│   │   ├── tools.go               # Tool registry + dispatch
+│   │   ├── tools_db.go            # query_database tool
+│   │   ├── tools_logs.go          # search_logs tool
+│   │   ├── tools_codebase.go      # search_codebase tool
+│   │   ├── tools_memory.go        # recall_similar_incidents, recall_lessons tools
+│   │   └── prompt.go              # System prompt + builder
+│   ├── connectors/
+│   │   ├── connector.go           # Connector, StreamConnector, QueryConnector interfaces
+│   │   ├── registry.go            # Runtime connector registry
+│   │   ├── database/postgres.go   # PostgreSQL connector stub (+test)
+│   │   ├── logs/webhook.go        # Webhook log ingestion stub (+test)
+│   │   ├── logs/syslog.go         # Syslog connector stub
+│   │   └── codebase/github.go     # GitHub connector stub (+test)
+│   ├── memory/
+│   │   ├── client.go              # Elephantasm HTTP client
+│   │   ├── types.go               # Event, Memory, Lesson structs
+│   │   └── memory.go              # High-level memory service
+│   ├── ws/
+│   │   ├── hub.go                 # WebSocket hub (manages clients, broadcast)
+│   │   ├── client.go              # Individual WS client
+│   │   └── message.go             # Message types + envelope
+│   ├── reports/
+│   │   ├── generator.go           # Report builder
+│   │   └── templates.go           # Report structure/sections
+│   └── db/queries/                # sqlc input SQL files
+│       ├── connections.sql
+│       ├── agent_config.sql
+│       ├── investigations.sql
+│       ├── conversations.sql
+│       └── log_buffer.sql
+├── migrations/                     # 5 migration pairs (up/down) per DB models spec
+│   ├── 001_create_connections
+│   ├── 002_create_agent_config
+│   ├── 003_create_investigations
+│   ├── 004_create_conversations
+│   └── 005_create_log_buffer
+├── sqlc.yaml                       # sqlc config (pgx/v5, uuid→uuid.UUID, jsonb→json.RawMessage, timestamptz→time.Time)
 ├── go.mod
 └── go.sum
 ```
 
-### Key decisions
+### Key Design Decisions
 
-- **`internal/`** — All application code lives here. This is idiomatic Go; the `internal` directory prevents other Go modules from importing Heimdall's private packages.
-- **`db/`** — sqlc-generated code. You write SQL queries in `db/queries/*.sql`, run `sqlc generate`, and get type-safe Go functions + model structs. No hand-written models or store layer needed — sqlc generates both.
-- **`sqlc.yaml`** — Configuration for sqlc code generation. Lives at `backend/` root, points at `migrations/` for schema and `internal/db/queries/` for query files.
-- **`connectors/registry.go`** — A registry manages all active connectors at runtime. The agent engine queries the registry to access connected data sources.
-- **`agent/tools_*.go`** — Each tool gets its own file. Tools are the bridge between the agent's LLM reasoning and Heimdall's connectors/data.
-- **`migrations/`** — Numbered up/down SQL files for golang-migrate. Each table gets its own migration pair. Also serves as the schema source for sqlc.
+- **Handlers return stub JSON** — all endpoints are wired and respond (200 with empty arrays, or 501 not implemented). This means the frontend can make requests immediately; real implementations plug in later.
+- **WebSocket chat handler** (`handlers/chat.go`) accepts connections, reads JSON messages, and responds with a placeholder. Uses `coder/websocket` with `wsjson` for typed JSON read/write.
+- **Connector interfaces** define `Connect()`, `Health()`, `Close()` as the base, with `Stream()` for one-way feeds and `Query()` for on-demand access.
+- **Agent tool dispatch** is a simple switch statement in `tools.go`. Each tool gets its own `tools_*.go` file.
+- **sqlc queries** follow the exact patterns from the DB models spec. Generated code goes to `internal/db/` (not yet generated — requires a running Postgres for sqlc to validate against).
+
+### Verification
+
+- `go build ./...` — clean, zero errors.
+- `go test ./...` — 3 test files pass (connector stubs).
 
 ---
 
-## Initialisation Commands
+## What's Not Done (By Design)
 
-Once the scaffolding is approved, the project can be initialised with:
+These are intentionally deferred per the scaffolding spec:
+
+| Item | Why |
+|------|-----|
+| `sqlc generate` | Requires a running Postgres instance. Queries are written; run `make sqlc-generate` once DB is available. |
+| `internal/db/*.go` (generated) | Will be auto-generated by sqlc. |
+| Real handler implementations | Handlers are stubs returning placeholder responses. Implementations come when DB + connectors are wired up. |
+| Auth middleware wiring | `auth.go` middleware exists but is a passthrough. Real auth is deferred per MVP scope. |
+| Tailwind config file | Not needed — Tailwind v4 uses CSS-based configuration via `@import "tailwindcss"`. |
+| `frontend/public/favicon.ico` | Empty placeholder file created. Replace with actual icon. |
+
+---
+
+## How to Run
 
 ```bash
-# Frontend
-cd frontend && npm create vue@latest . -- --typescript
-npm install pinia vue-router axios
-npm install -D tailwindcss @tailwindcss/vite
+# Frontend dev server
+make dev-frontend    # → localhost:5173
 
-# Backend
-cd backend && go mod init github.com/<org>/heimdall/backend
+# Backend dev server
+make dev-backend     # → localhost:8080
 
-# Dependencies (backend)
-go get github.com/go-chi/chi/v5
-go get github.com/coder/websocket
-go get github.com/jackc/pgx/v5
-go get github.com/anthropics/anthropic-sdk-go
-go get github.com/golang-migrate/migrate/v4
-go get github.com/google/uuid
+# Both concurrently
+make dev
 
-# Install sqlc CLI (code generation tool — not a Go dependency)
-go install github.com/sqlc-dev/sqlc/cmd/sqlc@latest
+# Run backend tests
+cd backend && go test ./...
 
-# After writing migrations + queries, generate Go code:
-cd backend && sqlc generate
+# Type-check frontend
+cd frontend && npx vue-tsc -b --noEmit
+
+# Generate sqlc code (once DB is available)
+make sqlc-generate
+
+# Run migrations (once DATABASE_URL is set)
+make migrate-up
 ```
-
----
-
-## What's Not Included (intentionally)
-
-- **Kubernetes / Helm** — premature for MVP.
-- **CI/CD pipeline** — add GitHub Actions once there's something to test and deploy.
-- **Monitoring of Heimdall itself** — ironic, but not needed yet.
-- **Multi-tenancy** — single-user/team for MVP.
-- **Users / auth tables** — deferred. MVP assumes a single operator. Added later as `006_create_users` migration.
-- **Reports table** — a resolved investigation with findings *is* the report for MVP. Separate table added later if reports need their own lifecycle.

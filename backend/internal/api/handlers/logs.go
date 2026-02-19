@@ -5,7 +5,7 @@ import (
 	"net/http"
 )
 
-func ListLogs(w http.ResponseWriter, r *http.Request) {
+func (s *Server) ListLogs(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode([]any{})
 }

@@ -10,7 +10,7 @@ defineProps<{
   <div class="border rounded p-3 text-sm font-mono">
     <span class="text-gray-400">{{ entry.ingested_at }}</span>
     <span v-if="entry.severity" class="ml-2 font-semibold" :class="{
-      'text-red-600': entry.severity === 'error',
+      'text-red-600': entry.severity === 'critical',
       'text-yellow-600': entry.severity === 'warning',
       'text-gray-600': entry.severity === 'info',
     }">{{ entry.severity }}</span>

@@ -1,6 +1,6 @@
 CREATE TABLE log_buffer (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    connection_id   UUID NOT NULL REFERENCES connections(id),
+    connection_id   UUID NOT NULL REFERENCES connections(id) ON DELETE CASCADE,
     source_type     TEXT NOT NULL,
     severity        TEXT,
     payload         JSONB NOT NULL,

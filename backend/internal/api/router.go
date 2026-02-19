@@ -3,12 +3,13 @@ package api
 import (
 	"github.com/go-chi/chi/v5"
 
-	"github.com/crimson-sun/heimdall/backend/internal/api/handlers"
-	"github.com/crimson-sun/heimdall/backend/internal/api/middleware"
-	"github.com/crimson-sun/heimdall/backend/internal/config"
+	"github.com/hejijunhao/heimdall/backend/internal/api/handlers"
+	"github.com/hejijunhao/heimdall/backend/internal/api/middleware"
+	"github.com/hejijunhao/heimdall/backend/internal/config"
 )
 
 func NewRouter(cfg *config.Config) *chi.Mux {
+	s := handlers.NewServer(cfg)
 	r := chi.NewRouter()
 
 	r.Use(middleware.Logging)
@@ -16,29 +17,29 @@ func NewRouter(cfg *config.Config) *chi.Mux {
 
 	r.Route("/api", func(r chi.Router) {
 		r.Route("/connections", func(r chi.Router) {
-			r.Get("/", handlers.ListConnections)
-			r.Post("/", handlers.CreateConnection)
-			r.Get("/{id}", handlers.GetConnection)
-			r.Put("/{id}", handlers.UpdateConnection)
-			r.Delete("/{id}", handlers.DeleteConnection)
+			r.Get("/", s.ListConnections)
+			r.Post("/", s.CreateConnection)
+			r.Get("/{id}", s.GetConnection)
+			r.Put("/{id}", s.UpdateConnection)
+			r.Delete("/{id}", s.DeleteConnection)
 		})
 
 		r.Route("/agent", func(r chi.Router) {
-			r.Get("/config", handlers.GetAgentConfig)
-			r.Put("/config", handlers.UpdateAgentConfig)
+			r.Get("/config", s.GetAgentConfig)
+			r.Put("/config", s.UpdateAgentConfig)
 		})
 
-		r.Get("/logs", handlers.ListLogs)
+		r.Get("/logs", s.ListLogs)
 
 		r.Route("/reports", func(r chi.Router) {
-			r.Get("/", handlers.ListReports)
-			r.Get("/{id}", handlers.GetReport)
+			r.Get("/", s.ListReports)
+			r.Get("/{id}", s.GetReport)
 		})
 
-		r.Get("/auth/login", handlers.Login)
+		r.Post("/auth/login", s.Login)
 	})
 
-	r.Get("/ws/chat", handlers.HandleChat)
+	r.Get("/ws/chat", s.HandleChat)
 
 	return r
 }

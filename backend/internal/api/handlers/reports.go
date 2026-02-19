@@ -5,12 +5,11 @@ import (
 	"net/http"
 )
 
-func ListReports(w http.ResponseWriter, r *http.Request) {
+func (s *Server) ListReports(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode([]any{})
 }
 
-func GetReport(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	http.Error(w, `{"error":"not implemented"}`, http.StatusNotImplemented)
+func (s *Server) GetReport(w http.ResponseWriter, r *http.Request) {
+	jsonError(w, "not implemented", http.StatusNotImplemented)
 }

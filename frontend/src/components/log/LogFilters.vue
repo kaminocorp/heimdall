@@ -17,7 +17,7 @@ function handleFilter() {
       <option value="">All severities</option>
       <option value="info">Info</option>
       <option value="warning">Warning</option>
-      <option value="error">Error</option>
+      <option value="critical">Critical</option>
     </select>
   </div>
 </template>

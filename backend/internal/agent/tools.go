@@ -1,5 +1,7 @@
 package agent
 
+import "fmt"
+
 // ToolDefinition describes a tool available to the agent.
 type ToolDefinition struct {
 	Name        string
@@ -32,6 +34,27 @@ func ToolRegistry() []ToolDefinition {
 				"timeframe": {Type: "string", Description: "Time window (e.g. '30m', '6h')", Required: false},
 			},
 		},
+		{
+			Name:        "search_codebase",
+			Description: "Search the connected codebase via GitHub for relevant code",
+			Parameters: map[string]ToolParam{
+				"query": {Type: "string", Description: "Search query (filename, symbol, or keyword)", Required: true},
+			},
+		},
+		{
+			Name:        "recall_similar_incidents",
+			Description: "Query long-term memory for similar past incidents",
+			Parameters: map[string]ToolParam{
+				"description": {Type: "string", Description: "Description of the current incident to match against", Required: true},
+			},
+		},
+		{
+			Name:        "recall_lessons",
+			Description: "Query long-term memory for lessons learned on a topic",
+			Parameters: map[string]ToolParam{
+				"topic": {Type: "string", Description: "The topic to recall lessons about", Required: true},
+			},
+		},
 	}
 }
 
@@ -49,6 +72,6 @@ func (a *Agent) Dispatch(name string, input map[string]any) (string, error) {
 	case "recall_lessons":
 		return a.toolRecallLessons(input)
 	default:
-		return "", nil
+		return "", fmt.Errorf("unknown tool: %s", name)
 	}
 }

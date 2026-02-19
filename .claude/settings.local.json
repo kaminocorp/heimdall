@@ -8,7 +8,15 @@
       "Bash(GOPROXY=https://proxy.golang.org,direct go get:*)",
       "Bash(GOPROXY=https://proxy.golang.org,direct go build:*)",
       "Bash(GOPROXY=https://proxy.golang.org,direct go test:*)",
-      "Bash(npx vue-tsc:*)"
+      "Bash(npx vue-tsc:*)",
+      "Bash(go mod tidy:*)",
+      "Bash(go build:*)",
+      "Bash(go test:*)",
+      "Bash(go install:*)",
+      "Bash(sqlc generate:*)",
+      "Bash(ls:*)",
+      "Bash(node -e:*)",
+      "Bash(npx eslint:*)"
     ]
   }
 }

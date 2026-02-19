@@ -8,7 +8,7 @@ import (
 	"github.com/coder/websocket/wsjson"
 )
 
-func HandleChat(w http.ResponseWriter, r *http.Request) {
+func (s *Server) HandleChat(w http.ResponseWriter, r *http.Request) {
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		OriginPatterns: []string{"*"},
 	})
