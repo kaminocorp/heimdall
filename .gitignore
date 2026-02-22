@@ -7,9 +7,9 @@ frontend/node_modules/
 frontend/dist/
 
 # Environment
-.env
-.env.local
-.env.*.local
+**/.env
+**/.env.local
+**/.env.*.local
 
 # IDE
 .vscode/

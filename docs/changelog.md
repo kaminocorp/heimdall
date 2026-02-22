@@ -1,9 +1,27 @@
 # Changelog
 
+- [0.2.0 — Supabase Database](#020--supabase-database-2026-02-22)
 - [0.1.3 — Infrastructure & DevOps](#013--infrastructure--devops-2026-02-20)
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.2.0 — Supabase Database (2026-02-22)
+
+Connected Heimdall to a live Supabase Postgres instance and ran all migrations.
+
+### Database
+
+- Switched from local Postgres to Supabase (direct connection, port 5432).
+- Added `cmd/dbping` utility — standalone connection smoke test (`SELECT 1`).
+- Ran all 5 migrations against Supabase: `connections`, `agent_config`, `investigations`, `conversations`, `log_buffer`.
+- Installed `golang-migrate` CLI (`go install` with `postgres` tag).
+
+### Config
+
+- `DATABASE_URL` is the sole database env var — no separate host/port/user/password fields needed.
 
 ---
 
