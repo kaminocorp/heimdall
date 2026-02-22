@@ -22,7 +22,8 @@
       "Bash(test:*)",
       "Bash(set:*)",
       "Bash(migrate:*)",
-      "Bash(head:*)"
+      "Bash(head:*)",
+      "Bash(go vet:*)"
     ]
   }
 }

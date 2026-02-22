@@ -16,6 +16,8 @@ func NewRouter(cfg *config.Config) *chi.Mux {
 	r.Use(middleware.CORS)
 
 	r.Route("/api", func(r chi.Router) {
+		r.Use(middleware.Auth(cfg.SupabaseJWTSecret))
+
 		r.Route("/connections", func(r chi.Router) {
 			r.Get("/", s.ListConnections)
 			r.Post("/", s.CreateConnection)
@@ -35,8 +37,6 @@ func NewRouter(cfg *config.Config) *chi.Mux {
 			r.Get("/", s.ListReports)
 			r.Get("/{id}", s.GetReport)
 		})
-
-		r.Post("/auth/login", s.Login)
 	})
 
 	r.Get("/ws/chat", s.HandleChat)

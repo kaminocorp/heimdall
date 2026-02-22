@@ -1,11 +1,50 @@
 # Changelog
 
+- [0.2.3 — Auth-Protected Routes](#023--auth-protected-routes-2026-02-22)
+- [0.2.2 — JWT Verification Middleware](#022--jwt-verification-middleware-2026-02-22)
 - [0.2.1 — Users Table & Auth Groundwork](#021--users-table--auth-groundwork-2026-02-22)
 - [0.2.0 — Supabase Database](#020--supabase-database-2026-02-22)
 - [0.1.3 — Infrastructure & DevOps](#013--infrastructure--devops-2026-02-20)
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.2.3 — Auth-Protected Routes (2026-02-22)
+
+Phase 1 (Auth) Task 3 — apply JWT middleware to protected routes.
+
+### Router
+
+- Applied `middleware.Auth(cfg.SupabaseJWTSecret)` to the `/api` route group — all `/api/*` requests now require a valid Supabase JWT. ([phase1-task3])
+- Removed `POST /api/auth/login` stub — Supabase Auth handles login directly. ([phase1-task3])
+- Removed dead `Login` handler from `handlers/auth.go`. ([phase1-task3])
+- `/ws/chat` remains unprotected — WebSocket auth deferred to Phase 5. ([phase1-task3])
+
+[phase1-task3]: completions/phase1-task3-auth-routes.md
+
+---
+
+## 0.2.2 — JWT Verification Middleware (2026-02-22)
+
+Phase 1 (Auth) Task 2 — backend JWT verification.
+
+### Auth
+
+- Replaced stub auth middleware with real Supabase JWT validation (`internal/api/middleware/auth.go`). ([phase1-task2])
+- Validates HMAC-SHA256 signature, checks expiry, extracts user UUID from `sub` claim. ([phase1-task2])
+- Added `Auth(jwtSecret) → middleware` constructor and `UserIDFromContext(ctx)` context helper. ([phase1-task2])
+
+### Config
+
+- Added `SupabaseJWTSecret` field to `Config`, loaded from `SUPABASE_JWT_SECRET` env var, required in `Validate()`. ([phase1-task2])
+
+### Dependencies
+
+- Added `github.com/golang-jwt/jwt/v5`. ([phase1-task2])
+
+[phase1-task2]: completions/phase1-task2-jwt-middleware.md
 
 ---
 
