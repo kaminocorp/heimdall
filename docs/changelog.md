@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.2.4 — Auth Me Endpoint & DB Pool](#024--auth-me-endpoint--db-pool-2026-02-22)
 - [0.2.3 — Auth-Protected Routes](#023--auth-protected-routes-2026-02-22)
 - [0.2.2 — JWT Verification Middleware](#022--jwt-verification-middleware-2026-02-22)
 - [0.2.1 — Users Table & Auth Groundwork](#021--users-table--auth-groundwork-2026-02-22)
@@ -8,6 +9,29 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.2.4 — Auth Me Endpoint & DB Pool (2026-02-22)
+
+Phase 1 (Auth) Task 4 — `/api/auth/me` endpoint and database connection pool.
+
+### Server
+
+- Created `pgxpool.Pool` in `main.go` from `DATABASE_URL` — first real database connection in the server. ([phase1-task4])
+- `Server` struct now holds `*db.Queries`; `NewServer` accepts the pool and wraps it with `db.New(pool)`. ([phase1-task4])
+
+### Endpoint
+
+- Added `GET /api/auth/me` — returns the authenticated user's `id`, `email`, and `created_at` from `public.users`. ([phase1-task4])
+- Uses `UserIDFromContext` (Task 2) to read the JWT subject and `GetUser` (Task 1) to query the database. ([phase1-task4])
+
+### Dependencies
+
+- Promoted `golang-jwt/jwt/v5`, `google/uuid`, `jackc/pgx/v5` from indirect to direct in `go.mod`. ([phase1-task4])
+- Added `pgxpool` transitive deps (`jackc/puddle/v2`, `x/sync`). ([phase1-task4])
+
+[phase1-task4]: completions/phase1-task4-auth-me.md
 
 ---
 

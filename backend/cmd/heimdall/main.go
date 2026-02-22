@@ -9,6 +9,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/hejijunhao/heimdall/backend/internal/api"
 	"github.com/hejijunhao/heimdall/backend/internal/config"
 )
@@ -20,7 +22,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	router := api.NewRouter(cfg)
+	pool, err := pgxpool.New(context.Background(), cfg.DatabaseURL)
+	if err != nil {
+		slog.Error("failed to connect to database", "err", err)
+		os.Exit(1)
+	}
+	defer pool.Close()
+
+	router := api.NewRouter(cfg, pool)
 
 	srv := &http.Server{
 		Addr:         ":" + cfg.Port,

@@ -2,14 +2,15 @@ package api
 
 import (
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/hejijunhao/heimdall/backend/internal/api/handlers"
 	"github.com/hejijunhao/heimdall/backend/internal/api/middleware"
 	"github.com/hejijunhao/heimdall/backend/internal/config"
 )
 
-func NewRouter(cfg *config.Config) *chi.Mux {
-	s := handlers.NewServer(cfg)
+func NewRouter(cfg *config.Config, pool *pgxpool.Pool) *chi.Mux {
+	s := handlers.NewServer(cfg, pool)
 	r := chi.NewRouter()
 
 	r.Use(middleware.Logging)
@@ -32,6 +33,8 @@ func NewRouter(cfg *config.Config) *chi.Mux {
 		})
 
 		r.Get("/logs", s.ListLogs)
+
+		r.Get("/auth/me", s.Me)
 
 		r.Route("/reports", func(r chi.Router) {
 			r.Get("/", s.ListReports)
