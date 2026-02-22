@@ -1,10 +1,30 @@
 # Changelog
 
+- [0.2.1 — Users Table & Auth Groundwork](#021--users-table--auth-groundwork-2026-02-22)
 - [0.2.0 — Supabase Database](#020--supabase-database-2026-02-22)
 - [0.1.3 — Infrastructure & DevOps](#013--infrastructure--devops-2026-02-20)
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.2.1 — Users Table & Auth Groundwork (2026-02-22)
+
+Phase 1 (Auth) Task 1 — database foundation for user identity.
+
+### Database
+
+- Added migration `006_create_users`: `public.users` table with FK to `auth.users(id) ON DELETE CASCADE`. ([phase1-task1])
+- Added `handle_new_user()` trigger function (`SECURITY DEFINER`) + `on_auth_user_created` trigger — auto-syncs Supabase Auth sign-ups into `public.users`. ([phase1-task1])
+- Applied migration against live Supabase instance.
+
+### sqlc
+
+- Added `GetUser` query (`internal/db/queries/users.sql`). ([phase1-task1])
+- Ran `sqlc generate` — produced `User` struct in `models.go` and `GetUser` method in `users.sql.go`. ([phase1-task1])
+
+[phase1-task1]: completions/phase1-task1-users-migration.md
 
 ---
 

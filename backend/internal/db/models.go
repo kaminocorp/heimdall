@@ -66,3 +66,9 @@ type LogBuffer struct {
 	Payload      json.RawMessage `json:"payload"`
 	IngestedAt   time.Time       `json:"ingested_at"`
 }
+
+type User struct {
+	ID        uuid.UUID `json:"id"`
+	Email     string    `json:"email"`
+	CreatedAt time.Time `json:"created_at"`
+}
