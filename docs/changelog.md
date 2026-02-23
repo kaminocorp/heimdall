@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.4.0 — Webhook Log Connector](#040--webhook-log-connector-2026-02-23)
 - [0.3.0 — Connections CRUD](#030--connections-crud-2026-02-23)
 - [0.2.4 — Auth Me Endpoint & DB Pool](#024--auth-me-endpoint--db-pool-2026-02-22)
 - [0.2.3 — Auth-Protected Routes](#023--auth-protected-routes-2026-02-22)
@@ -10,6 +11,41 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.4.0 — Webhook Log Connector (2026-02-23)
+
+Phase 3 — webhook-based log ingestion, user-scoped log queries, and frontend log display.
+
+### Database
+
+- Rewrote sqlc queries in `log_buffer.sql` — all reads now join through `connections` to scope by `user_id`. ([phase3])
+- Added `LIMIT`/`OFFSET` pagination to all list queries. ([phase3])
+- Added `CountLogsByUser` query for paginated response totals. ([phase3])
+- Added `GetConnectionByWebhookToken` query for webhook auth. ([phase3])
+- `InsertLogEntry` now returns the inserted row (`:one` instead of `:exec`). ([phase3])
+- Ran `sqlc generate` — regenerated `log_buffer.sql.go`. ([phase3])
+
+### Backend
+
+- New `POST /api/webhooks/logs` endpoint — accepts log payloads (single or batch), authenticates via per-connection webhook token. ([phase3])
+- Restructured `/api` router: public webhook route + `r.Group(...)` for JWT-protected routes — fixes Chi subrouter precedence. ([phase3])
+- Migration `008_add_webhook_token_index`: partial functional index on `config->>'webhook_token'` for webhook auth lookups. ([phase3])
+- Auto-generates `webhook_token` (32-byte hex) in connection `config` when creating `webhook_logs` type connections. ([phase3])
+- Replaced stub `ListLogs` handler with real implementation — supports `severity`, `connection_id`, `limit`, `offset` query params. ([phase3])
+- Paginated JSON response: `{ data, total, limit, offset }`. ([phase3])
+
+### Frontend
+
+- Updated API layer for paginated response shape (`PaginatedLogs` interface). ([phase3])
+- Expanded logs store with pagination state (`total`, `limit`, `offset`), `error` handling, `nextPage`/`prevPage` actions. ([phase3])
+- `LogFilters` now includes connection dropdown for filtering by source. ([phase3])
+- `LogEntry` displays payload content (extracts `message` field or shows formatted JSON). ([phase3])
+- `LogFeed` shows pagination controls and "X–Y of Z" summary. ([phase3])
+- `AgentLogPage` wires connections store for filter dropdown, handles pagination and error display. ([phase3])
+
+[phase3]: completions/phase3-webhook-log-connector.md
 
 ---
 

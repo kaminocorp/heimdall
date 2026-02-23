@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 
@@ -86,6 +88,21 @@ func (s *Server) CreateConnection(w http.ResponseWriter, r *http.Request) {
 	config := req.Config
 	if config == nil {
 		config = json.RawMessage(`{}`)
+	}
+
+	// Auto-generate a webhook token for webhook_logs connections.
+	if req.Type == "webhook_logs" {
+		var cfgMap map[string]interface{}
+		json.Unmarshal(config, &cfgMap)
+		if cfgMap == nil {
+			cfgMap = make(map[string]interface{})
+		}
+		if _, ok := cfgMap["webhook_token"]; !ok {
+			b := make([]byte, 32)
+			rand.Read(b)
+			cfgMap["webhook_token"] = hex.EncodeToString(b)
+			config, _ = json.Marshal(cfgMap)
+		}
 	}
 
 	conn, err := s.Queries.CreateConnection(r.Context(), db.CreateConnectionParams{

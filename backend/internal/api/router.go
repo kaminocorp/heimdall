@@ -17,28 +17,34 @@ func NewRouter(cfg *config.Config, pool *pgxpool.Pool) *chi.Mux {
 	r.Use(middleware.CORS)
 
 	r.Route("/api", func(r chi.Router) {
-		r.Use(middleware.Auth(cfg.SupabaseJWTSecret))
+		// Public routes — token-based auth, no JWT required.
+		r.Post("/webhooks/logs", s.IngestWebhookLogs)
 
-		r.Route("/connections", func(r chi.Router) {
-			r.Get("/", s.ListConnections)
-			r.Post("/", s.CreateConnection)
-			r.Get("/{id}", s.GetConnection)
-			r.Put("/{id}", s.UpdateConnection)
-			r.Delete("/{id}", s.DeleteConnection)
-		})
+		// Protected routes — require Supabase JWT.
+		r.Group(func(r chi.Router) {
+			r.Use(middleware.Auth(cfg.SupabaseJWTSecret))
 
-		r.Route("/agent", func(r chi.Router) {
-			r.Get("/config", s.GetAgentConfig)
-			r.Put("/config", s.UpdateAgentConfig)
-		})
+			r.Route("/connections", func(r chi.Router) {
+				r.Get("/", s.ListConnections)
+				r.Post("/", s.CreateConnection)
+				r.Get("/{id}", s.GetConnection)
+				r.Put("/{id}", s.UpdateConnection)
+				r.Delete("/{id}", s.DeleteConnection)
+			})
 
-		r.Get("/logs", s.ListLogs)
+			r.Route("/agent", func(r chi.Router) {
+				r.Get("/config", s.GetAgentConfig)
+				r.Put("/config", s.UpdateAgentConfig)
+			})
 
-		r.Get("/auth/me", s.Me)
+			r.Get("/logs", s.ListLogs)
 
-		r.Route("/reports", func(r chi.Router) {
-			r.Get("/", s.ListReports)
-			r.Get("/{id}", s.GetReport)
+			r.Get("/auth/me", s.Me)
+
+			r.Route("/reports", func(r chi.Router) {
+				r.Get("/", s.ListReports)
+				r.Get("/{id}", s.GetReport)
+			})
 		})
 	})
 

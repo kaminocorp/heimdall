@@ -13,9 +13,46 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const insertLogEntry = `-- name: InsertLogEntry :exec
+const countLogsByUser = `-- name: CountLogsByUser :one
+SELECT count(*) FROM log_buffer lb
+JOIN connections c ON c.id = lb.connection_id
+WHERE c.user_id = $1
+`
+
+func (q *Queries) CountLogsByUser(ctx context.Context, userID uuid.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countLogsByUser, userID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const getConnectionByWebhookToken = `-- name: GetConnectionByWebhookToken :one
+SELECT id, name, type, direction, config, status, last_seen, created_at, updated_at, user_id FROM connections
+WHERE config->>'webhook_token' = $1::text AND type = 'webhook_logs' AND status = 'active'
+`
+
+func (q *Queries) GetConnectionByWebhookToken(ctx context.Context, webhookToken string) (Connection, error) {
+	row := q.db.QueryRow(ctx, getConnectionByWebhookToken, webhookToken)
+	var i Connection
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Type,
+		&i.Direction,
+		&i.Config,
+		&i.Status,
+		&i.LastSeen,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.UserID,
+	)
+	return i, err
+}
+
+const insertLogEntry = `-- name: InsertLogEntry :one
 INSERT INTO log_buffer (connection_id, source_type, severity, payload)
 VALUES ($1, $2, $3, $4)
+RETURNING id, connection_id, source_type, severity, payload, ingested_at
 `
 
 type InsertLogEntryParams struct {
@@ -25,24 +62,41 @@ type InsertLogEntryParams struct {
 	Payload      json.RawMessage `json:"payload"`
 }
 
-func (q *Queries) InsertLogEntry(ctx context.Context, arg InsertLogEntryParams) error {
-	_, err := q.db.Exec(ctx, insertLogEntry,
+func (q *Queries) InsertLogEntry(ctx context.Context, arg InsertLogEntryParams) (LogBuffer, error) {
+	row := q.db.QueryRow(ctx, insertLogEntry,
 		arg.ConnectionID,
 		arg.SourceType,
 		arg.Severity,
 		arg.Payload,
 	)
-	return err
+	var i LogBuffer
+	err := row.Scan(
+		&i.ID,
+		&i.ConnectionID,
+		&i.SourceType,
+		&i.Severity,
+		&i.Payload,
+		&i.IngestedAt,
+	)
+	return i, err
 }
 
-const listLogsByConnection = `-- name: ListLogsByConnection :many
-SELECT id, connection_id, source_type, severity, payload, ingested_at FROM log_buffer
-WHERE connection_id = $1 AND ingested_at > now() - interval '1 hour'
-ORDER BY ingested_at DESC
+const listLogsByUser = `-- name: ListLogsByUser :many
+SELECT lb.id, lb.connection_id, lb.source_type, lb.severity, lb.payload, lb.ingested_at FROM log_buffer lb
+JOIN connections c ON c.id = lb.connection_id
+WHERE c.user_id = $1
+ORDER BY lb.ingested_at DESC
+LIMIT $2 OFFSET $3
 `
 
-func (q *Queries) ListLogsByConnection(ctx context.Context, connectionID uuid.UUID) ([]LogBuffer, error) {
-	rows, err := q.db.Query(ctx, listLogsByConnection, connectionID)
+type ListLogsByUserParams struct {
+	UserID uuid.UUID `json:"user_id"`
+	Limit  int32     `json:"limit"`
+	Offset int32     `json:"offset"`
+}
+
+func (q *Queries) ListLogsByUser(ctx context.Context, arg ListLogsByUserParams) ([]LogBuffer, error) {
+	rows, err := q.db.Query(ctx, listLogsByUser, arg.UserID, arg.Limit, arg.Offset)
 	if err != nil {
 		return nil, err
 	}
@@ -68,14 +122,28 @@ func (q *Queries) ListLogsByConnection(ctx context.Context, connectionID uuid.UU
 	return items, nil
 }
 
-const listLogsBySeverity = `-- name: ListLogsBySeverity :many
-SELECT id, connection_id, source_type, severity, payload, ingested_at FROM log_buffer
-WHERE severity = $1 AND ingested_at > now() - interval '1 hour'
-ORDER BY ingested_at DESC
+const listLogsByUserAndConnection = `-- name: ListLogsByUserAndConnection :many
+SELECT lb.id, lb.connection_id, lb.source_type, lb.severity, lb.payload, lb.ingested_at FROM log_buffer lb
+JOIN connections c ON c.id = lb.connection_id
+WHERE c.user_id = $1 AND lb.connection_id = $2
+ORDER BY lb.ingested_at DESC
+LIMIT $3 OFFSET $4
 `
 
-func (q *Queries) ListLogsBySeverity(ctx context.Context, severity pgtype.Text) ([]LogBuffer, error) {
-	rows, err := q.db.Query(ctx, listLogsBySeverity, severity)
+type ListLogsByUserAndConnectionParams struct {
+	UserID       uuid.UUID `json:"user_id"`
+	ConnectionID uuid.UUID `json:"connection_id"`
+	Limit        int32     `json:"limit"`
+	Offset       int32     `json:"offset"`
+}
+
+func (q *Queries) ListLogsByUserAndConnection(ctx context.Context, arg ListLogsByUserAndConnectionParams) ([]LogBuffer, error) {
+	rows, err := q.db.Query(ctx, listLogsByUserAndConnection,
+		arg.UserID,
+		arg.ConnectionID,
+		arg.Limit,
+		arg.Offset,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -101,14 +169,28 @@ func (q *Queries) ListLogsBySeverity(ctx context.Context, severity pgtype.Text) 
 	return items, nil
 }
 
-const listRecentLogs = `-- name: ListRecentLogs :many
-SELECT id, connection_id, source_type, severity, payload, ingested_at FROM log_buffer
-WHERE ingested_at > now() - interval '1 hour'
-ORDER BY ingested_at DESC
+const listLogsByUserAndSeverity = `-- name: ListLogsByUserAndSeverity :many
+SELECT lb.id, lb.connection_id, lb.source_type, lb.severity, lb.payload, lb.ingested_at FROM log_buffer lb
+JOIN connections c ON c.id = lb.connection_id
+WHERE c.user_id = $1 AND lb.severity = $2
+ORDER BY lb.ingested_at DESC
+LIMIT $3 OFFSET $4
 `
 
-func (q *Queries) ListRecentLogs(ctx context.Context) ([]LogBuffer, error) {
-	rows, err := q.db.Query(ctx, listRecentLogs)
+type ListLogsByUserAndSeverityParams struct {
+	UserID   uuid.UUID   `json:"user_id"`
+	Severity pgtype.Text `json:"severity"`
+	Limit    int32       `json:"limit"`
+	Offset   int32       `json:"offset"`
+}
+
+func (q *Queries) ListLogsByUserAndSeverity(ctx context.Context, arg ListLogsByUserAndSeverityParams) ([]LogBuffer, error) {
+	rows, err := q.db.Query(ctx, listLogsByUserAndSeverity,
+		arg.UserID,
+		arg.Severity,
+		arg.Limit,
+		arg.Offset,
+	)
 	if err != nil {
 		return nil, err
 	}

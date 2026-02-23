@@ -29,7 +29,9 @@
       "Bash(/opt/homebrew/bin/go build ./...)",
       "mcp__ide__getDiagnostics",
       "Bash(source:*)",
-      "Bash(/opt/homebrew/bin/go run:*)"
+      "Bash(/opt/homebrew/bin/go run:*)",
+      "Bash(make migrate-up:*)",
+      "Bash(go list:*)"
     ]
   }
 }
