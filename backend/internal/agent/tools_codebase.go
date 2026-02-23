@@ -1,6 +1,4 @@
 package agent
 
-func (a *Agent) toolSearchCodebase(input map[string]any) (string, error) {
-	// TODO: search codebase via GitHub connector
-	return "search_codebase tool not yet implemented", nil
-}
+// search_codebase tool — deferred to post-MVP (Phase 5+).
+// Will integrate with GitHub connector to search connected codebases.

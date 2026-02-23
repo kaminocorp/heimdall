@@ -11,8 +11,10 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/hejijunhao/heimdall/backend/internal/agent"
 	"github.com/hejijunhao/heimdall/backend/internal/api"
 	"github.com/hejijunhao/heimdall/backend/internal/config"
+	"github.com/hejijunhao/heimdall/backend/internal/db"
 )
 
 func main() {
@@ -29,13 +31,14 @@ func main() {
 	}
 	defer pool.Close()
 
-	router := api.NewRouter(cfg, pool)
+	ag := agent.New(db.New(pool), cfg)
+	router := api.NewRouter(cfg, pool, ag)
 
 	srv := &http.Server{
 		Addr:         ":" + cfg.Port,
 		Handler:      router,
 		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
+		WriteTimeout: 5 * time.Minute,
 		IdleTimeout:  120 * time.Second,
 	}
 

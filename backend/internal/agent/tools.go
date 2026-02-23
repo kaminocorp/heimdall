@@ -1,76 +1,64 @@
 package agent
 
-import "fmt"
+import (
+	"context"
+	"fmt"
 
-// ToolDefinition describes a tool available to the agent.
-type ToolDefinition struct {
-	Name        string
-	Description string
-	Parameters  map[string]ToolParam
-}
+	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/google/uuid"
+)
 
-// ToolParam describes a parameter for a tool.
-type ToolParam struct {
-	Type        string
-	Description string
-	Required    bool
-}
-
-// ToolRegistry returns all tools available to the agent.
-func ToolRegistry() []ToolDefinition {
-	return []ToolDefinition{
-		{
-			Name:        "query_database",
-			Description: "Execute a read-only SQL query against the monitored database",
-			Parameters: map[string]ToolParam{
-				"sql": {Type: "string", Description: "The SQL query to execute", Required: true},
-			},
-		},
-		{
+// ToolRegistry returns the SDK-native tool definitions available to the agent.
+func ToolRegistry() []anthropic.ToolUnionParam {
+	return []anthropic.ToolUnionParam{
+		{OfTool: &anthropic.ToolParam{
 			Name:        "search_logs",
-			Description: "Search recent logs for patterns or keywords",
-			Parameters: map[string]ToolParam{
-				"query":     {Type: "string", Description: "Search query", Required: true},
-				"timeframe": {Type: "string", Description: "Time window (e.g. '30m', '6h')", Required: false},
+			Description: anthropic.String("Search recent logs ingested by Heimdall for patterns, keywords, or severity levels. Returns matching log entries in reverse chronological order."),
+			InputSchema: anthropic.ToolInputSchemaParam{
+				Properties: map[string]any{
+					"query": map[string]any{
+						"type":        "string",
+						"description": "Search query describing what to look for in the logs",
+					},
+					"severity": map[string]any{
+						"type":        "string",
+						"description": "Filter by severity level (e.g. critical, error, warning, info, debug)",
+					},
+					"limit": map[string]any{
+						"type":        "integer",
+						"description": "Maximum number of log entries to return (default 20, max 200)",
+					},
+				},
+				Required: []string{"query"},
 			},
-		},
-		{
-			Name:        "search_codebase",
-			Description: "Search the connected codebase via GitHub for relevant code",
-			Parameters: map[string]ToolParam{
-				"query": {Type: "string", Description: "Search query (filename, symbol, or keyword)", Required: true},
+		}},
+		{OfTool: &anthropic.ToolParam{
+			Name:        "query_database",
+			Description: anthropic.String("Execute a read-only SQL query against a user's connected PostgreSQL database. Use this to investigate database state, check table contents, or run diagnostic queries."),
+			InputSchema: anthropic.ToolInputSchemaParam{
+				Properties: map[string]any{
+					"sql": map[string]any{
+						"type":        "string",
+						"description": "The SQL query to execute (must be read-only — SELECT, EXPLAIN, etc.)",
+					},
+					"connection_id": map[string]any{
+						"type":        "string",
+						"description": "The UUID of the database connection to query",
+					},
+				},
+				Required: []string{"sql", "connection_id"},
 			},
-		},
-		{
-			Name:        "recall_similar_incidents",
-			Description: "Query long-term memory for similar past incidents",
-			Parameters: map[string]ToolParam{
-				"description": {Type: "string", Description: "Description of the current incident to match against", Required: true},
-			},
-		},
-		{
-			Name:        "recall_lessons",
-			Description: "Query long-term memory for lessons learned on a topic",
-			Parameters: map[string]ToolParam{
-				"topic": {Type: "string", Description: "The topic to recall lessons about", Required: true},
-			},
-		},
+		}},
 	}
 }
 
 // Dispatch routes a tool call to the appropriate implementation.
-func (a *Agent) Dispatch(name string, input map[string]any) (string, error) {
+func (a *Agent) Dispatch(ctx context.Context, userID uuid.UUID, name string, input map[string]any) (string, error) {
 	switch name {
-	case "query_database":
-		return a.toolQueryDatabase(input)
 	case "search_logs":
-		return a.toolSearchLogs(input)
-	case "search_codebase":
-		return a.toolSearchCodebase(input)
-	case "recall_similar_incidents":
-		return a.toolRecallSimilarIncidents(input)
-	case "recall_lessons":
-		return a.toolRecallLessons(input)
+		return a.toolSearchLogs(ctx, userID, input)
+	case "query_database":
+		return a.toolQueryDatabase(ctx, userID, input)
 	default:
 		return "", fmt.Errorf("unknown tool: %s", name)
 	}

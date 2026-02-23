@@ -4,13 +4,14 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/hejijunhao/heimdall/backend/internal/agent"
 	"github.com/hejijunhao/heimdall/backend/internal/api/handlers"
 	"github.com/hejijunhao/heimdall/backend/internal/api/middleware"
 	"github.com/hejijunhao/heimdall/backend/internal/config"
 )
 
-func NewRouter(cfg *config.Config, pool *pgxpool.Pool) *chi.Mux {
-	s := handlers.NewServer(cfg, pool)
+func NewRouter(cfg *config.Config, pool *pgxpool.Pool, ag *agent.Agent) *chi.Mux {
+	s := handlers.NewServer(cfg, pool, ag)
 	r := chi.NewRouter()
 
 	r.Use(middleware.Logging)
@@ -35,6 +36,7 @@ func NewRouter(cfg *config.Config, pool *pgxpool.Pool) *chi.Mux {
 			r.Route("/agent", func(r chi.Router) {
 				r.Get("/config", s.GetAgentConfig)
 				r.Put("/config", s.UpdateAgentConfig)
+				r.Post("/run", s.RunAgent)
 			})
 
 			r.Get("/logs", s.ListLogs)

@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.5.0 — Agent Loop](#050--agent-loop-2026-02-23)
 - [0.4.0 — Webhook Log Connector](#040--webhook-log-connector-2026-02-23)
 - [0.3.0 — Connections CRUD](#030--connections-crud-2026-02-23)
 - [0.2.4 — Auth Me Endpoint & DB Pool](#024--auth-me-endpoint--db-pool-2026-02-22)
@@ -11,6 +12,40 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.5.0 — Agent Loop (2026-02-23)
+
+Phase 4 — Claude API tool-use integration, turning Heimdall from a log viewer into an AI monitoring agent.
+
+### Dependencies
+
+- Added `anthropic-sdk-go v1.26.0` — official Go SDK for Claude API. ([phase4])
+
+### Agent
+
+- Refactored `Agent` struct with real fields: `*db.Queries`, `*anthropic.Client`, `*config.Config`. ([phase4])
+- Replaced custom `ToolDefinition`/`ToolParam` types with SDK-native `anthropic.ToolUnionParam`. ([phase4])
+- Registered two tools: `search_logs` (severity filter, paginated results) and `query_database` (user-scoped, read-only). ([phase4])
+- Implemented `RunLoop(ctx, userID, input)` — full Claude API tool-use loop with max 10 iterations. ([phase4])
+- Tool errors returned as `isError` tool results — Claude handles failures gracefully. ([phase4])
+- System prompt scoped to registered tools only — avoids wasted loop iterations on nonexistent tools. ([phase4])
+
+### Postgres Connector
+
+- Real implementation in `connectors/database/postgres.go`: parses config JSONB, connects with `default_transaction_read_only=on`, executes queries, returns `[]map[string]any`. ([phase4])
+- Read-only enforcement at the PostgreSQL session level — prevents mutations regardless of SQL content. ([phase4])
+
+### Backend
+
+- Wired Agent into Server: `main.go` creates Agent → `NewRouter(cfg, pool, ag)` → `NewServer(cfg, pool, ag)`. ([phase4])
+- `WriteTimeout` raised to 5 minutes — agent loop makes multiple Claude API calls that exceed the previous 30s limit. ([phase4])
+- `GET /api/agent/config` now reads from DB with fallback defaults. ([phase4])
+- `PUT /api/agent/config` now persists via `UpsertAgentConfig`. ([phase4])
+- New `POST /api/agent/run` endpoint — JWT-protected, synchronous test harness for the agent loop. ([phase4])
+
+[phase4]: completions/phase4-agent-loop.md
 
 ---
 

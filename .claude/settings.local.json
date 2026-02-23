@@ -31,7 +31,8 @@
       "Bash(source:*)",
       "Bash(/opt/homebrew/bin/go run:*)",
       "Bash(make migrate-up:*)",
-      "Bash(go list:*)"
+      "Bash(go list:*)",
+      "Bash(grep:*)"
     ]
   }
 }
