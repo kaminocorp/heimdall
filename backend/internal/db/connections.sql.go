@@ -13,12 +13,13 @@ import (
 )
 
 const createConnection = `-- name: CreateConnection :one
-INSERT INTO connections (name, type, direction, config, status)
-VALUES ($1, $2, $3, $4, $5)
-RETURNING id, name, type, direction, config, status, last_seen, created_at, updated_at
+INSERT INTO connections (user_id, name, type, direction, config, status)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id, name, type, direction, config, status, last_seen, created_at, updated_at, user_id
 `
 
 type CreateConnectionParams struct {
+	UserID    uuid.UUID       `json:"user_id"`
 	Name      string          `json:"name"`
 	Type      string          `json:"type"`
 	Direction string          `json:"direction"`
@@ -28,6 +29,7 @@ type CreateConnectionParams struct {
 
 func (q *Queries) CreateConnection(ctx context.Context, arg CreateConnectionParams) (Connection, error) {
 	row := q.db.QueryRow(ctx, createConnection,
+		arg.UserID,
 		arg.Name,
 		arg.Type,
 		arg.Direction,
@@ -45,25 +47,36 @@ func (q *Queries) CreateConnection(ctx context.Context, arg CreateConnectionPara
 		&i.LastSeen,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.UserID,
 	)
 	return i, err
 }
 
-const deleteConnection = `-- name: DeleteConnection :exec
-DELETE FROM connections WHERE id = $1
+const deleteConnectionByUser = `-- name: DeleteConnectionByUser :exec
+DELETE FROM connections WHERE id = $1 AND user_id = $2
 `
 
-func (q *Queries) DeleteConnection(ctx context.Context, id uuid.UUID) error {
-	_, err := q.db.Exec(ctx, deleteConnection, id)
+type DeleteConnectionByUserParams struct {
+	ID     uuid.UUID `json:"id"`
+	UserID uuid.UUID `json:"user_id"`
+}
+
+func (q *Queries) DeleteConnectionByUser(ctx context.Context, arg DeleteConnectionByUserParams) error {
+	_, err := q.db.Exec(ctx, deleteConnectionByUser, arg.ID, arg.UserID)
 	return err
 }
 
-const getConnection = `-- name: GetConnection :one
-SELECT id, name, type, direction, config, status, last_seen, created_at, updated_at FROM connections WHERE id = $1
+const getConnectionByUser = `-- name: GetConnectionByUser :one
+SELECT id, name, type, direction, config, status, last_seen, created_at, updated_at, user_id FROM connections WHERE id = $1 AND user_id = $2
 `
 
-func (q *Queries) GetConnection(ctx context.Context, id uuid.UUID) (Connection, error) {
-	row := q.db.QueryRow(ctx, getConnection, id)
+type GetConnectionByUserParams struct {
+	ID     uuid.UUID `json:"id"`
+	UserID uuid.UUID `json:"user_id"`
+}
+
+func (q *Queries) GetConnectionByUser(ctx context.Context, arg GetConnectionByUserParams) (Connection, error) {
+	row := q.db.QueryRow(ctx, getConnectionByUser, arg.ID, arg.UserID)
 	var i Connection
 	err := row.Scan(
 		&i.ID,
@@ -75,16 +88,17 @@ func (q *Queries) GetConnection(ctx context.Context, id uuid.UUID) (Connection, 
 		&i.LastSeen,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.UserID,
 	)
 	return i, err
 }
 
-const listConnections = `-- name: ListConnections :many
-SELECT id, name, type, direction, config, status, last_seen, created_at, updated_at FROM connections ORDER BY created_at DESC
+const listConnectionsByUser = `-- name: ListConnectionsByUser :many
+SELECT id, name, type, direction, config, status, last_seen, created_at, updated_at, user_id FROM connections WHERE user_id = $1 ORDER BY created_at DESC
 `
 
-func (q *Queries) ListConnections(ctx context.Context) ([]Connection, error) {
-	rows, err := q.db.Query(ctx, listConnections)
+func (q *Queries) ListConnectionsByUser(ctx context.Context, userID uuid.UUID) ([]Connection, error) {
+	rows, err := q.db.Query(ctx, listConnectionsByUser, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -102,6 +116,7 @@ func (q *Queries) ListConnections(ctx context.Context) ([]Connection, error) {
 			&i.LastSeen,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.UserID,
 		); err != nil {
 			return nil, err
 		}
@@ -116,8 +131,8 @@ func (q *Queries) ListConnections(ctx context.Context) ([]Connection, error) {
 const updateConnection = `-- name: UpdateConnection :one
 UPDATE connections
 SET name = $2, type = $3, direction = $4, config = $5, status = $6, updated_at = now()
-WHERE id = $1
-RETURNING id, name, type, direction, config, status, last_seen, created_at, updated_at
+WHERE id = $1 AND user_id = $7
+RETURNING id, name, type, direction, config, status, last_seen, created_at, updated_at, user_id
 `
 
 type UpdateConnectionParams struct {
@@ -127,6 +142,7 @@ type UpdateConnectionParams struct {
 	Direction string          `json:"direction"`
 	Config    json.RawMessage `json:"config"`
 	Status    string          `json:"status"`
+	UserID    uuid.UUID       `json:"user_id"`
 }
 
 func (q *Queries) UpdateConnection(ctx context.Context, arg UpdateConnectionParams) (Connection, error) {
@@ -137,6 +153,7 @@ func (q *Queries) UpdateConnection(ctx context.Context, arg UpdateConnectionPara
 		arg.Direction,
 		arg.Config,
 		arg.Status,
+		arg.UserID,
 	)
 	var i Connection
 	err := row.Scan(
@@ -149,6 +166,7 @@ func (q *Queries) UpdateConnection(ctx context.Context, arg UpdateConnectionPara
 		&i.LastSeen,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.UserID,
 	)
 	return i, err
 }

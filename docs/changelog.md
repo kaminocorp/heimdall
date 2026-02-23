@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.3.0 — Connections CRUD](#030--connections-crud-2026-02-23)
 - [0.2.4 — Auth Me Endpoint & DB Pool](#024--auth-me-endpoint--db-pool-2026-02-22)
 - [0.2.3 — Auth-Protected Routes](#023--auth-protected-routes-2026-02-22)
 - [0.2.2 — JWT Verification Middleware](#022--jwt-verification-middleware-2026-02-22)
@@ -9,6 +10,35 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.3.0 — Connections CRUD (2026-02-23)
+
+Phase 2 — full CRUD for connections, scoped to the authenticated user.
+
+### Database
+
+- Migration `007_add_user_id_to_connections`: added `user_id UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE` with index. ([phase2])
+- Rewrote sqlc queries to scope all operations by `user_id` (`ListConnectionsByUser`, `GetConnectionByUser`, `DeleteConnectionByUser`). ([phase2])
+- Ran `sqlc generate` — updated `connections.sql.go` and `models.go`. ([phase2])
+
+### Backend
+
+- Replaced 5 stub handlers with real implementations: List, Get, Create, Update, Delete. ([phase2])
+- All handlers extract user UUID from JWT context; return 401 if absent. ([phase2])
+- Create defaults: `direction` → `one_way`, `config` → `{}`, `status` → `inactive`. Returns 201. ([phase2])
+- Delete returns 204 No Content. ([phase2])
+
+### Frontend
+
+- Expanded Pinia store with `createConnection`, `updateConnection`, `deleteConnection` actions and error state. ([phase2])
+- `ConnectionForm` now includes direction field, emits typed `CreateConnectionPayload`, supports cancel. ([phase2])
+- `ConnectionCard` shows direction, has Delete button. ([phase2])
+- `ConnectionList` shows empty-state message, forwards delete events. ([phase2])
+- `ConnectionsPage` has "New Connection" toggle, error banner, and full create/delete flow. ([phase2])
+
+[phase2]: completions/phase2-connections-crud.md
 
 ---
 

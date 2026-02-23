@@ -32,6 +32,7 @@ type Connection struct {
 	LastSeen  *time.Time      `json:"last_seen"`
 	CreatedAt time.Time       `json:"created_at"`
 	UpdatedAt time.Time       `json:"updated_at"`
+	UserID    uuid.UUID       `json:"user_id"`
 }
 
 type Conversation struct {

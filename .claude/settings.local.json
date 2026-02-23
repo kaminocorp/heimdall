@@ -23,7 +23,13 @@
       "Bash(set:*)",
       "Bash(migrate:*)",
       "Bash(head:*)",
-      "Bash(go vet:*)"
+      "Bash(go vet:*)",
+      "Bash(go env:*)",
+      "Bash(brew install:*)",
+      "Bash(/opt/homebrew/bin/go build ./...)",
+      "mcp__ide__getDiagnostics",
+      "Bash(source:*)",
+      "Bash(/opt/homebrew/bin/go run:*)"
     ]
   }
 }
