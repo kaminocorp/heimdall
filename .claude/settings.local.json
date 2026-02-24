@@ -39,7 +39,10 @@
       "Bash(/Users/philippholke/go/bin/migrate:*)",
       "Bash(npm run build:*)",
       "Bash(go fmt:*)",
-      "Bash(git rm:*)"
+      "Bash(git rm:*)",
+      "Bash(cd \"/Users/philippholke/Crimson Sun/heimdall/frontend\" && npm run lint 2>&1)",
+      "Bash(wc:*)",
+      "Bash(find:*)"
     ]
   }
 }

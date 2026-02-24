@@ -11,6 +11,7 @@ export interface PaginatedLogs {
 export function listLogs(params?: {
   severity?: string
   connection_id?: string
+  source?: string
   limit?: number
   offset?: number
 }) {

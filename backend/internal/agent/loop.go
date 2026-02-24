@@ -15,12 +15,13 @@ const maxIterations = 10
 // RunLoop executes the agent's tool-use loop for a single input with no prior history.
 // It delegates to RunConversation with an empty history.
 func (a *Agent) RunLoop(ctx context.Context, userID uuid.UUID, input string) (string, error) {
-	return a.RunConversation(ctx, userID, nil, input)
+	return a.RunConversation(ctx, userID, nil, nil, input)
 }
 
 // RunConversation executes the agent's tool-use loop with full conversation history.
 // Prior messages are converted to Claude message params so the agent has multi-turn context.
-func (a *Agent) RunConversation(ctx context.Context, userID uuid.UUID, history []Message, input string) (string, error) {
+// conversationID is optional — when provided, agent observations are emitted to agent_log.
+func (a *Agent) RunConversation(ctx context.Context, userID uuid.UUID, conversationID *uuid.UUID, history []Message, input string) (string, error) {
 	// Load agent config from DB (fallback to defaults if no row).
 	model := anthropic.ModelClaudeSonnet4_5
 	systemOverride := ""
@@ -68,7 +69,16 @@ func (a *Agent) RunConversation(ctx context.Context, userID uuid.UUID, history [
 
 		// If the model is done talking, extract the text response.
 		if resp.StopReason == anthropic.StopReasonEndTurn {
-			return extractText(resp), nil
+			text := extractText(resp)
+
+			// Emit observation for the final agent response.
+			summary := text
+			if len(summary) > 200 {
+				summary = summary[:200] + "..."
+			}
+			a.EmitLog(ctx, userID, conversationID, "observation", summary, nil)
+
+			return text, nil
 		}
 
 		// If the model wants to use tools, process each tool call.
@@ -103,6 +113,12 @@ func (a *Agent) RunConversation(ctx context.Context, userID uuid.UUID, history [
 						continue
 					}
 
+					// Emit tool_call log entry.
+					a.EmitLog(ctx, userID, conversationID, "tool_call",
+						fmt.Sprintf("Called %s", tu.Name),
+						map[string]any{"tool": tu.Name, "input": toolInput},
+					)
+
 					slog.Info("agent dispatching tool", "tool", tu.Name, "user_id", userID)
 					result, err := a.Dispatch(ctx, userID, tu.Name, toolInput)
 					if err != nil {
@@ -110,10 +126,26 @@ func (a *Agent) RunConversation(ctx context.Context, userID uuid.UUID, history [
 						toolResults = append(toolResults, anthropic.NewToolResultBlock(
 							tu.ID, fmt.Sprintf("Tool error: %v", err), true,
 						))
+
+						// Emit tool_result error entry.
+						a.EmitLog(ctx, userID, conversationID, "tool_result",
+							fmt.Sprintf("%s failed: %v", tu.Name, err),
+							map[string]any{"tool": tu.Name, "error": err.Error()},
+						)
 					} else {
 						toolResults = append(toolResults, anthropic.NewToolResultBlock(
 							tu.ID, result, false,
 						))
+
+						// Emit tool_result success entry.
+						resultSummary := result
+						if len(resultSummary) > 200 {
+							resultSummary = resultSummary[:200] + "..."
+						}
+						a.EmitLog(ctx, userID, conversationID, "tool_result",
+							fmt.Sprintf("%s returned results", tu.Name),
+							map[string]any{"tool": tu.Name, "result_preview": resultSummary},
+						)
 					}
 				}
 			}

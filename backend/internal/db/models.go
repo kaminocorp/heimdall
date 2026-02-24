@@ -22,6 +22,17 @@ type AgentConfig struct {
 	UpdatedAt            time.Time   `json:"updated_at"`
 }
 
+type AgentLog struct {
+	ID             uuid.UUID   `json:"id"`
+	UserID         uuid.UUID   `json:"user_id"`
+	EntryType      string      `json:"entry_type"`
+	Summary        string      `json:"summary"`
+	Detail         []byte      `json:"detail"`
+	Severity       pgtype.Text `json:"severity"`
+	ConversationID pgtype.UUID `json:"conversation_id"`
+	CreatedAt      time.Time   `json:"created_at"`
+}
+
 type Connection struct {
 	ID        uuid.UUID       `json:"id"`
 	Name      string          `json:"name"`

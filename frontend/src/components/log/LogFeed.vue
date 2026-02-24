@@ -14,7 +14,7 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  filter: [filters: { severity?: string; connection_id?: string }]
+  filter: [filters: { severity?: string; connection_id?: string; source?: string }]
   next: []
   prev: []
 }>()

@@ -10,6 +10,7 @@ export const useLogsStore = defineStore('logs', () => {
   const offset = ref(0)
   const loading = ref(false)
   const error = ref<string | null>(null)
+  const source = ref<'raw' | 'agent' | 'all'>('all')
 
   async function fetchLogs(params?: { severity?: string; connection_id?: string }) {
     loading.value = true
@@ -17,6 +18,7 @@ export const useLogsStore = defineStore('logs', () => {
     try {
       const { data } = await logsApi.listLogs({
         ...params,
+        source: source.value,
         limit: limit.value,
         offset: offset.value,
       })
@@ -47,5 +49,10 @@ export const useLogsStore = defineStore('logs', () => {
     offset.value = 0
   }
 
-  return { entries, total, limit, offset, loading, error, fetchLogs, nextPage, prevPage, resetPagination }
+  function setSource(s: 'raw' | 'agent' | 'all') {
+    source.value = s
+    offset.value = 0
+  }
+
+  return { entries, total, limit, offset, loading, error, source, fetchLogs, nextPage, prevPage, resetPagination, setSource }
 })

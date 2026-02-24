@@ -1,8 +1,10 @@
 export interface LogEntry {
   id: string
-  connection_id: string
-  source_type: string
+  source: 'raw' | 'agent'
+  timestamp: string
   severity: string | null
-  payload: Record<string, unknown>
-  ingested_at: string
+  source_type: string
+  connection_id: string | null
+  summary: string
+  detail: Record<string, unknown> | null
 }

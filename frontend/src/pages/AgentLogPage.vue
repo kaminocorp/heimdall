@@ -15,10 +15,15 @@ onMounted(() => {
   connectionsStore.fetchConnections()
 })
 
-function handleFilter(filters: { severity?: string; connection_id?: string }) {
-  activeFilters.value = filters
+function handleFilter(filters: { severity?: string; connection_id?: string; source?: string }) {
+  if (filters.source) {
+    logsStore.setSource(filters.source as 'raw' | 'agent' | 'all')
+  } else {
+    logsStore.setSource('all')
+  }
+  activeFilters.value = { severity: filters.severity, connection_id: filters.connection_id }
   logsStore.resetPagination()
-  logsStore.fetchLogs(filters)
+  logsStore.fetchLogs(activeFilters.value)
 }
 </script>
 

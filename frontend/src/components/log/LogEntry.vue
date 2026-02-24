@@ -7,30 +7,37 @@ const props = defineProps<{
 }>()
 
 const timestamp = computed(() => {
-  const d = new Date(props.entry.ingested_at)
+  const d = new Date(props.entry.timestamp)
   return d.toLocaleString()
 })
 
-const message = computed(() => {
-  const p = props.entry.payload
-  if (p && typeof p === 'object' && 'message' in p) {
-    return String(p.message)
+const isAgent = computed(() => props.entry.source === 'agent')
+
+const entryTypeLabel = computed(() => {
+  if (!isAgent.value) return props.entry.source_type
+  switch (props.entry.source_type) {
+    case 'tool_call': return 'Tool Call'
+    case 'tool_result': return 'Tool Result'
+    case 'observation': return 'Observation'
+    default: return props.entry.source_type
   }
-  return JSON.stringify(p)
 })
 </script>
 
 <template>
-  <div class="border rounded p-3 text-sm font-mono">
+  <div class="border rounded p-3 text-sm font-mono" :class="{
+    'border-purple-200 bg-purple-50/50': isAgent,
+  }">
     <div class="flex items-baseline gap-2">
       <span class="text-gray-400 shrink-0">{{ timestamp }}</span>
+      <span v-if="isAgent" class="text-purple-600 text-xs font-semibold shrink-0">AGENT</span>
       <span v-if="entry.severity" class="font-semibold shrink-0" :class="{
         'text-red-600': entry.severity === 'critical',
         'text-yellow-600': entry.severity === 'warning',
         'text-gray-600': entry.severity === 'info',
       }">{{ entry.severity }}</span>
-      <span class="text-blue-600 shrink-0">{{ entry.source_type }}</span>
+      <span class="text-blue-600 shrink-0">{{ entryTypeLabel }}</span>
     </div>
-    <div class="mt-1 text-gray-800 break-words">{{ message }}</div>
+    <div class="mt-1 text-gray-800 break-words">{{ entry.summary }}</div>
   </div>
 </template>
