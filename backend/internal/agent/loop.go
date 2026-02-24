@@ -12,10 +12,15 @@ import (
 
 const maxIterations = 10
 
-// RunLoop executes the agent's tool-use loop for a given input.
-// It sends the user's message to Claude, processes tool calls, and returns
-// the final text response.
+// RunLoop executes the agent's tool-use loop for a single input with no prior history.
+// It delegates to RunConversation with an empty history.
 func (a *Agent) RunLoop(ctx context.Context, userID uuid.UUID, input string) (string, error) {
+	return a.RunConversation(ctx, userID, nil, input)
+}
+
+// RunConversation executes the agent's tool-use loop with full conversation history.
+// Prior messages are converted to Claude message params so the agent has multi-turn context.
+func (a *Agent) RunConversation(ctx context.Context, userID uuid.UUID, history []Message, input string) (string, error) {
 	// Load agent config from DB (fallback to defaults if no row).
 	model := anthropic.ModelClaudeSonnet4_5
 	systemOverride := ""
@@ -32,9 +37,18 @@ func (a *Agent) RunLoop(ctx context.Context, userID uuid.UUID, input string) (st
 
 	sysPrompt := BuildSystemPrompt(systemOverride)
 	tools := ToolRegistry()
-	messages := []anthropic.MessageParam{
-		anthropic.NewUserMessage(anthropic.NewTextBlock(input)),
+
+	// Build messages from conversation history + new input.
+	var messages []anthropic.MessageParam
+	for _, msg := range history {
+		switch msg.Role {
+		case "user":
+			messages = append(messages, anthropic.NewUserMessage(anthropic.NewTextBlock(msg.Content)))
+		case "assistant":
+			messages = append(messages, anthropic.NewAssistantMessage(anthropic.NewTextBlock(msg.Content)))
+		}
 	}
+	messages = append(messages, anthropic.NewUserMessage(anthropic.NewTextBlock(input)))
 
 	for i := range maxIterations {
 		slog.Info("agent loop iteration", "iteration", i+1, "user_id", userID)

@@ -93,15 +93,26 @@ func (s *Server) CreateConnection(w http.ResponseWriter, r *http.Request) {
 	// Auto-generate a webhook token for webhook_logs connections.
 	if req.Type == "webhook_logs" {
 		var cfgMap map[string]interface{}
-		json.Unmarshal(config, &cfgMap)
+		if err := json.Unmarshal(config, &cfgMap); err != nil {
+			jsonError(w, "invalid config JSON", http.StatusBadRequest)
+			return
+		}
 		if cfgMap == nil {
 			cfgMap = make(map[string]interface{})
 		}
 		if _, ok := cfgMap["webhook_token"]; !ok {
 			b := make([]byte, 32)
-			rand.Read(b)
+			if _, err := rand.Read(b); err != nil {
+				jsonError(w, "failed to generate webhook token", http.StatusInternalServerError)
+				return
+			}
 			cfgMap["webhook_token"] = hex.EncodeToString(b)
-			config, _ = json.Marshal(cfgMap)
+			var err error
+			config, err = json.Marshal(cfgMap)
+			if err != nil {
+				jsonError(w, "failed to encode config", http.StatusInternalServerError)
+				return
+			}
 		}
 	}
 

@@ -32,7 +32,14 @@
       "Bash(/opt/homebrew/bin/go run:*)",
       "Bash(make migrate-up:*)",
       "Bash(go list:*)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(npx vite build:*)",
+      "Bash(node_modules/.bin/vite build)",
+      "Bash(brew list:*)",
+      "Bash(/Users/philippholke/go/bin/migrate:*)",
+      "Bash(npm run build:*)",
+      "Bash(go fmt:*)",
+      "Bash(git rm:*)"
     ]
   }
 }

@@ -14,19 +14,25 @@ import (
 )
 
 const createConversation = `-- name: CreateConversation :one
-INSERT INTO conversations (investigation_id, title, messages)
-VALUES ($1, $2, $3)
-RETURNING id, investigation_id, title, messages, created_at, updated_at
+INSERT INTO conversations (user_id, investigation_id, title, messages)
+VALUES ($1, $2, $3, $4)
+RETURNING id, investigation_id, title, messages, created_at, updated_at, user_id
 `
 
 type CreateConversationParams struct {
+	UserID          uuid.UUID       `json:"user_id"`
 	InvestigationID pgtype.UUID     `json:"investigation_id"`
 	Title           pgtype.Text     `json:"title"`
 	Messages        json.RawMessage `json:"messages"`
 }
 
 func (q *Queries) CreateConversation(ctx context.Context, arg CreateConversationParams) (Conversation, error) {
-	row := q.db.QueryRow(ctx, createConversation, arg.InvestigationID, arg.Title, arg.Messages)
+	row := q.db.QueryRow(ctx, createConversation,
+		arg.UserID,
+		arg.InvestigationID,
+		arg.Title,
+		arg.Messages,
+	)
 	var i Conversation
 	err := row.Scan(
 		&i.ID,
@@ -35,16 +41,22 @@ func (q *Queries) CreateConversation(ctx context.Context, arg CreateConversation
 		&i.Messages,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.UserID,
 	)
 	return i, err
 }
 
-const getConversation = `-- name: GetConversation :one
-SELECT id, investigation_id, title, messages, created_at, updated_at FROM conversations WHERE id = $1
+const getConversationByUser = `-- name: GetConversationByUser :one
+SELECT id, investigation_id, title, messages, created_at, updated_at, user_id FROM conversations WHERE id = $1 AND user_id = $2
 `
 
-func (q *Queries) GetConversation(ctx context.Context, id uuid.UUID) (Conversation, error) {
-	row := q.db.QueryRow(ctx, getConversation, id)
+type GetConversationByUserParams struct {
+	ID     uuid.UUID `json:"id"`
+	UserID uuid.UUID `json:"user_id"`
+}
+
+func (q *Queries) GetConversationByUser(ctx context.Context, arg GetConversationByUserParams) (Conversation, error) {
+	row := q.db.QueryRow(ctx, getConversationByUser, arg.ID, arg.UserID)
 	var i Conversation
 	err := row.Scan(
 		&i.ID,
@@ -53,16 +65,26 @@ func (q *Queries) GetConversation(ctx context.Context, id uuid.UUID) (Conversati
 		&i.Messages,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.UserID,
 	)
 	return i, err
 }
 
-const listConversations = `-- name: ListConversations :many
-SELECT id, investigation_id, title, messages, created_at, updated_at FROM conversations ORDER BY created_at DESC
+const listConversationsByUser = `-- name: ListConversationsByUser :many
+SELECT id, investigation_id, title, messages, created_at, updated_at, user_id FROM conversations
+WHERE user_id = $1
+ORDER BY updated_at DESC
+LIMIT $2 OFFSET $3
 `
 
-func (q *Queries) ListConversations(ctx context.Context) ([]Conversation, error) {
-	rows, err := q.db.Query(ctx, listConversations)
+type ListConversationsByUserParams struct {
+	UserID uuid.UUID `json:"user_id"`
+	Limit  int32     `json:"limit"`
+	Offset int32     `json:"offset"`
+}
+
+func (q *Queries) ListConversationsByUser(ctx context.Context, arg ListConversationsByUserParams) ([]Conversation, error) {
+	rows, err := q.db.Query(ctx, listConversationsByUser, arg.UserID, arg.Limit, arg.Offset)
 	if err != nil {
 		return nil, err
 	}
@@ -77,6 +99,7 @@ func (q *Queries) ListConversations(ctx context.Context) ([]Conversation, error)
 			&i.Messages,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.UserID,
 		); err != nil {
 			return nil, err
 		}
@@ -88,16 +111,34 @@ func (q *Queries) ListConversations(ctx context.Context) ([]Conversation, error)
 	return items, nil
 }
 
-const updateConversationMessages = `-- name: UpdateConversationMessages :exec
-UPDATE conversations SET messages = $2, updated_at = now() WHERE id = $1
+const updateConversationMessagesByUser = `-- name: UpdateConversationMessagesByUser :exec
+UPDATE conversations SET messages = $2, updated_at = now()
+WHERE id = $1 AND user_id = $3
 `
 
-type UpdateConversationMessagesParams struct {
+type UpdateConversationMessagesByUserParams struct {
 	ID       uuid.UUID       `json:"id"`
 	Messages json.RawMessage `json:"messages"`
+	UserID   uuid.UUID       `json:"user_id"`
 }
 
-func (q *Queries) UpdateConversationMessages(ctx context.Context, arg UpdateConversationMessagesParams) error {
-	_, err := q.db.Exec(ctx, updateConversationMessages, arg.ID, arg.Messages)
+func (q *Queries) UpdateConversationMessagesByUser(ctx context.Context, arg UpdateConversationMessagesByUserParams) error {
+	_, err := q.db.Exec(ctx, updateConversationMessagesByUser, arg.ID, arg.Messages, arg.UserID)
+	return err
+}
+
+const updateConversationTitleByUser = `-- name: UpdateConversationTitleByUser :exec
+UPDATE conversations SET title = $2, updated_at = now()
+WHERE id = $1 AND user_id = $3
+`
+
+type UpdateConversationTitleByUserParams struct {
+	ID     uuid.UUID   `json:"id"`
+	Title  pgtype.Text `json:"title"`
+	UserID uuid.UUID   `json:"user_id"`
+}
+
+func (q *Queries) UpdateConversationTitleByUser(ctx context.Context, arg UpdateConversationTitleByUserParams) error {
+	_, err := q.db.Exec(ctx, updateConversationTitleByUser, arg.ID, arg.Title, arg.UserID)
 	return err
 }

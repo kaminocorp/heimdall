@@ -1,12 +1,28 @@
 import { ref, onUnmounted } from 'vue'
 
-export function useWebSocket(url: string) {
+export interface WebSocketOptions {
+  token?: string
+  conversationId?: string
+}
+
+export function useWebSocket(url: string, options?: WebSocketOptions) {
   const data = ref<string | null>(null)
   const status = ref<'connecting' | 'open' | 'closed'>('connecting')
   let ws: WebSocket | null = null
 
+  function buildUrl(): string {
+    const u = new URL(url)
+    if (options?.token) {
+      u.searchParams.set('token', options.token)
+    }
+    if (options?.conversationId) {
+      u.searchParams.set('conversation_id', options.conversationId)
+    }
+    return u.toString()
+  }
+
   function connect() {
-    ws = new WebSocket(url)
+    ws = new WebSocket(buildUrl())
 
     ws.onopen = () => {
       status.value = 'open'
@@ -17,6 +33,10 @@ export function useWebSocket(url: string) {
     }
 
     ws.onclose = () => {
+      status.value = 'closed'
+    }
+
+    ws.onerror = () => {
       status.value = 'closed'
     }
   }

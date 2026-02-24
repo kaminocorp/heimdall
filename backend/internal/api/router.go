@@ -41,6 +41,11 @@ func NewRouter(cfg *config.Config, pool *pgxpool.Pool, ag *agent.Agent) *chi.Mux
 
 			r.Get("/logs", s.ListLogs)
 
+			r.Route("/conversations", func(r chi.Router) {
+				r.Get("/", s.ListConversations)
+				r.Get("/{id}", s.GetConversation)
+			})
+
 			r.Get("/auth/me", s.Me)
 
 			r.Route("/reports", func(r chi.Router) {

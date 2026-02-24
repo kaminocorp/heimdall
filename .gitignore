@@ -1,6 +1,7 @@
 # Go
 backend/tmp/
 backend/bin/
+backend/heimdall
 
 # Node
 frontend/node_modules/

@@ -42,6 +42,7 @@ type Conversation struct {
 	Messages        json.RawMessage `json:"messages"`
 	CreatedAt       time.Time       `json:"created_at"`
 	UpdatedAt       time.Time       `json:"updated_at"`
+	UserID          uuid.UUID       `json:"user_id"`
 }
 
 type Investigation struct {

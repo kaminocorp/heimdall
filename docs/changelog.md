@@ -1,5 +1,7 @@
 # Changelog
 
+- [0.6.1 — Post-Implementation Fixes](#061--post-implementation-fixes-2026-02-24)
+- [0.6.0 — Agent Chat](#060--agent-chat-2026-02-24)
 - [0.5.0 — Agent Loop](#050--agent-loop-2026-02-23)
 - [0.4.0 — Webhook Log Connector](#040--webhook-log-connector-2026-02-23)
 - [0.3.0 — Connections CRUD](#030--connections-crud-2026-02-23)
@@ -12,6 +14,69 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.6.1 — Post-Implementation Fixes (2026-02-24)
+
+Review of Phases 1–5 identified error-handling gaps and repo hygiene issues. All fixes target resilience and cleanliness — no functional changes.
+
+### Backend
+
+- **`rand.Read` error handling** — `crypto/rand.Read` failure in webhook token generation now returns 500 instead of silently producing a zero-value token. ([phase5-fixes])
+- **JSON marshal/unmarshal error handling** — malformed config JSON in `CreateConnection` now returns 400/500 instead of being silently swallowed. ([phase5-fixes])
+- **WebSocket write error handling** — all five `wsjson.Write` calls in `HandleChat` now check return values; write failures terminate the handler cleanly instead of continuing to run the agent loop for a dead connection. ([phase5-fixes])
+
+### Frontend
+
+- **Missing `onerror` handler** — `useWebSocket` now handles WebSocket errors, transitioning status to `'closed'` instead of showing a stale "connecting" state. ([phase5-fixes])
+- **Type safety bypass removed** — widened `ChatMessage.role` to include `'assistant'` and removed `as any` cast in `useAgent.ts`. ([phase5-fixes])
+
+### Repo Hygiene
+
+- **Removed `backend/heimdall` binary from git** — 19MB compiled binary was tracked since Phase 3, creating large deltas on every build. Added to `.gitignore` and removed from tracking. ([phase5-fixes])
+- **Deleted duplicate `frontend/vite.config.js`** — identical to existing `vite.config.ts`. Vite prefers `.ts`, so the `.js` copy was dead weight. ([phase5-fixes])
+
+[phase5-fixes]: completions/phase5-fixes.md
+
+---
+
+## 0.6.0 — Agent Chat (2026-02-24)
+
+Phase 5 — WebSocket-based agent chat with multi-turn conversation context and persistence.
+
+### Database
+
+- Migration `009_add_user_id_to_conversations`: user-scopes the conversations table. ([phase5])
+- Rewrote sqlc queries — all reads/writes now scoped by `user_id`. Added `UpdateConversationTitleByUser`. ([phase5])
+
+### Auth
+
+- Extracted `ValidateJWT(tokenStr, jwtSecret)` helper from HTTP middleware — shared by REST routes and WebSocket auth. ([phase5])
+- WebSocket authentication via `?token=` query parameter — validates before upgrade, rejects with HTTP 401 if invalid. ([phase5])
+
+### Agent
+
+- Added `Message` domain type in `agent/message.go` — represents stored chat messages. ([phase5])
+- Added `RunConversation(ctx, userID, history, input)` — converts stored messages to Claude params for multi-turn context. ([phase5])
+- `RunLoop` now delegates to `RunConversation` with nil history — backward compatible. ([phase5])
+
+### Backend
+
+- Rewrote `HandleChat` WebSocket handler: JWT auth, conversation create/load, message loop with agent integration, persistence, status signaling. ([phase5])
+- New `GET /api/conversations` — user-scoped list (summaries without messages). ([phase5])
+- New `GET /api/conversations/:id` — full conversation with messages. ([phase5])
+
+### Frontend
+
+- `useWebSocket` accepts auth options — appends `token` and `conversation_id` as query params. ([phase5])
+- `useAgent` handles four message types: `system`, `status`, `error`, and chat messages. Exposes `conversationId`, `isThinking`, `error`, `loadMessages`. ([phase5])
+- New `api/conversations.ts` — `listConversations()` and `getConversation(id)`. ([phase5])
+- `AgentChatPage` shows connection status indicator, loads conversation history on mount, displays error banner. ([phase5])
+- `ChatWindow` shows animated thinking indicator, auto-scrolls on new messages. ([phase5])
+- `ChatInput` disables during thinking and when disconnected. ([phase5])
+
+[phase5]: completions/phase5-agent-chat.md
 
 ---
 

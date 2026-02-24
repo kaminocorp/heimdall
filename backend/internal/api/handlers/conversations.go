@@ -1,0 +1,81 @@
+package handlers
+
+import (
+	"encoding/json"
+	"net/http"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
+
+	"github.com/hejijunhao/heimdall/backend/internal/api/middleware"
+	"github.com/hejijunhao/heimdall/backend/internal/db"
+)
+
+type conversationSummary struct {
+	ID        uuid.UUID `json:"id"`
+	Title     *string   `json:"title"`
+	CreatedAt string    `json:"created_at"`
+	UpdatedAt string    `json:"updated_at"`
+}
+
+func (s *Server) ListConversations(w http.ResponseWriter, r *http.Request) {
+	userID, ok := middleware.UserIDFromContext(r.Context())
+	if !ok {
+		jsonError(w, "missing user context", http.StatusUnauthorized)
+		return
+	}
+
+	conversations, err := s.Queries.ListConversationsByUser(r.Context(), db.ListConversationsByUserParams{
+		UserID: userID,
+		Limit:  50,
+		Offset: 0,
+	})
+	if err != nil {
+		jsonError(w, "failed to list conversations", http.StatusInternalServerError)
+		return
+	}
+
+	// Return summaries without full message payload.
+	summaries := make([]conversationSummary, len(conversations))
+	for i, c := range conversations {
+		var title *string
+		if c.Title.Valid {
+			title = &c.Title.String
+		}
+		summaries[i] = conversationSummary{
+			ID:        c.ID,
+			Title:     title,
+			CreatedAt: c.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+			UpdatedAt: c.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(summaries)
+}
+
+func (s *Server) GetConversation(w http.ResponseWriter, r *http.Request) {
+	userID, ok := middleware.UserIDFromContext(r.Context())
+	if !ok {
+		jsonError(w, "missing user context", http.StatusUnauthorized)
+		return
+	}
+
+	convID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		jsonError(w, "invalid conversation id", http.StatusBadRequest)
+		return
+	}
+
+	conv, err := s.Queries.GetConversationByUser(r.Context(), db.GetConversationByUserParams{
+		ID:     convID,
+		UserID: userID,
+	})
+	if err != nil {
+		jsonError(w, "conversation not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(conv)
+}
