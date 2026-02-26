@@ -27,22 +27,26 @@ onMounted(async () => {
 
 <template>
   <div class="h-full flex flex-col">
-    <div class="flex items-center justify-between mb-4">
-      <h2 class="text-2xl font-semibold">Agent Chat</h2>
-      <div class="flex items-center gap-2 text-sm">
+    <!-- Page header -->
+    <div class="flex items-center justify-between pb-6 mb-6 border-b border-border">
+      <div>
+        <h2 class="font-mono text-2xl font-bold uppercase tracking-wider text-text-primary">Agent Chat</h2>
+        <p class="font-sans text-sm text-text-secondary mt-1">Direct terminal link to the monitoring agent</p>
+      </div>
+      <div class="flex items-center gap-2 font-mono text-xs uppercase tracking-wider">
         <span
-          class="inline-block w-2 h-2 rounded-full"
+          class="w-2 h-2 rounded-full"
           :class="{
-            'bg-yellow-400': status === 'connecting',
-            'bg-green-500': status === 'open',
-            'bg-red-500': status === 'closed',
+            'bg-status-warn animate-pulse': status === 'connecting',
+            'bg-status-ok': status === 'open',
+            'bg-status-critical': status === 'closed',
           }"
         />
-        <span class="text-gray-500">{{ status }}</span>
+        <span class="text-text-muted">{{ status === 'open' ? 'Connected' : status === 'connecting' ? 'Connecting' : 'Disconnected' }}</span>
       </div>
     </div>
 
-    <div v-if="error" class="mb-2 rounded bg-red-50 border border-red-200 px-4 py-2 text-sm text-red-700">
+    <div v-if="error" class="mb-3 rounded border border-status-critical/30 bg-status-critical/10 px-4 py-2 text-sm font-mono text-status-critical">
       {{ error }}
     </div>
 

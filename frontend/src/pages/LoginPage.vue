@@ -18,9 +18,6 @@ async function handleSubmit() {
   try {
     if (isSignup.value) {
       await auth.signup(email.value, password.value)
-      // After signup, Supabase may require email confirmation.
-      // If auto-confirm is on, onAuthStateChange will fire and the
-      // router guard will redirect. Otherwise show a message.
       if (!auth.isAuthenticated) {
         error.value = 'Check your email to confirm your account.'
         loading.value = false
@@ -39,35 +36,76 @@ async function handleSubmit() {
 </script>
 
 <template>
-  <div class="flex items-center justify-center min-h-screen">
-    <form @submit.prevent="handleSubmit" class="w-full max-w-sm space-y-4">
-      <h2 class="text-2xl font-semibold text-center">
-        {{ isSignup ? 'Create an account' : 'Sign in to Heimdall' }}
-      </h2>
+  <div class="min-h-screen bg-bg-primary flex items-center justify-center px-4 relative overflow-hidden">
+    <!-- Background grid pattern -->
+    <div class="absolute inset-0 bg-grid opacity-[0.03] pointer-events-none" />
 
-      <div v-if="error" class="px-3 py-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded">
-        {{ error }}
+    <div class="w-full max-w-sm relative z-10">
+      <!-- Brand -->
+      <div class="text-center mb-8">
+        <div class="flex items-center justify-center gap-2.5 mb-2">
+          <div class="w-2 h-2 rounded-full bg-accent animate-pulse" />
+          <span class="font-mono text-xl font-bold uppercase tracking-widest text-text-primary">Heimdall</span>
+        </div>
+        <p class="font-mono text-xs uppercase tracking-wider text-text-muted">Autonomous Monitoring Agent</p>
       </div>
 
-      <div>
-        <label class="block text-sm font-medium">Email</label>
-        <input v-model="email" type="email" required class="mt-1 block w-full border rounded px-3 py-2" />
-      </div>
-      <div>
-        <label class="block text-sm font-medium">Password</label>
-        <input v-model="password" type="password" required minlength="6" class="mt-1 block w-full border rounded px-3 py-2" />
-      </div>
+      <!-- Login card -->
+      <form @submit.prevent="handleSubmit" class="border border-border bg-bg-surface backdrop-blur-sm rounded-lg p-6 space-y-5">
+        <div v-if="error" class="px-3 py-2 text-sm font-mono border border-status-critical/30 bg-status-critical/10 text-status-critical rounded">
+          {{ error }}
+        </div>
 
-      <button type="submit" :disabled="loading" class="w-full px-4 py-2 bg-gray-900 text-white rounded disabled:opacity-50">
-        {{ loading ? 'Please wait…' : isSignup ? 'Sign up' : 'Sign in' }}
-      </button>
+        <div>
+          <label class="block font-mono text-xs font-medium uppercase tracking-wider text-text-secondary mb-1.5">Email</label>
+          <input
+            v-model="email"
+            type="email"
+            required
+            placeholder="operator@corp.io"
+            class="block w-full bg-bg-elevated/80 border border-border rounded px-3 py-2 text-text-primary font-mono text-sm placeholder:text-text-muted focus:border-accent/50 focus:ring-1 focus:ring-accent/20 focus:outline-none transition-colors"
+          />
+        </div>
+        <div>
+          <label class="block font-mono text-xs font-medium uppercase tracking-wider text-text-secondary mb-1.5">Password</label>
+          <input
+            v-model="password"
+            type="password"
+            required
+            minlength="6"
+            placeholder="••••••••••"
+            class="block w-full bg-bg-elevated/80 border border-border rounded px-3 py-2 text-text-primary font-mono text-sm placeholder:text-text-muted focus:border-accent/50 focus:ring-1 focus:ring-accent/20 focus:outline-none transition-colors"
+          />
+        </div>
 
-      <p class="text-sm text-center text-gray-500">
-        {{ isSignup ? 'Already have an account?' : "Don't have an account?" }}
-        <button type="button" class="underline text-gray-700" @click="isSignup = !isSignup; error = ''">
-          {{ isSignup ? 'Sign in' : 'Sign up' }}
+        <button
+          type="submit"
+          :disabled="loading"
+          class="w-full px-4 py-2.5 bg-accent text-bg-primary font-mono text-sm font-medium uppercase tracking-widest rounded hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer"
+        >
+          {{ loading ? 'Authenticating…' : isSignup ? 'Register' : 'Authenticate' }}
         </button>
-      </p>
-    </form>
+
+        <p class="text-center font-mono text-xs text-text-muted">
+          {{ isSignup ? 'Already have an account?' : "No account?" }}
+          <button
+            type="button"
+            class="text-accent hover:text-accent-bright transition-colors cursor-pointer ml-1"
+            @click="isSignup = !isSignup; error = ''"
+          >
+            {{ isSignup ? 'Sign in' : 'Register' }}
+          </button>
+        </p>
+      </form>
+    </div>
   </div>
 </template>
+
+<style scoped>
+.bg-grid {
+  background-image:
+    linear-gradient(rgba(90, 158, 106, 0.4) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(90, 158, 106, 0.4) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+</style>

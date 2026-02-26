@@ -8,12 +8,12 @@ defineProps<{
 
 <template>
   <div class="space-y-4">
-    <h2 class="text-xl font-semibold">{{ report.summary }}</h2>
+    <h2 class="font-mono text-lg font-bold uppercase tracking-wider text-text-primary">{{ report.summary }}</h2>
     <div class="grid grid-cols-2 gap-4 text-sm">
-      <div><span class="text-gray-500">Severity:</span> {{ report.severity }}</div>
-      <div><span class="text-gray-500">Status:</span> {{ report.status }}</div>
-      <div><span class="text-gray-500">Trigger:</span> {{ report.trigger_type }}</div>
-      <div><span class="text-gray-500">Started:</span> {{ report.started_at }}</div>
+      <div><span class="font-mono text-xs uppercase tracking-wider text-text-muted">Severity:</span> <span class="text-text-secondary">{{ report.severity }}</span></div>
+      <div><span class="font-mono text-xs uppercase tracking-wider text-text-muted">Status:</span> <span class="text-text-secondary">{{ report.status }}</span></div>
+      <div><span class="font-mono text-xs uppercase tracking-wider text-text-muted">Trigger:</span> <span class="text-text-secondary">{{ report.trigger_type }}</span></div>
+      <div><span class="font-mono text-xs uppercase tracking-wider text-text-muted">Started:</span> <span class="text-text-secondary">{{ report.started_at }}</span></div>
     </div>
   </div>
 </template>

@@ -29,9 +29,13 @@ function handleFilter(filters: { severity?: string; connection_id?: string; sour
 
 <template>
   <div>
-    <h2 class="text-2xl font-semibold mb-4">Agent Log</h2>
+    <!-- Page header -->
+    <div class="pb-6 mb-6 border-b border-border">
+      <h2 class="font-mono text-2xl font-bold uppercase tracking-wider text-text-primary">Agent Log</h2>
+      <p class="font-sans text-sm text-text-secondary mt-1">Unified chronological feed of all system activity</p>
+    </div>
 
-    <div v-if="logsStore.error" class="mb-4 p-3 bg-red-50 text-red-700 rounded text-sm">
+    <div v-if="logsStore.error" class="mb-4 rounded border border-status-critical/30 bg-status-critical/10 px-4 py-2 text-sm font-mono text-status-critical">
       {{ logsStore.error }}
     </div>
 

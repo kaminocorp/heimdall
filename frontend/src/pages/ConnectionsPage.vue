@@ -36,18 +36,22 @@ async function handleDelete(id: string) {
 
 <template>
   <div>
-    <div class="flex items-center justify-between mb-4">
-      <h2 class="text-2xl font-semibold">Connections</h2>
+    <!-- Page header -->
+    <div class="flex items-center justify-between pb-6 mb-8 border-b border-border">
+      <div>
+        <h2 class="font-mono text-2xl font-bold uppercase tracking-wider text-text-primary">Connections</h2>
+        <p class="font-sans text-sm text-text-secondary mt-1">Manage your infrastructure integrations</p>
+      </div>
       <button
         v-if="!showForm"
         @click="showForm = true"
-        class="px-4 py-2 bg-gray-900 text-white rounded"
+        class="px-4 py-2 bg-accent text-bg-primary font-mono text-sm font-medium uppercase tracking-wider rounded hover:bg-accent-hover transition-colors cursor-pointer"
       >
-        New Connection
+        + New Connection
       </button>
     </div>
 
-    <div v-if="actionError" class="mb-4 p-3 bg-red-50 text-red-700 rounded text-sm">
+    <div v-if="actionError" class="mb-4 rounded border border-status-critical/30 bg-status-critical/10 px-4 py-2 text-sm font-mono text-status-critical">
       {{ actionError }}
     </div>
 
@@ -59,7 +63,7 @@ async function handleDelete(id: string) {
     />
 
     <LoadingSpinner v-if="store.loading" />
-    <div v-else-if="store.error" class="text-red-600 text-sm">{{ store.error }}</div>
+    <div v-else-if="store.error" class="text-status-critical text-sm font-mono">{{ store.error }}</div>
     <ConnectionList v-else :connections="store.connections" @delete="handleDelete" />
   </div>
 </template>

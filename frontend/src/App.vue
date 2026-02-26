@@ -19,7 +19,7 @@ onMounted(async () => {
       <RouterView />
     </DefaultLayout>
   </template>
-  <div v-else class="flex items-center justify-center min-h-screen text-gray-400">
-    Loading…
+  <div v-else class="flex items-center justify-center min-h-screen bg-bg-primary text-text-muted font-mono text-sm uppercase tracking-wider">
+    Initializing…
   </div>
 </template>

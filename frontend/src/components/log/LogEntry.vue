@@ -25,19 +25,30 @@ const entryTypeLabel = computed(() => {
 </script>
 
 <template>
-  <div class="border rounded p-3 text-sm font-mono" :class="{
-    'border-purple-200 bg-purple-50/50': isAgent,
-  }">
-    <div class="flex items-baseline gap-2">
-      <span class="text-gray-400 shrink-0">{{ timestamp }}</span>
-      <span v-if="isAgent" class="text-purple-600 text-xs font-semibold shrink-0">AGENT</span>
-      <span v-if="entry.severity" class="font-semibold shrink-0" :class="{
-        'text-red-600': entry.severity === 'critical',
-        'text-yellow-600': entry.severity === 'warning',
-        'text-gray-600': entry.severity === 'info',
-      }">{{ entry.severity }}</span>
-      <span class="text-blue-600 shrink-0">{{ entryTypeLabel }}</span>
+  <div
+    class="border rounded p-3 text-sm font-mono transition-colors"
+    :class="isAgent
+      ? 'border-l-2 border-l-accent border-t-border border-r-border border-b-border bg-accent-subtle'
+      : 'border-border bg-bg-surface hover:border-border-hover'
+    "
+  >
+    <div class="flex items-baseline gap-2 flex-wrap">
+      <span class="text-text-muted text-xs shrink-0">{{ timestamp }}</span>
+      <span
+        v-if="isAgent"
+        class="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border border-accent-border/50 bg-accent-subtle text-accent shrink-0"
+      >Agent</span>
+      <span
+        v-if="entry.severity"
+        class="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border shrink-0"
+        :class="{
+          'border-status-critical/30 bg-status-critical/10 text-status-critical': entry.severity === 'critical',
+          'border-status-warn/30 bg-status-warn/10 text-status-warn': entry.severity === 'warning',
+          'border-status-info/30 bg-status-info/10 text-status-info': entry.severity === 'info',
+        }"
+      >{{ entry.severity }}</span>
+      <span class="text-accent-bright text-xs shrink-0">{{ entryTypeLabel }}</span>
     </div>
-    <div class="mt-1 text-gray-800 break-words">{{ entry.summary }}</div>
+    <div class="mt-1.5 text-text-secondary break-words">{{ entry.summary }}</div>
   </div>
 </template>

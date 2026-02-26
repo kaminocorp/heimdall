@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.8.0 — Techno-Brutalist Redesign](#080--techno-brutalist-redesign-2026-02-26)
 - [0.7.1 — Supabase Auth Wiring](#071--supabase-auth-wiring-2026-02-26)
 - [0.7.0 — Agent Log](#070--agent-log-2026-02-24)
 - [0.6.1 — Post-Implementation Fixes](#061--post-implementation-fixes-2026-02-24)
@@ -16,6 +17,87 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.8.0 — Techno-Brutalist Redesign (2026-02-26)
+
+Full frontend redesign transforming Heimdall from a generic light-gray utility into a dark, military-grade AI monitoring interface. Green-black atmosphere, monospace-forward typography, structural borders, and "alive" interface effects. Zero new backend changes — purely frontend.
+
+Spec: [`docs/executing/redesign-fe.md`](executing/redesign-fe.md)
+
+### Design System (Phase 1)
+
+- **Self-hosted fonts** — JetBrains Mono (display/UI, weights 400/500/700) and Inter (body text, weights 400/500/600) via `@fontsource`. No external CDN calls. ([phase8-foundation])
+- **25 CSS design tokens** in `:root` — backgrounds (`#080c08` green-tinted near-black), text (warm whites with green undertone), accent (`#5a9e6a` muted forest sage), borders (green-tinted structural lines), status colors (desaturated camo register: olive-gold warnings, muted reds, steel blues). ([phase8-foundation])
+- **Tailwind v4 `@theme` registration** — all tokens mapped to utility classes (`bg-bg-primary`, `text-accent`, `border-border`, `font-mono`). Dual-access: Tailwind utilities in templates, `var(--token)` in raw CSS. ([phase8-foundation])
+- **Base styles** — dark background on `<html>` (prevents FOUC), antialiased rendering, green-tinted scrollbars, green selection highlight, accessible green focus rings. ([phase8-foundation])
+- **`prefers-reduced-motion`** — blanket disable of all animations/transitions for users who opt out. ([phase8-foundation])
+
+### Shell & Navigation (Phase 2)
+
+- **Sidebar redesign** — branded header (pulsing green dot + "HEIMDALL" wordmark + status label), four navigation sections (OVERVIEW, INFRASTRUCTURE, AGENT, INTELLIGENCE) with uppercase monospace section labels. ([phase8-shell])
+- **Active route highlighting** — reactive via `useRoute()`. Active item gets `bg-accent-subtle` background + green left-border accent bar. ([phase8-shell])
+- **Mobile responsive** — sidebar collapses below `lg` breakpoint. Hamburger button triggers a `Teleport`-ed slide-over panel with `backdrop-blur-sm` overlay and CSS enter/leave transitions. ([phase8-shell])
+- **Removed `AppHeader.vue`** — Heimdall branding moved into sidebar header. Main content area gains full vertical space. ([phase8-shell])
+
+### Shared Components (Phase 3)
+
+All 14 Vue components restyled to use design tokens exclusively. Zero references to Tailwind's default gray palette remain.
+
+- **StatusBadge** — ghost-fill pill with colored dot indicator. States: active (green), inactive (muted), error (red), warning (yellow). `border-*/30 bg-*/10 text-*` pattern. ([phase8-components])
+- **LoadingSpinner** — green accent spinner (`border-border` track, `border-t-accent` leading edge). ([phase8-components])
+- **ConnectionCard** — dark surface card with hover border transition. Delete button hidden by default, fades in on hover (`group-hover:opacity-100`). ([phase8-components])
+- **ConnectionForm** — dark inputs with green focus rings, accent primary button, outline cancel button. ([phase8-components])
+- **ConnectionList** — 2-column responsive grid on `md+`. ([phase8-components])
+- **LogEntry** — agent entries get green left-border accent + `bg-accent-subtle`. Severity badges as ghost-fill pills. ([phase8-components])
+- **LogFilters** — dark monospace select dropdowns with `flex-wrap` for mobile. ([phase8-components])
+- **LogFeed** — monospace pagination controls, muted entry count. ([phase8-components])
+- **ChatMessage** — role labels ("OPERATOR" in green, "HEIMDALL" in muted) above bordered message blocks. User messages: accent-tinted. Agent messages: dark surface. ([phase8-components])
+- **ChatWindow** — bordered container with scanning-line thinking indicator (CSS gradient sweep, 1.5s loop). ([phase8-components])
+- **ChatInput** — dark elevated input, green "SEND" button, disabled state styling. ([phase8-components])
+- **ReportCard** — left border colored by severity (red/yellow/blue). Ghost-fill severity badge. ([phase8-components])
+- **ReportDetail** — monospace key-value grid with muted labels. ([phase8-components])
+
+### Pages (Phase 4)
+
+All 8 pages restyled with a consistent header pattern: uppercase monospace title + Inter subtitle + border divider.
+
+- **LoginPage** — full-screen dark background with CSS grid overlay (`opacity-[0.03]`). Centered brand block + bordered login card. "AUTHENTICATE" button. Military-tech copy. ([phase8-pages])
+- **DashboardPage** — **major enhancement** from 2-line placeholder to real system overview. Three data cards (System Status, Connections, Recent Activity) wired to existing stores. No new API endpoints. ([phase8-pages])
+- **AgentChatPage** — connection status dot with human-readable labels (Connected/Connecting/Disconnected). Ghost-fill error banner. ([phase8-pages])
+- **AgentLogPage** — consistent header, error styling. ([phase8-pages])
+- **ConnectionsPage** — accent green "New Connection" button in header row. ([phase8-pages])
+- **AgentConfigPage** — key-value pairs in bordered card with divider rows. Null values show em-dash / "Default". ([phase8-pages])
+- **ReportsPage** — consistent header, muted empty state. ([phase8-pages])
+- **NotFoundPage** — "Target not found" copy, outline return button. ([phase8-pages])
+
+### Polish & Animation (Phase 5)
+
+Five "alive" interface effects, all respecting `prefers-reduced-motion`:
+
+- **Pulse dot** — `animate-pulse` circles on sidebar brand, dashboard status, login brand, chat connection status. ([phase8-polish])
+- **Scanning line** — CSS gradient sweep on chat thinking indicator. ([phase8-polish])
+- **Active glow** — `box-shadow: 0 0 15px rgba(90,158,106,0.06)` on active connection cards, report cards, and dashboard status card. Barely visible, felt rather than seen. ([phase8-polish])
+- **Typing reveal** — `clip-path` animation (200ms) on agent chat messages. Paint-only operation, no layout thrashing. ([phase8-polish])
+- **Staggered fade-in** — 250ms fade + 4px slide, staggered 30ms per item via CSS custom property `--stagger-index`. Applied to connection cards, log entries, report cards, dashboard cards, and activity rows. 12 items complete in 360ms (under 400ms cap). ([phase8-polish])
+
+### Dependencies Added
+
+| Package | Purpose |
+|---------|---------|
+| `@fontsource/jetbrains-mono` | Self-hosted JetBrains Mono |
+| `@fontsource/inter` | Self-hosted Inter |
+
+### Files Changed
+
+38 files touched across 5 phases. 1 file deleted (`AppHeader.vue`). No backend changes.
+
+[phase8-foundation]: completions/phase8-redesign-foundation.md
+[phase8-shell]: completions/phase8-redesign-shell-nav.md
+[phase8-components]: completions/phase8-redesign-components.md
+[phase8-pages]: completions/phase8-redesign-pages.md
+[phase8-polish]: completions/phase8-redesign-polish.md
 
 ---
 

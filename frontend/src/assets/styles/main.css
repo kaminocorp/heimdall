@@ -1,1 +1,178 @@
 @import "tailwindcss";
+
+/* ─────────────────────────────────────────────────
+   Heimdall Design Tokens — Techno-Brutalist Theme
+   ───────────────────────────────────────────────── */
+
+:root {
+  /* Backgrounds — green-tinted near-blacks */
+  --bg-primary: #080c08;
+  --bg-surface: rgba(14, 24, 14, 0.5);
+  --bg-surface-hover: rgba(14, 24, 14, 0.7);
+  --bg-elevated: #0e150e;
+
+  /* Text — warm whites with subtle green undertone */
+  --text-primary: #e8ede8;
+  --text-secondary: #8a9a8a;
+  --text-muted: #5a6b5a;
+
+  /* Accent — muted forest sage green */
+  --accent: #5a9e6a;
+  --accent-hover: #4a8c5a;
+  --accent-bright: #7ab889;
+  --accent-subtle: rgba(90, 158, 106, 0.1);
+  --accent-border: rgba(90, 158, 106, 0.3);
+
+  /* Borders — green-tinted structural lines */
+  --border: rgba(90, 158, 106, 0.08);
+  --border-hover: rgba(90, 158, 106, 0.18);
+
+  /* Status — desaturated camo register */
+  --status-ok: #5a9e6a;
+  --status-warn: #c4a84a;
+  --status-critical: #c45a4a;
+  --status-info: #4a8aae;
+
+  /* Typography */
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'SF Mono', monospace;
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+/* ─────────────────────────────────────────────────
+   Tailwind v4 Theme Registration
+   Maps design tokens → Tailwind utility classes
+   ───────────────────────────────────────────────── */
+
+@theme {
+  /* Colors */
+  --color-bg-primary: var(--bg-primary);
+  --color-bg-surface: var(--bg-surface);
+  --color-bg-surface-hover: var(--bg-surface-hover);
+  --color-bg-elevated: var(--bg-elevated);
+
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-muted: var(--text-muted);
+
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-bright: var(--accent-bright);
+  --color-accent-subtle: var(--accent-subtle);
+  --color-accent-border: var(--accent-border);
+
+  --color-border: var(--border);
+  --color-border-hover: var(--border-hover);
+
+  --color-status-ok: var(--status-ok);
+  --color-status-warn: var(--status-warn);
+  --color-status-critical: var(--status-critical);
+  --color-status-info: var(--status-info);
+
+  /* Font families */
+  --font-mono: var(--font-mono);
+  --font-sans: var(--font-sans);
+}
+
+/* ─────────────────────────────────────────────────
+   Base Styles
+   ───────────────────────────────────────────────── */
+
+html {
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+}
+
+body {
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Scrollbar styling — keep it subtle and on-theme */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(90, 158, 106, 0.15);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(90, 158, 106, 0.3);
+}
+
+/* Selection highlight */
+::selection {
+  background: rgba(90, 158, 106, 0.3);
+  color: var(--text-primary);
+}
+
+/* Focus ring — accessible green glow */
+:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ─────────────────────────────────────────────────
+   Animations — "Alive" Interface Effects
+   ───────────────────────────────────────────────── */
+
+/* Staggered fade-in for list items.
+   Apply .animate-fade-in on each item, set --stagger-index via inline style.
+   Total stagger kept under 400ms (index * 30ms). */
+.animate-fade-in {
+  animation: fadeIn 0.25s ease-out both;
+  animation-delay: calc(var(--stagger-index, 0) * 30ms);
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Active glow — subtle green box-shadow for live/active elements */
+.glow-active {
+  box-shadow: 0 0 15px rgba(90, 158, 106, 0.06);
+}
+
+/* Typing reveal for agent messages.
+   Clips text width from 0 to full, ~200ms total. */
+.animate-reveal {
+  animation: reveal 0.2s ease-out both;
+}
+
+@keyframes reveal {
+  from {
+    opacity: 0;
+    clip-path: inset(0 100% 0 0);
+  }
+  to {
+    opacity: 1;
+    clip-path: inset(0 0 0 0);
+  }
+}
+
+/* Respect reduced motion preferences */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

@@ -12,17 +12,17 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <div class="border rounded-lg p-4">
-    <div class="flex items-center justify-between">
+  <div class="group border border-border rounded-lg p-5 bg-bg-surface hover:border-border-hover transition-colors" :class="{ 'glow-active': connection.status === 'active' }">
+    <div class="flex items-start justify-between">
       <div>
-        <h3 class="font-medium">{{ connection.name }}</h3>
-        <p class="text-sm text-gray-500 mt-1">{{ connection.type }} &middot; {{ connection.direction }}</p>
+        <h3 class="font-mono text-sm font-medium uppercase tracking-wider text-text-primary">{{ connection.name }}</h3>
+        <p class="font-mono text-xs text-text-muted mt-1">{{ connection.type }} &middot; {{ connection.direction }}</p>
       </div>
       <div class="flex items-center gap-3">
         <StatusBadge :status="connection.status" />
         <button
           @click="emit('delete', connection.id)"
-          class="text-sm text-red-600 hover:text-red-800"
+          class="font-mono text-xs uppercase tracking-wider text-text-muted opacity-0 group-hover:opacity-100 hover:text-status-critical transition-all cursor-pointer"
         >
           Delete
         </button>
