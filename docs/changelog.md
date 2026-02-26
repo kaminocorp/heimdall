@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.8.3 — Auth Guard Race Condition Fix](#083--auth-guard-race-condition-fix-2026-02-26)
 - [0.8.2 — Missing Migration Fix](#082--missing-migration-fix-2026-02-26)
 - [0.8.1 — Darker Background Tuning](#081--darker-background-tuning-2026-02-26)
 - [0.8.0 — Techno-Brutalist Redesign](#080--techno-brutalist-redesign-2026-02-26)
@@ -19,6 +20,24 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.8.3 — Auth Guard Race Condition Fix (2026-02-26)
+
+Fixed a bug where unauthenticated users could land on the dashboard without being redirected to `/login`. The router navigation guard skips auth checks while the auth store is initializing — but once initialization completed, the guard never re-evaluated the already-resolved route, leaving unauthenticated users on protected pages.
+
+### Root Cause
+
+The `beforeEach` guard in `router/index.ts` returns early when `!auth.initialized`, allowing the initial navigation to proceed to any route. `App.vue` gates rendering behind `auth.init()`, but after init completes the route is already resolved — the guard doesn't re-fire because no new navigation occurs. The result: dashboard renders with `isAuthenticated === false`.
+
+### Fix
+
+Added `router.replace(router.currentRoute.value.fullPath)` in `App.vue` immediately after `auth.init()` resolves. This re-triggers the navigation guard with `initialized === true`, so the auth check runs and redirects sessionless visitors to `/login`. Using `replace` avoids a duplicate history entry.
+
+### Files Changed
+
+1 file: `frontend/src/App.vue`
 
 ---
 
