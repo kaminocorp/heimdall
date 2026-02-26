@@ -42,7 +42,14 @@
       "Bash(git rm:*)",
       "Bash(cd \"/Users/philippholke/Crimson Sun/heimdall/frontend\" && npm run lint 2>&1)",
       "Bash(wc:*)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "WebFetch(domain:supabase.com)",
+      "WebFetch(domain:elephantasm.com)",
+      "WebFetch(domain:trajancloud.com)",
+      "WebFetch(domain:kaminocorp.com)",
+      "WebFetch(domain:corpovault.com)",
+      "WebFetch(domain:starwars.fandom.com)",
+      "WebFetch(domain:1000logos.net)"
     ]
   }
 }

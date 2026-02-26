@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.7.1 — Supabase Auth Wiring](#071--supabase-auth-wiring-2026-02-26)
 - [0.7.0 — Agent Log](#070--agent-log-2026-02-24)
 - [0.6.1 — Post-Implementation Fixes](#061--post-implementation-fixes-2026-02-24)
 - [0.6.0 — Agent Chat](#060--agent-chat-2026-02-24)
@@ -15,6 +16,40 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.7.1 — Supabase Auth Wiring (2026-02-26)
+
+Replaced the placeholder login flow with real Supabase email/password authentication. The frontend now uses `@supabase/supabase-js` for sign-in, sign-up, session recovery, and automatic token refresh — no backend changes required.
+
+### Auth Store (full rewrite)
+
+- `init()` recovers session on page load via `supabase.auth.getSession()` and subscribes to `onAuthStateChange` for transparent token refresh. ([phase7])
+- `login(email, password)` and `signup(email, password)` call Supabase auth methods directly. ([phase7])
+- `token` is a computed from `session.access_token` — auto-updates on refresh, consumed by the existing axios interceptor and WebSocket `?token=` param with zero changes to either. ([phase7])
+
+### Login Page (full rewrite)
+
+- Real email/password form with loading state, error banner, and sign-in / sign-up toggle. ([phase7])
+- Signup with email confirmation shows "Check your email" message. ([phase7])
+
+### App & Router
+
+- `App.vue` gates rendering behind `auth.initialized` — prevents flash of login page on reload while session recovery is in progress. ([phase7])
+- Router guard skips redirect until auth is initialized; redirects authenticated users away from `/login` → `/`. ([phase7])
+
+### Sidebar
+
+- Displays authenticated user's email at the bottom of the nav. ([phase7])
+- "Sign out" calls `supabase.auth.signOut()` and redirects to `/login`. ([phase7])
+
+### New Files
+
+- `frontend/src/lib/supabase.ts` — singleton Supabase client reading `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` from env. ([phase7])
+- `.env.example` updated with frontend Supabase env vars. ([phase7])
+
+[phase7]: completions/phase7-supabase-auth-wiring.md
 
 ---
 

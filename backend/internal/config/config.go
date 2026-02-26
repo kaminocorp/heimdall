@@ -6,12 +6,12 @@ import (
 )
 
 type Config struct {
-	Port              string
-	DatabaseURL       string
-	AnthropicKey      string
-	ElephantasmURL    string
-	ElephantasmKey    string
-	SupabaseJWTSecret string
+	Port           string
+	DatabaseURL    string
+	AnthropicKey   string
+	ElephantasmURL string
+	ElephantasmKey string
+	SupabaseURL    string
 }
 
 func Load() *Config {
@@ -19,9 +19,9 @@ func Load() *Config {
 		Port:           getEnv("PORT", "8080"),
 		DatabaseURL:    getEnv("DATABASE_URL", ""),
 		AnthropicKey:   getEnv("ANTHROPIC_API_KEY", ""),
-		ElephantasmURL:    getEnv("ELEPHANTASM_URL", ""),
-		ElephantasmKey:    getEnv("ELEPHANTASM_API_KEY", ""),
-		SupabaseJWTSecret: getEnv("SUPABASE_JWT_SECRET", ""),
+		ElephantasmURL: getEnv("ELEPHANTASM_URL", ""),
+		ElephantasmKey: getEnv("ELEPHANTASM_API_KEY", ""),
+		SupabaseURL:    getEnv("SUPABASE_URL", ""),
 	}
 }
 
@@ -32,8 +32,8 @@ func (c *Config) Validate() error {
 	if c.AnthropicKey == "" {
 		return fmt.Errorf("ANTHROPIC_API_KEY is required")
 	}
-	if c.SupabaseJWTSecret == "" {
-		return fmt.Errorf("SUPABASE_JWT_SECRET is required")
+	if c.SupabaseURL == "" {
+		return fmt.Errorf("SUPABASE_URL is required")
 	}
 	return nil
 }

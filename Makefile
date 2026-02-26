@@ -9,7 +9,7 @@ build-frontend:
 
 # Backend
 dev-backend:
-	cd backend && go run ./cmd/heimdall
+	set -a && . ./.env && set +a && cd backend && go run ./cmd/heimdall
 
 build-backend:
 	cd backend && go build -o bin/heimdall ./cmd/heimdall

@@ -38,7 +38,7 @@ func (s *Server) HandleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID, err := middleware.ValidateJWT(tokenStr, s.Config.SupabaseJWTSecret)
+	userID, err := middleware.ValidateJWT(tokenStr, s.JWKS)
 	if err != nil {
 		http.Error(w, `{"error":"invalid or expired token"}`, http.StatusUnauthorized)
 		return

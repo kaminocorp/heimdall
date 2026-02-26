@@ -1,372 +1,168 @@
 # Phase 3 — Webhook Log Connector
 
-Reference: [MVP Roadmap](./mvp-roadmap.md) · [Blueprint](../plans/blueprint.md)
-
-**Goal:** Get real data flowing into Heimdall. After this phase, a user can send logs to a webhook endpoint, and browse them (paginated, filterable) in the Agent Log page.
+First real data ingestion pipeline — logs flow into Heimdall via webhooks and are displayed in the Agent Log page with pagination and filtering.
 
 ---
 
-## Design Decisions
+## sqlc Queries
 
-### Webhook authentication
+### `internal/db/queries/log_buffer.sql`
 
-The webhook endpoint (`POST /api/webhooks/logs`) lives **outside** JWT auth middleware — external services (app servers, log shippers) won't hold a Supabase JWT.
+Rewrote all queries from the scaffolding originals:
 
-Instead, each connection of type `webhook_logs` gets a **webhook token** (a random 32-byte hex string) stored in its `config` JSONB. The webhook endpoint authenticates via:
+| Old query | New query | Change |
+|-----------|-----------|--------|
+| `InsertLogEntry` (`:exec`) | `InsertLogEntry` (`:one`) | Now returns the inserted row via `RETURNING *` |
+| `ListRecentLogs` | `ListLogsByUser` | Joins `connections` to scope by `user_id`, adds `LIMIT`/`OFFSET` |
+| `ListLogsByConnection` | `ListLogsByUserAndConnection` | Adds `user_id` scope via join, adds pagination |
+| `ListLogsBySeverity` | `ListLogsByUserAndSeverity` | Adds `user_id` scope via join, adds pagination |
+| — | `CountLogsByUser` | New — total count for paginated responses |
+| — | `GetConnectionByWebhookToken` | New — looks up active `webhook_logs` connection by token in `config` JSONB |
+| `PruneExpiredLogs` | `PruneExpiredLogs` | Unchanged |
 
-```
-POST /api/webhooks/logs
-Authorization: Bearer <webhook_token>
-```
+**Why the JOIN pattern:** The `log_buffer` table has no `user_id` column — it references `connections` via `connection_id`. To ensure a user only sees their own logs, every read query joins `log_buffer → connections` and filters on `connections.user_id`. This avoids adding a redundant `user_id` column to `log_buffer` while maintaining proper data isolation.
 
-The handler looks up the connection by token, confirms it exists and is active, then inserts the log entry. This keeps the auth model simple and scoped per-connection.
+**Why `@webhook_token::text`:** sqlc inferred `json.RawMessage` for the `$1` parameter in `config->>'webhook_token' = $1` because the `config` column is JSONB. Using a named parameter with an explicit `::text` cast forces sqlc to generate a clean `string` parameter.
 
-### User-scoped log reads
-
-`GET /api/logs` sits behind JWT auth. Logs belong to connections, and connections belong to users. The query joins `log_buffer → connections` to filter by `user_id`, ensuring a user only sees logs from their own connections.
-
-### Pagination
-
-All list queries use cursor-style pagination isn't needed at MVP — simple `LIMIT`/`OFFSET` with a default page size of 50 is sufficient. The frontend sends `?limit=50&offset=0`.
-
----
-
-## Task 1 — sqlc Queries (user-scoped, paginated, filterable)
-
-Rewrite `log_buffer.sql` to support the real query patterns needed by the API.
-
-### Changes
-
-**`backend/internal/db/queries/log_buffer.sql`** — replace all queries:
-
-```sql
--- name: InsertLogEntry :one
-INSERT INTO log_buffer (connection_id, source_type, severity, payload)
-VALUES ($1, $2, $3, $4)
-RETURNING *;
-
--- name: ListLogsByUser :many
-SELECT lb.* FROM log_buffer lb
-JOIN connections c ON c.id = lb.connection_id
-WHERE c.user_id = $1
-ORDER BY lb.ingested_at DESC
-LIMIT $2 OFFSET $3;
-
--- name: ListLogsByUserAndSeverity :many
-SELECT lb.* FROM log_buffer lb
-JOIN connections c ON c.id = lb.connection_id
-WHERE c.user_id = $1 AND lb.severity = $2
-ORDER BY lb.ingested_at DESC
-LIMIT $3 OFFSET $4;
-
--- name: ListLogsByUserAndConnection :many
-SELECT lb.* FROM log_buffer lb
-JOIN connections c ON c.id = lb.connection_id
-WHERE c.user_id = $1 AND lb.connection_id = $2
-ORDER BY lb.ingested_at DESC
-LIMIT $3 OFFSET $4;
-
--- name: CountLogsByUser :one
-SELECT count(*) FROM log_buffer lb
-JOIN connections c ON c.id = lb.connection_id
-WHERE c.user_id = $1;
-
--- name: GetConnectionByWebhookToken :one
-SELECT * FROM connections
-WHERE config->>'webhook_token' = $1 AND type = 'webhook_logs' AND status = 'active';
-
--- name: PruneExpiredLogs :execrows
-DELETE FROM log_buffer WHERE ingested_at < now() - interval '24 hours';
-```
-
-**Key changes from scaffolding queries:**
-- All read queries join through `connections` to scope by `user_id`
-- `LIMIT`/`OFFSET` for pagination
-- `InsertLogEntry` now returns the inserted row (`:one` instead of `:exec`)
-- New `GetConnectionByWebhookToken` for webhook auth
-- New `CountLogsByUser` to support total count in paginated responses
-- Removed the hardcoded `1 hour` time window — let the client decide what to fetch
-
-Then run:
-
-```bash
-cd backend && sqlc generate
-```
-
-### Files changed
-
-```
-backend/internal/db/queries/log_buffer.sql    (rewritten)
-backend/internal/db/log_buffer.sql.go         (regenerated)
-backend/internal/db/models.go                 (regenerated — should be unchanged)
-```
+Ran `sqlc generate` — regenerated `log_buffer.sql.go`.
 
 ---
 
-## Task 2 — Backend: Webhook Ingestion Endpoint
+## Webhook Ingestion Endpoint
 
-Create the `POST /api/webhooks/logs` handler and register it outside the JWT middleware.
+### `POST /api/webhooks/logs`
 
-### Webhook token generation
+New endpoint for external services to push log data into Heimdall.
 
-When a connection of type `webhook_logs` is created via the existing `POST /api/connections`, the handler should auto-generate a `webhook_token` in the config if one isn't provided. This is a small addition to `CreateConnection`:
+**Auth model:** Each connection of type `webhook_logs` has a `webhook_token` (32-byte hex string) stored in its `config` JSONB field. The webhook endpoint authenticates via `Authorization: Bearer <webhook_token>`. The handler calls `GetConnectionByWebhookToken` which validates the token, connection type, and active status in a single query.
 
-```go
-// In CreateConnection handler, after parsing request:
-if req.Type == "webhook_logs" {
-    cfg := make(map[string]interface{})
-    json.Unmarshal(config, &cfg)
-    if _, ok := cfg["webhook_token"]; !ok {
-        cfg["webhook_token"] = generateToken() // crypto/rand, 32 bytes hex
-        config, _ = json.Marshal(cfg)
-    }
+**Why not JWT auth:** Log shippers (Fluentd, Vector, app HTTP loggers) don't authenticate via Supabase — they need a simple, static bearer token. The route is registered outside the `/api` group's JWT middleware and handles its own authentication.
+
+**Payload format — single entry:**
+```json
+{
+  "source_type": "application",
+  "severity": "warning",
+  "payload": { "message": "disk usage 92%", "host": "web-01" }
 }
 ```
 
-### Handler: `IngestWebhookLogs`
-
-**`backend/internal/api/handlers/webhooks.go`** (new file):
-
-```go
-func (s *Server) IngestWebhookLogs(w http.ResponseWriter, r *http.Request)
+**Payload format — batch (array):**
+```json
+[
+  { "source_type": "application", "severity": "info", "payload": { "message": "request completed" } },
+  { "source_type": "application", "severity": "critical", "payload": { "message": "OOM killed" } }
+]
 ```
-
-Flow:
-1. Extract `Authorization: Bearer <token>` from header.
-2. Call `GetConnectionByWebhookToken(ctx, token)` — validates connection exists, is type `webhook_logs`, and is active.
-3. Parse request body — expects JSON:
-   ```json
-   {
-     "source_type": "application",
-     "severity": "warning",
-     "payload": { "message": "disk usage 92%", "host": "web-01" }
-   }
-   ```
-   Also accept a batch variant (array of entries).
-4. Call `InsertLogEntry` for each entry with the resolved `connection_id`.
-5. Return `201 Created` with the inserted entry (or entries).
 
 **Validation:**
 - `source_type` is required (400 if missing).
-- `payload` is required and must be valid JSON (400 if missing).
-- `severity` is optional — defaults to `null`.
+- `payload` is required and must be valid JSON (400 if missing or `null`).
+- `severity` is optional — stored as `NULL` if absent.
+
+**Response:** 201 Created with the inserted entry (single) or entries (batch).
+
+### Webhook Token Auto-Generation
+
+Modified `CreateConnection` in `connections.go` — when `type` is `webhook_logs`, the handler auto-generates a `webhook_token` in the config JSONB if one isn't already provided. Uses `crypto/rand` for 32 cryptographically random bytes, hex-encoded to a 64-character string.
 
 ### Router
 
-Add the webhook route **outside** the `/api` group (no JWT middleware):
+Restructured the `/api` route group to support mixed auth. The webhook route is registered directly on the `/api` subrouter (no middleware), while all JWT-protected routes are wrapped in an inner `r.Group(...)` that applies the `Auth` middleware. This avoids the Chi routing pitfall where a parent-level route at `/api/webhooks/logs` would be swallowed by the `/api` subrouter.
 
-```go
-// In router.go, after the /api group:
-r.Post("/api/webhooks/logs", s.IngestWebhookLogs)
-```
+### Migration `008_add_webhook_token_index`
 
-Because this is registered on the root router (before the `/api` group's `r.Use(middleware.Auth(...))`), it won't require a JWT. The handler does its own token-based auth.
+Added a partial functional index on `connections.config->>'webhook_token'` filtered to `type = 'webhook_logs'`. This ensures the `GetConnectionByWebhookToken` query uses an index scan instead of a sequential scan on the connections table.
 
-### Files changed
+---
 
-```
-backend/internal/api/handlers/webhooks.go     (new)
-backend/internal/api/handlers/connections.go   (token auto-generation in CreateConnection)
-backend/internal/api/router.go                 (new route)
+## ListLogs Handler
+
+### `GET /api/logs`
+
+Replaced the stub (which returned `[]`) with a real implementation.
+
+**Query parameters:**
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `severity` | string | — | Filter by severity (`info`, `warning`, `critical`) |
+| `connection_id` | UUID | — | Filter by connection |
+| `limit` | int | 50 | Page size (max 200) |
+| `offset` | int | 0 | Pagination offset |
+
+**Routing logic:** Uses a `switch` on which filters are present to call the appropriate sqlc query (`ListLogsByUser`, `ListLogsByUserAndSeverity`, or `ListLogsByUserAndConnection`). This avoids building dynamic SQL while keeping the query plan optimal for each case.
+
+**Response shape:**
+```json
+{
+  "data": [ ...log entries... ],
+  "total": 142,
+  "limit": 50,
+  "offset": 0
+}
 ```
 
 ---
 
-## Task 3 — Backend: ListLogs Handler
+## Frontend
 
-Replace the stub `ListLogs` handler with a real implementation.
+### API — `api/logs.ts`
 
-### Handler: `ListLogs`
+- Added `PaginatedLogs` interface matching the new backend response shape.
+- Renamed `listRecentLogs` to `listLogs` — accepts `severity`, `connection_id`, `limit`, `offset` params.
 
-**`backend/internal/api/handlers/logs.go`** — rewrite:
+### Store — `stores/logs.ts`
 
-```go
-func (s *Server) ListLogs(w http.ResponseWriter, r *http.Request)
-```
-
-Flow:
-1. Extract `userID` from JWT context (401 if absent).
-2. Parse query parameters:
-   - `severity` (optional) — filter by severity level
-   - `connection_id` (optional) — filter by specific connection
-   - `limit` (optional, default 50, max 200)
-   - `offset` (optional, default 0)
-3. Call the appropriate sqlc query based on which filters are present:
-   - Both empty → `ListLogsByUser(userID, limit, offset)`
-   - Severity set → `ListLogsByUserAndSeverity(userID, severity, limit, offset)`
-   - Connection set → `ListLogsByUserAndConnection(userID, connID, limit, offset)`
-4. Call `CountLogsByUser(userID)` for the total count.
-5. Return JSON response:
-   ```json
-   {
-     "data": [ ...log entries... ],
-     "total": 142,
-     "limit": 50,
-     "offset": 0
-   }
-   ```
-
-### Files changed
-
-```
-backend/internal/api/handlers/logs.go          (rewritten)
-```
-
----
-
-## Task 4 — Frontend: Wire Up Log Display
-
-The frontend scaffolding (types, store, API client, components, page) already exists. Update it to work with the real API response shape and add pagination + connection filtering.
-
-### API layer
-
-**`frontend/src/api/logs.ts`** — update response type:
-
-```ts
-export interface PaginatedLogs {
-  data: LogEntry[]
-  total: number
-  limit: number
-  offset: number
-}
-
-export function listRecentLogs(params?: {
-  severity?: string
-  connection_id?: string
-  limit?: number
-  offset?: number
-}) {
-  return client.get<PaginatedLogs>('/logs', { params })
-}
-```
-
-### Store
-
-**`frontend/src/stores/logs.ts`** — add pagination state:
-
-```ts
-const entries = ref<LogEntry[]>([])
-const total = ref(0)
-const limit = ref(50)
-const offset = ref(0)
-const loading = ref(false)
-const error = ref<string | null>(null)
-```
-
-Update `fetchLogs` to unpack the paginated response and expose `nextPage` / `prevPage` actions.
+- Added `total`, `limit`, `offset`, `error` state refs.
+- `fetchLogs` now unpacks the paginated response and handles errors.
+- Added `nextPage(filters)` and `prevPage(filters)` actions for pagination.
+- Added `resetPagination()` to reset offset when filters change.
 
 ### Components
 
-**`LogFilters.vue`** — add a connection dropdown:
-- Accept a `connections` prop (list of user's connections).
-- Add a `<select>` for filtering by connection.
-- Emit both `severity` and `connection_id` in the filter event.
+**`LogFilters.vue`**
+- Now accepts a `connections` prop (list of user's connections).
+- Added a connection `<select>` dropdown for filtering by source.
+- Emits typed filter object with optional `severity` and `connection_id`.
 
-**`LogFeed.vue`** — add pagination controls:
-- Show "Showing X–Y of Z" text.
-- Previous / Next buttons.
-- Emit `page` event when navigating.
+**`LogEntry.vue`**
+- Now displays the log payload content — extracts `message` field from payload if present, otherwise shows formatted JSON.
+- Added human-readable timestamp formatting via `toLocaleString()`.
+- Two-line layout: metadata row (timestamp, severity, source_type) + content row (payload message).
 
-**`LogEntry.vue`** — display the payload:
-- Show key fields from the `payload` JSONB (e.g. `message`, or a formatted JSON preview).
-- Currently only shows timestamp, severity, and source_type — the actual log content is missing.
+**`LogFeed.vue`**
+- Accepts new props: `connections`, `total`, `limit`, `offset`.
+- Passes connections to `LogFilters`.
+- Shows empty-state message when no entries found.
+- Pagination controls: Previous/Next buttons with disabled states, "X–Y of Z" summary.
+- Emits `next` and `prev` events for pagination.
 
-**`AgentLogPage.vue`** — wire up:
-- Fetch connections on mount (for the filter dropdown).
-- Pass connections to `LogFilters`.
-- Handle pagination events.
-- Show error state.
-
-### Files changed
-
-```
-frontend/src/api/logs.ts                          (updated)
-frontend/src/stores/logs.ts                       (updated)
-frontend/src/components/log/LogFilters.vue        (updated)
-frontend/src/components/log/LogFeed.vue           (updated)
-frontend/src/components/log/LogEntry.vue          (updated)
-frontend/src/pages/AgentLogPage.vue               (updated)
-```
+**`AgentLogPage.vue`**
+- Fetches both logs and connections on mount.
+- Passes connections store data to `LogFeed` for the filter dropdown.
+- Tracks active filters in a ref, resets pagination on filter change.
+- Shows error banner when log fetching fails.
+- Passes all pagination props and events to `LogFeed`.
 
 ---
 
-## Task 5 — Verification & Changelog
-
-### Manual verification
-
-1. **Create a webhook connection:**
-   ```bash
-   curl -X POST http://localhost:8080/api/connections \
-     -H "Authorization: Bearer <jwt>" \
-     -H "Content-Type: application/json" \
-     -d '{"name": "My App Logs", "type": "webhook_logs"}'
-   ```
-   Confirm the response includes a `webhook_token` in `config`.
-
-2. **Send a log entry via webhook:**
-   ```bash
-   curl -X POST http://localhost:8080/api/webhooks/logs \
-     -H "Authorization: Bearer <webhook_token>" \
-     -H "Content-Type: application/json" \
-     -d '{"source_type": "application", "severity": "warning", "payload": {"message": "disk usage 92%"}}'
-   ```
-   Confirm 201 response.
-
-3. **List logs via API:**
-   ```bash
-   curl http://localhost:8080/api/logs?limit=10 \
-     -H "Authorization: Bearer <jwt>"
-   ```
-   Confirm the log entry appears in the response, scoped to the user.
-
-4. **Frontend:** Open the Agent Log page, confirm logs appear with filtering and pagination.
-
-### Changelog entry
-
-Add `0.4.0 — Webhook Log Connector` to `docs/changelog.md`.
-
-### Completion doc
-
-Write `docs/completions/phase3-webhook-log-connector.md` summarising what was done.
-
-### Files changed
-
-```
-docs/changelog.md                                        (updated)
-docs/completions/phase3-webhook-log-connector.md         (new)
-```
-
----
-
-## Dependencies
-
-```
-Task 1: sqlc queries
-    └──▶ Task 2: Webhook ingestion endpoint  (needs GetConnectionByWebhookToken)
-    └──▶ Task 3: ListLogs handler            (needs user-scoped queries)
-              └──▶ Task 4: Frontend wiring   (needs real API responses)
-                        └──▶ Task 5: Verification & changelog
-```
-
-Tasks 2 and 3 can run in parallel after Task 1.
-
----
-
-## Files Summary
+## Files Changed
 
 ```
 backend/internal/db/queries/log_buffer.sql              (rewritten)
 backend/internal/db/log_buffer.sql.go                   (regenerated)
 backend/internal/api/handlers/webhooks.go               (new)
 backend/internal/api/handlers/logs.go                   (rewritten)
-backend/internal/api/handlers/connections.go            (token auto-gen)
-backend/internal/api/router.go                          (new webhook route)
+backend/internal/api/handlers/connections.go            (token auto-gen in CreateConnection)
+backend/internal/api/router.go                          (restructured — public + protected groups)
+backend/migrations/008_add_webhook_token_index.up.sql   (new)
+backend/migrations/008_add_webhook_token_index.down.sql (new)
 frontend/src/api/logs.ts                                (updated)
 frontend/src/stores/logs.ts                             (updated)
 frontend/src/components/log/LogFilters.vue              (updated)
 frontend/src/components/log/LogFeed.vue                 (updated)
 frontend/src/components/log/LogEntry.vue                (updated)
 frontend/src/pages/AgentLogPage.vue                     (updated)
-docs/changelog.md                                       (updated)
-docs/completions/phase3-webhook-log-connector.md        (new)
+docs/changelog.md                                       (0.4.0 entry)
+docs/completions/phase3-webhook-log-connector.md        (this file)
 ```

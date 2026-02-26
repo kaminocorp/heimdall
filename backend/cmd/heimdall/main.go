@@ -13,6 +13,7 @@ import (
 
 	"github.com/hejijunhao/heimdall/backend/internal/agent"
 	"github.com/hejijunhao/heimdall/backend/internal/api"
+	"github.com/hejijunhao/heimdall/backend/internal/api/middleware"
 	"github.com/hejijunhao/heimdall/backend/internal/config"
 	"github.com/hejijunhao/heimdall/backend/internal/db"
 )
@@ -24,6 +25,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	jwks := middleware.NewJWKSClient(cfg.SupabaseURL)
+	if err := jwks.Fetch(context.Background()); err != nil {
+		slog.Error("failed to fetch Supabase JWKS", "err", err)
+		os.Exit(1)
+	}
+	slog.Info("fetched Supabase signing keys", "endpoint", cfg.SupabaseURL)
+
 	pool, err := pgxpool.New(context.Background(), cfg.DatabaseURL)
 	if err != nil {
 		slog.Error("failed to connect to database", "err", err)
@@ -32,7 +40,7 @@ func main() {
 	defer pool.Close()
 
 	ag := agent.New(db.New(pool), cfg)
-	router := api.NewRouter(cfg, pool, ag)
+	router := api.NewRouter(cfg, pool, ag, jwks)
 
 	srv := &http.Server{
 		Addr:         ":" + cfg.Port,

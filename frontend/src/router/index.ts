@@ -49,8 +49,14 @@ const router = createRouter({
 
 router.beforeEach((to) => {
   const auth = useAuthStore()
+  // Before auth is initialized, allow navigation (App.vue handles the loading state)
+  if (!auth.initialized) return
   if (to.name !== 'login' && !auth.isAuthenticated) {
     return { name: 'login' }
+  }
+  // Redirect authenticated users away from login page
+  if (to.name === 'login' && auth.isAuthenticated) {
+    return { name: 'dashboard' }
   }
 })
 

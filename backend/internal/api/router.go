@@ -10,8 +10,8 @@ import (
 	"github.com/hejijunhao/heimdall/backend/internal/config"
 )
 
-func NewRouter(cfg *config.Config, pool *pgxpool.Pool, ag *agent.Agent) *chi.Mux {
-	s := handlers.NewServer(cfg, pool, ag)
+func NewRouter(cfg *config.Config, pool *pgxpool.Pool, ag *agent.Agent, jwks *middleware.JWKSClient) *chi.Mux {
+	s := handlers.NewServer(cfg, pool, ag, jwks)
 	r := chi.NewRouter()
 
 	r.Use(middleware.Logging)
@@ -23,7 +23,7 @@ func NewRouter(cfg *config.Config, pool *pgxpool.Pool, ag *agent.Agent) *chi.Mux
 
 		// Protected routes — require Supabase JWT.
 		r.Group(func(r chi.Router) {
-			r.Use(middleware.Auth(cfg.SupabaseJWTSecret))
+			r.Use(middleware.Auth(jwks))
 
 			r.Route("/connections", func(r chi.Router) {
 				r.Get("/", s.ListConnections)
