@@ -4,6 +4,7 @@ import ConnectionCard from './ConnectionCard.vue'
 
 defineProps<{
   connections: Connection[]
+  testingId?: string | null
 }>()
 
 const emit = defineEmits<{
@@ -20,6 +21,7 @@ const emit = defineEmits<{
       v-for="(conn, i) in connections"
       :key="conn.id"
       :connection="conn"
+      :testing="testingId === conn.id"
       class="animate-fade-in"
       :style="{ '--stagger-index': i }"
       @delete="emit('delete', $event)"

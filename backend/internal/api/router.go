@@ -31,6 +31,7 @@ func NewRouter(cfg *config.Config, pool *pgxpool.Pool, ag *agent.Agent, jwks *mi
 				r.Get("/{id}", s.GetConnection)
 				r.Put("/{id}", s.UpdateConnection)
 				r.Delete("/{id}", s.DeleteConnection)
+				r.Post("/{id}/test", s.TestConnection)
 			})
 
 			r.Route("/agent", func(r chi.Router) {

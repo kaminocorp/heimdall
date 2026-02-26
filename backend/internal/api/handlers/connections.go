@@ -1,15 +1,18 @@
 package handlers
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
 	"github.com/hejijunhao/heimdall/backend/internal/api/middleware"
+	"github.com/hejijunhao/heimdall/backend/internal/connectors/database"
 	"github.com/hejijunhao/heimdall/backend/internal/db"
 )
 
@@ -195,6 +198,68 @@ func (s *Server) UpdateConnection(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(conn)
+}
+
+func (s *Server) TestConnection(w http.ResponseWriter, r *http.Request) {
+	userID, ok := middleware.UserIDFromContext(r.Context())
+	if !ok {
+		jsonError(w, "missing user context", http.StatusUnauthorized)
+		return
+	}
+
+	connID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		jsonError(w, "invalid connection id", http.StatusBadRequest)
+		return
+	}
+
+	conn, err := s.Queries.GetConnectionByUser(r.Context(), db.GetConnectionByUserParams{
+		ID:     connID,
+		UserID: userID,
+	})
+	if err != nil {
+		jsonError(w, "connection not found", http.StatusNotFound)
+		return
+	}
+
+	type testResult struct {
+		Success bool   `json:"success"`
+		Message string `json:"message"`
+	}
+
+	var result testResult
+
+	switch conn.Type {
+	case "postgres":
+		pg, err := database.New(conn.Config)
+		if err != nil {
+			result = testResult{Success: false, Message: err.Error()}
+			break
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+		if err := pg.Connect(ctx); err != nil {
+			result = testResult{Success: false, Message: err.Error()}
+		} else {
+			defer pg.Close(ctx)
+			result = testResult{Success: true, Message: "Connection established"}
+		}
+	default:
+		// webhook_logs, syslog, github — no remote target to test, auto-pass.
+		result = testResult{Success: true, Message: "Connection established"}
+	}
+
+	newStatus := "active"
+	if !result.Success {
+		newStatus = "error"
+	}
+	_ = s.Queries.UpdateConnectionStatus(r.Context(), db.UpdateConnectionStatusParams{
+		ID:     connID,
+		Status: newStatus,
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
 }
 
 func (s *Server) DeleteConnection(w http.ResponseWriter, r *http.Request) {

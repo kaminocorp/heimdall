@@ -20,3 +20,7 @@ export function updateConnection(id: string, data: UpdateConnectionPayload) {
 export function deleteConnection(id: string) {
   return client.delete(`/connections/${id}`)
 }
+
+export function testConnection(id: string) {
+  return client.post<{ success: boolean; message: string }>(`/connections/${id}/test`)
+}

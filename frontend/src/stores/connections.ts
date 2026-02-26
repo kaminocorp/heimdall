@@ -7,6 +7,7 @@ export const useConnectionsStore = defineStore('connections', () => {
   const connections = ref<Connection[]>([])
   const loading = ref(false)
   const error = ref<string | null>(null)
+  const testingId = ref<string | null>(null)
 
   async function fetchConnections() {
     loading.value = true
@@ -34,10 +35,24 @@ export const useConnectionsStore = defineStore('connections', () => {
     return data
   }
 
+  async function testConnection(id: string) {
+    testingId.value = id
+    try {
+      const { data } = await connectionsApi.testConnection(id)
+      const idx = connections.value.findIndex((c) => c.id === id)
+      if (idx !== -1) {
+        connections.value[idx].status = data.success ? 'active' : 'error'
+      }
+      return data
+    } finally {
+      testingId.value = null
+    }
+  }
+
   async function deleteConnection(id: string) {
     await connectionsApi.deleteConnection(id)
     connections.value = connections.value.filter((c) => c.id !== id)
   }
 
-  return { connections, loading, error, fetchConnections, createConnection, updateConnection, deleteConnection }
+  return { connections, loading, error, testingId, fetchConnections, createConnection, updateConnection, testConnection, deleteConnection }
 })

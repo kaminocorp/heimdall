@@ -17,8 +17,12 @@ onMounted(() => {
 async function handleCreate(payload: CreateConnectionPayload) {
   actionError.value = null
   try {
-    await store.createConnection(payload)
+    const conn = await store.createConnection(payload)
     showForm.value = false
+    const result = await store.testConnection(conn.id)
+    if (!result.success) {
+      actionError.value = `Connection created but test failed: ${result.message}`
+    }
   } catch (e: any) {
     actionError.value = e.response?.data?.error ?? 'Failed to create connection'
   }
@@ -64,6 +68,6 @@ async function handleDelete(id: string) {
 
     <LoadingSpinner v-if="store.loading" />
     <div v-else-if="store.error" class="text-status-critical text-sm font-mono">{{ store.error }}</div>
-    <ConnectionList v-else :connections="store.connections" @delete="handleDelete" />
+    <ConnectionList v-else :connections="store.connections" :testing-id="store.testingId" @delete="handleDelete" />
   </div>
 </template>

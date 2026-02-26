@@ -4,6 +4,7 @@ import StatusBadge from '@/components/common/StatusBadge.vue'
 
 defineProps<{
   connection: Connection
+  testing?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -19,7 +20,11 @@ const emit = defineEmits<{
         <p class="font-mono text-xs text-text-muted mt-1">{{ connection.type }} &middot; {{ connection.direction }}</p>
       </div>
       <div class="flex items-center gap-3">
-        <StatusBadge :status="connection.status" />
+        <span v-if="testing" class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full font-mono text-[10px] font-medium uppercase tracking-wider border border-accent/30 bg-accent/10 text-accent">
+          <span class="w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
+          Testing
+        </span>
+        <StatusBadge v-else :status="connection.status" />
         <button
           @click="emit('delete', connection.id)"
           class="font-mono text-xs uppercase tracking-wider text-text-muted opacity-0 group-hover:opacity-100 hover:text-status-critical transition-all cursor-pointer"

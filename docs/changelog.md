@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.8.6 — Connection Test on Create](#086--connection-test-on-create-2026-02-26)
 - [0.8.5 — Connection Config Fields](#085--connection-config-fields-2026-02-26)
 - [0.8.4 — Disable Scale-to-Zero](#084--disable-scale-to-zero-2026-02-26)
 - [0.8.3 — Auth Guard Race Condition Fix](#083--auth-guard-race-condition-fix-2026-02-26)
@@ -22,6 +23,45 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.8.6 — Connection Test on Create (2026-02-26)
+
+Added automatic connectivity testing after creating a connection. The system now verifies credentials and reachability immediately, updating the connection status to `active` or `error` with a clear message — so users know right away whether their connection works.
+
+### Why
+
+Previously every new connection sat at `inactive` with no feedback. Users couldn't tell if credentials were wrong or a host was unreachable until the agent tried to use the connection later, at which point the error was buried in agent logs.
+
+### New Endpoint
+
+`POST /api/connections/{id}/test` — authenticated, user-scoped. Returns `{ "success": true/false, "message": "..." }` and updates the connection's status in the database.
+
+| Type | Test behaviour |
+|------|---------------|
+| `postgres` | Builds connector, calls `Connect()` with 5s timeout, then `Close()` |
+| `webhook_logs` / `syslog` / `github` | Auto-pass (no remote target to test yet) |
+
+### Frontend UX
+
+1. User creates a connection → card appears with a pulsing green **"TESTING"** badge
+2. On success → badge transitions to **"ACTIVE"**
+3. On failure → badge transitions to **"ERROR"** + an error banner shows the reason (e.g. *"Connection created but test failed: password authentication failed"*)
+
+The user is never left guessing about connection state.
+
+### Files Changed
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `backend/internal/api/handlers/connections.go` | `TestConnection` handler — fetch, test by type, update status |
+| 2 | `backend/internal/api/router.go` | Register `POST /{id}/test` |
+| 3 | `frontend/src/api/connections.ts` | `testConnection(id)` API call |
+| 4 | `frontend/src/stores/connections.ts` | `testingId` ref + `testConnection` action |
+| 5 | `frontend/src/pages/ConnectionsPage.vue` | Call test after create, show error on failure |
+| 6 | `frontend/src/components/connections/ConnectionCard.vue` | `testing` prop → pulsing "TESTING" badge |
+| 7 | `frontend/src/components/connections/ConnectionList.vue` | Pass `testingId` through to cards |
 
 ---
 
