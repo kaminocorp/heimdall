@@ -12,6 +12,7 @@ import (
 // Server holds shared dependencies for all handlers.
 type Server struct {
 	Config  *config.Config
+	Pool    *pgxpool.Pool
 	Queries *db.Queries
 	Agent   *agent.Agent
 	JWKS    *middleware.JWKSClient
@@ -20,6 +21,7 @@ type Server struct {
 func NewServer(cfg *config.Config, pool *pgxpool.Pool, ag *agent.Agent, jwks *middleware.JWKSClient) *Server {
 	return &Server{
 		Config:  cfg,
+		Pool:    pool,
 		Queries: db.New(pool),
 		Agent:   ag,
 		JWKS:    jwks,

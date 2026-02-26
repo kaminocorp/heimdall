@@ -14,7 +14,14 @@ func (s *Server) Me(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := s.Queries.GetUser(r.Context(), userID)
+	queries, done, err := s.UserQueries(r.Context(), userID)
+	if err != nil {
+		jsonError(w, "database error", http.StatusInternalServerError)
+		return
+	}
+	defer done()
+
+	user, err := queries.GetUser(r.Context(), userID)
 	if err != nil {
 		jsonError(w, "user not found", http.StatusNotFound)
 		return

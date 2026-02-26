@@ -25,7 +25,14 @@ func (s *Server) ListConversations(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	conversations, err := s.Queries.ListConversationsByUser(r.Context(), db.ListConversationsByUserParams{
+	queries, done, err := s.UserQueries(r.Context(), userID)
+	if err != nil {
+		jsonError(w, "database error", http.StatusInternalServerError)
+		return
+	}
+	defer done()
+
+	conversations, err := queries.ListConversationsByUser(r.Context(), db.ListConversationsByUserParams{
 		UserID: userID,
 		Limit:  50,
 		Offset: 0,
@@ -61,13 +68,20 @@ func (s *Server) GetConversation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	queries, done, err := s.UserQueries(r.Context(), userID)
+	if err != nil {
+		jsonError(w, "database error", http.StatusInternalServerError)
+		return
+	}
+	defer done()
+
 	convID, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		jsonError(w, "invalid conversation id", http.StatusBadRequest)
 		return
 	}
 
-	conv, err := s.Queries.GetConversationByUser(r.Context(), db.GetConversationByUserParams{
+	conv, err := queries.GetConversationByUser(r.Context(), db.GetConversationByUserParams{
 		ID:     convID,
 		UserID: userID,
 	})

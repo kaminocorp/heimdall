@@ -60,17 +60,25 @@ func (s *Server) HandleChat(w http.ResponseWriter, r *http.Request) {
 	var convID uuid.UUID
 	var storedMessages []chatMessage
 
+	queries, done, err := s.UserQueries(ctx, userID)
+	if err != nil {
+		writeWSError(ctx, conn, "database error")
+		return
+	}
+
 	if cidStr := r.URL.Query().Get("conversation_id"); cidStr != "" {
 		cid, err := uuid.Parse(cidStr)
 		if err != nil {
+			done()
 			writeWSError(ctx, conn, "invalid conversation_id")
 			return
 		}
-		conv, err := s.Queries.GetConversationByUser(ctx, db.GetConversationByUserParams{
+		conv, err := queries.GetConversationByUser(ctx, db.GetConversationByUserParams{
 			ID:     cid,
 			UserID: userID,
 		})
 		if err != nil {
+			done()
 			writeWSError(ctx, conn, "conversation not found")
 			return
 		}
@@ -79,11 +87,12 @@ func (s *Server) HandleChat(w http.ResponseWriter, r *http.Request) {
 			storedMessages = []chatMessage{}
 		}
 	} else {
-		conv, err := s.Queries.CreateConversation(ctx, db.CreateConversationParams{
+		conv, err := queries.CreateConversation(ctx, db.CreateConversationParams{
 			UserID:   userID,
 			Messages: json.RawMessage(`[]`),
 		})
 		if err != nil {
+			done()
 			slog.Error("failed to create conversation", "err", err)
 			writeWSError(ctx, conn, "failed to create conversation")
 			return
@@ -91,6 +100,7 @@ func (s *Server) HandleChat(w http.ResponseWriter, r *http.Request) {
 		convID = conv.ID
 		storedMessages = []chatMessage{}
 	}
+	done()
 
 	// Send system message with conversation ID.
 	if err := wsjson.Write(ctx, conn, map[string]any{
@@ -131,11 +141,14 @@ func (s *Server) HandleChat(w http.ResponseWriter, r *http.Request) {
 			if len(title) > 50 {
 				title = title[:50] + "..."
 			}
-			s.Queries.UpdateConversationTitleByUser(ctx, db.UpdateConversationTitleByUserParams{
-				ID:     convID,
-				Title:  pgtype.Text{String: title, Valid: true},
-				UserID: userID,
-			})
+			if q, d, err := s.UserQueries(ctx, userID); err == nil {
+				q.UpdateConversationTitleByUser(ctx, db.UpdateConversationTitleByUserParams{
+					ID:     convID,
+					Title:  pgtype.Text{String: title, Valid: true},
+					UserID: userID,
+				})
+				d()
+			}
 		}
 
 		// Signal thinking state.
@@ -213,7 +226,13 @@ func (s *Server) persistMessages(ctx context.Context, convID, userID uuid.UUID, 
 		slog.Error("failed to marshal messages", "err", err)
 		return
 	}
-	if err := s.Queries.UpdateConversationMessagesByUser(ctx, db.UpdateConversationMessagesByUserParams{
+	queries, done, err := s.UserQueries(ctx, userID)
+	if err != nil {
+		slog.Error("failed to acquire user queries", "err", err)
+		return
+	}
+	defer done()
+	if err := queries.UpdateConversationMessagesByUser(ctx, db.UpdateConversationMessagesByUserParams{
 		ID:       convID,
 		Messages: data,
 		UserID:   userID,

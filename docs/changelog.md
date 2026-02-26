@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.8.8 — Row Level Security](#088--row-level-security-2026-02-26)
 - [0.8.7 — Connection Edit & Ping](#087--connection-edit--ping-2026-02-26)
 - [0.8.6 — Connection Test on Create](#086--connection-test-on-create-2026-02-26)
 - [0.8.5 — Connection Config Fields](#085--connection-config-fields-2026-02-26)
@@ -24,6 +25,82 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.8.8 — Row Level Security (2026-02-26)
+
+Added Row Level Security (RLS) policies to all user-scoped database tables. Every table that holds user data now has a `user_id` column and an RLS policy enforcing row-level isolation. The backend also injects the authenticated user's identity into each Postgres transaction via `SET LOCAL`, laying the groundwork for full RLS enforcement if the connection role ever changes from the current superuser.
+
+### Why
+
+Previously, data isolation was enforced entirely at the application layer — every query manually filtered by `user_id` via WHERE clauses. This works but is fragile: a single missed filter, a new query, or a raw SQL session could leak data across users. RLS provides defence-in-depth at the database level, ensuring Postgres itself enforces row ownership regardless of how queries are constructed.
+
+### Phase 1 — Schema Gaps (migrations 011–012)
+
+Two tables were missing `user_id` columns required for RLS:
+
+- **`investigations`** — had no user scoping at all. Added `user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE` with index.
+- **`log_buffer`** — was scoped indirectly via `JOIN connections`. Added `user_id` column, backfilled from `connections.user_id`, then set `NOT NULL` with index.
+
+All sqlc queries for both tables were updated to include `user_id` in their filters. The `log_buffer` queries were simplified from JOIN-based scoping to direct `WHERE user_id = $1` filtering. The webhook ingestion handler now writes `user_id` (from the connection record) when inserting log entries.
+
+### Phase 2 — Per-Request User Context
+
+Added a `UserQueries` helper that injects the authenticated user's identity into Postgres before executing queries:
+
+1. Begins a transaction on the connection pool
+2. Runs `SET LOCAL app.current_user_id = '<uuid>'` (scoped to the transaction)
+3. Returns a `*db.Queries` wrapping that transaction + a cleanup function
+
+All user-scoped HTTP handlers now call `UserQueries(ctx, userID)` instead of using the shared `Queries` instance directly. The WebSocket chat handler uses per-operation `UserQueries` calls (conversation load/create, message persist, title update) rather than a single long-lived transaction.
+
+Non-user-scoped paths (agent config, webhook ingestion) continue using the shared `Queries` — they don't need user identity injection.
+
+### Phase 3 — RLS Policies (migration 013)
+
+A single migration that enables RLS on all six user-scoped tables:
+
+| Table | Policy | Rule |
+|-------|--------|------|
+| `users` | `users_self` | `id = app_current_user_id()` |
+| `connections` | `connections_owner` | `user_id = app_current_user_id()` |
+| `conversations` | `conversations_owner` | `user_id = app_current_user_id()` |
+| `agent_log` | `agent_log_owner` | `user_id = app_current_user_id()` |
+| `log_buffer` | `log_buffer_owner` | `user_id = app_current_user_id()` |
+| `investigations` | `investigations_owner` | `user_id = app_current_user_id()` |
+
+A helper function `app_current_user_id()` safely reads `current_setting('app.current_user_id', true)` — returns `NULL` if unset, never errors.
+
+`agent_config` is excluded — it's a system-wide single-row table with no user scoping.
+
+### RLS Enforcement Model
+
+The backend connects as the `postgres` superuser (table owner), which **bypasses RLS by default**. This is intentional — the backend retains full, unrestricted access. The policies protect against non-owner access paths: Supabase dashboard roles (`anon`, `authenticated`), PostgREST, and direct `psql` sessions with other roles. The `set_config` plumbing is in place so that if the backend ever migrates to a dedicated non-owner app role, RLS enforcement activates automatically.
+
+### Files Changed
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `backend/migrations/011_add_user_id_to_investigations.up.sql` | Add `user_id` column + index |
+| 2 | `backend/migrations/011_add_user_id_to_investigations.down.sql` | Drop column + index |
+| 3 | `backend/migrations/012_add_user_id_to_log_buffer.up.sql` | Add `user_id` column, backfill, set NOT NULL + index |
+| 4 | `backend/migrations/012_add_user_id_to_log_buffer.down.sql` | Drop column + index |
+| 5 | `backend/migrations/013_enable_rls.up.sql` | Helper function + RLS policies on 6 tables |
+| 6 | `backend/migrations/013_enable_rls.down.sql` | Drop policies, disable RLS, drop function |
+| 7 | `backend/internal/db/queries/investigations.sql` | All queries now filter by `user_id` |
+| 8 | `backend/internal/db/queries/log_buffer.sql` | Replaced JOIN scoping with direct `user_id` filter, added `user_id` to INSERT |
+| 9 | `backend/internal/db/models.go` | Regenerated — `Investigation` and `LogBuffer` structs include `UserID` |
+| 10 | `backend/internal/db/investigations.sql.go` | Regenerated |
+| 11 | `backend/internal/db/log_buffer.sql.go` | Regenerated |
+| 12 | `backend/internal/api/handlers/server.go` | Added `Pool` field to Server struct |
+| 13 | `backend/internal/api/handlers/userqueries.go` | New — `UserQueries()` helper |
+| 14 | `backend/internal/api/handlers/connections.go` | All 6 handlers use `UserQueries` |
+| 15 | `backend/internal/api/handlers/conversations.go` | Both handlers use `UserQueries` |
+| 16 | `backend/internal/api/handlers/chat.go` | Per-operation `UserQueries` for WebSocket flow |
+| 17 | `backend/internal/api/handlers/logs.go` | `ListLogs` uses `UserQueries` |
+| 18 | `backend/internal/api/handlers/auth.go` | `Me` uses `UserQueries` |
+| 19 | `backend/internal/api/handlers/webhooks.go` | Passes `conn.UserID` to `InsertLogEntry` |
 
 ---
 

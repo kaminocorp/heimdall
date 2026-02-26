@@ -23,7 +23,14 @@ func (s *Server) ListConnections(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	connections, err := s.Queries.ListConnectionsByUser(r.Context(), userID)
+	queries, done, err := s.UserQueries(r.Context(), userID)
+	if err != nil {
+		jsonError(w, "database error", http.StatusInternalServerError)
+		return
+	}
+	defer done()
+
+	connections, err := queries.ListConnectionsByUser(r.Context(), userID)
 	if err != nil {
 		jsonError(w, "failed to list connections", http.StatusInternalServerError)
 		return
@@ -40,13 +47,20 @@ func (s *Server) GetConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	queries, done, err := s.UserQueries(r.Context(), userID)
+	if err != nil {
+		jsonError(w, "database error", http.StatusInternalServerError)
+		return
+	}
+	defer done()
+
 	connID, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		jsonError(w, "invalid connection id", http.StatusBadRequest)
 		return
 	}
 
-	conn, err := s.Queries.GetConnectionByUser(r.Context(), db.GetConnectionByUserParams{
+	conn, err := queries.GetConnectionByUser(r.Context(), db.GetConnectionByUserParams{
 		ID:     connID,
 		UserID: userID,
 	})
@@ -119,7 +133,14 @@ func (s *Server) CreateConnection(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	conn, err := s.Queries.CreateConnection(r.Context(), db.CreateConnectionParams{
+	queries, done, err := s.UserQueries(r.Context(), userID)
+	if err != nil {
+		jsonError(w, "database error", http.StatusInternalServerError)
+		return
+	}
+	defer done()
+
+	conn, err := queries.CreateConnection(r.Context(), db.CreateConnectionParams{
 		UserID:    userID,
 		Name:      req.Name,
 		Type:      req.Type,
@@ -182,7 +203,14 @@ func (s *Server) UpdateConnection(w http.ResponseWriter, r *http.Request) {
 		status = "inactive"
 	}
 
-	conn, err := s.Queries.UpdateConnection(r.Context(), db.UpdateConnectionParams{
+	queries, done, err := s.UserQueries(r.Context(), userID)
+	if err != nil {
+		jsonError(w, "database error", http.StatusInternalServerError)
+		return
+	}
+	defer done()
+
+	conn, err := queries.UpdateConnection(r.Context(), db.UpdateConnectionParams{
 		ID:        connID,
 		Name:      req.Name,
 		Type:      req.Type,
@@ -207,13 +235,20 @@ func (s *Server) TestConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	queries, done, err := s.UserQueries(r.Context(), userID)
+	if err != nil {
+		jsonError(w, "database error", http.StatusInternalServerError)
+		return
+	}
+	defer done()
+
 	connID, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		jsonError(w, "invalid connection id", http.StatusBadRequest)
 		return
 	}
 
-	conn, err := s.Queries.GetConnectionByUser(r.Context(), db.GetConnectionByUserParams{
+	conn, err := queries.GetConnectionByUser(r.Context(), db.GetConnectionByUserParams{
 		ID:     connID,
 		UserID: userID,
 	})
@@ -253,7 +288,7 @@ func (s *Server) TestConnection(w http.ResponseWriter, r *http.Request) {
 	if !result.Success {
 		newStatus = "error"
 	}
-	_ = s.Queries.UpdateConnectionStatus(r.Context(), db.UpdateConnectionStatusParams{
+	_ = queries.UpdateConnectionStatus(r.Context(), db.UpdateConnectionStatusParams{
 		ID:     connID,
 		Status: newStatus,
 	})
@@ -269,13 +304,20 @@ func (s *Server) DeleteConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	queries, done, err := s.UserQueries(r.Context(), userID)
+	if err != nil {
+		jsonError(w, "database error", http.StatusInternalServerError)
+		return
+	}
+	defer done()
+
 	connID, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		jsonError(w, "invalid connection id", http.StatusBadRequest)
 		return
 	}
 
-	err = s.Queries.DeleteConnectionByUser(r.Context(), db.DeleteConnectionByUserParams{
+	err = queries.DeleteConnectionByUser(r.Context(), db.DeleteConnectionByUserParams{
 		ID:     connID,
 		UserID: userID,
 	})

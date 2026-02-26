@@ -16,9 +16,9 @@ import (
 
 const createInvestigation = `-- name: CreateInvestigation :one
 INSERT INTO investigations (
-    trigger_type, trigger_source, summary, severity, status, context
-) VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, trigger_type, trigger_source, summary, severity, status, context, findings, tool_trace, resolution, started_at, resolved_at
+    trigger_type, trigger_source, summary, severity, status, context, user_id
+) VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING id, trigger_type, trigger_source, summary, severity, status, context, findings, tool_trace, resolution, started_at, resolved_at, user_id
 `
 
 type CreateInvestigationParams struct {
@@ -28,6 +28,7 @@ type CreateInvestigationParams struct {
 	Severity      string          `json:"severity"`
 	Status        string          `json:"status"`
 	Context       json.RawMessage `json:"context"`
+	UserID        uuid.UUID       `json:"user_id"`
 }
 
 func (q *Queries) CreateInvestigation(ctx context.Context, arg CreateInvestigationParams) (Investigation, error) {
@@ -38,6 +39,7 @@ func (q *Queries) CreateInvestigation(ctx context.Context, arg CreateInvestigati
 		arg.Severity,
 		arg.Status,
 		arg.Context,
+		arg.UserID,
 	)
 	var i Investigation
 	err := row.Scan(
@@ -53,6 +55,7 @@ func (q *Queries) CreateInvestigation(ctx context.Context, arg CreateInvestigati
 		&i.Resolution,
 		&i.StartedAt,
 		&i.ResolvedAt,
+		&i.UserID,
 	)
 	return i, err
 }
@@ -60,25 +63,31 @@ func (q *Queries) CreateInvestigation(ctx context.Context, arg CreateInvestigati
 const dismissInvestigation = `-- name: DismissInvestigation :exec
 UPDATE investigations
 SET status = 'dismissed', resolution = $2
-WHERE id = $1
+WHERE id = $1 AND user_id = $3
 `
 
 type DismissInvestigationParams struct {
 	ID         uuid.UUID   `json:"id"`
 	Resolution pgtype.Text `json:"resolution"`
+	UserID     uuid.UUID   `json:"user_id"`
 }
 
 func (q *Queries) DismissInvestigation(ctx context.Context, arg DismissInvestigationParams) error {
-	_, err := q.db.Exec(ctx, dismissInvestigation, arg.ID, arg.Resolution)
+	_, err := q.db.Exec(ctx, dismissInvestigation, arg.ID, arg.Resolution, arg.UserID)
 	return err
 }
 
 const getInvestigation = `-- name: GetInvestigation :one
-SELECT id, trigger_type, trigger_source, summary, severity, status, context, findings, tool_trace, resolution, started_at, resolved_at FROM investigations WHERE id = $1
+SELECT id, trigger_type, trigger_source, summary, severity, status, context, findings, tool_trace, resolution, started_at, resolved_at, user_id FROM investigations WHERE id = $1 AND user_id = $2
 `
 
-func (q *Queries) GetInvestigation(ctx context.Context, id uuid.UUID) (Investigation, error) {
-	row := q.db.QueryRow(ctx, getInvestigation, id)
+type GetInvestigationParams struct {
+	ID     uuid.UUID `json:"id"`
+	UserID uuid.UUID `json:"user_id"`
+}
+
+func (q *Queries) GetInvestigation(ctx context.Context, arg GetInvestigationParams) (Investigation, error) {
+	row := q.db.QueryRow(ctx, getInvestigation, arg.ID, arg.UserID)
 	var i Investigation
 	err := row.Scan(
 		&i.ID,
@@ -93,23 +102,25 @@ func (q *Queries) GetInvestigation(ctx context.Context, id uuid.UUID) (Investiga
 		&i.Resolution,
 		&i.StartedAt,
 		&i.ResolvedAt,
+		&i.UserID,
 	)
 	return i, err
 }
 
 const listInvestigationsByDateRange = `-- name: ListInvestigationsByDateRange :many
-SELECT id, trigger_type, trigger_source, summary, severity, status, context, findings, tool_trace, resolution, started_at, resolved_at FROM investigations
-WHERE started_at >= $1 AND started_at <= $2
+SELECT id, trigger_type, trigger_source, summary, severity, status, context, findings, tool_trace, resolution, started_at, resolved_at, user_id FROM investigations
+WHERE user_id = $1 AND started_at >= $2 AND started_at <= $3
 ORDER BY started_at DESC
 `
 
 type ListInvestigationsByDateRangeParams struct {
+	UserID      uuid.UUID `json:"user_id"`
 	StartedAt   time.Time `json:"started_at"`
 	StartedAt_2 time.Time `json:"started_at_2"`
 }
 
 func (q *Queries) ListInvestigationsByDateRange(ctx context.Context, arg ListInvestigationsByDateRangeParams) ([]Investigation, error) {
-	rows, err := q.db.Query(ctx, listInvestigationsByDateRange, arg.StartedAt, arg.StartedAt_2)
+	rows, err := q.db.Query(ctx, listInvestigationsByDateRange, arg.UserID, arg.StartedAt, arg.StartedAt_2)
 	if err != nil {
 		return nil, err
 	}
@@ -130,6 +141,7 @@ func (q *Queries) ListInvestigationsByDateRange(ctx context.Context, arg ListInv
 			&i.Resolution,
 			&i.StartedAt,
 			&i.ResolvedAt,
+			&i.UserID,
 		); err != nil {
 			return nil, err
 		}
@@ -142,13 +154,13 @@ func (q *Queries) ListInvestigationsByDateRange(ctx context.Context, arg ListInv
 }
 
 const listOpenInvestigations = `-- name: ListOpenInvestigations :many
-SELECT id, trigger_type, trigger_source, summary, severity, status, context, findings, tool_trace, resolution, started_at, resolved_at FROM investigations
-WHERE status IN ('open', 'investigating')
+SELECT id, trigger_type, trigger_source, summary, severity, status, context, findings, tool_trace, resolution, started_at, resolved_at, user_id FROM investigations
+WHERE user_id = $1 AND status IN ('open', 'investigating')
 ORDER BY started_at DESC
 `
 
-func (q *Queries) ListOpenInvestigations(ctx context.Context) ([]Investigation, error) {
-	rows, err := q.db.Query(ctx, listOpenInvestigations)
+func (q *Queries) ListOpenInvestigations(ctx context.Context, userID uuid.UUID) ([]Investigation, error) {
+	rows, err := q.db.Query(ctx, listOpenInvestigations, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -169,6 +181,7 @@ func (q *Queries) ListOpenInvestigations(ctx context.Context) ([]Investigation, 
 			&i.Resolution,
 			&i.StartedAt,
 			&i.ResolvedAt,
+			&i.UserID,
 		); err != nil {
 			return nil, err
 		}
@@ -183,23 +196,24 @@ func (q *Queries) ListOpenInvestigations(ctx context.Context) ([]Investigation, 
 const resolveInvestigation = `-- name: ResolveInvestigation :exec
 UPDATE investigations
 SET status = 'resolved', resolution = $2, resolved_at = now()
-WHERE id = $1
+WHERE id = $1 AND user_id = $3
 `
 
 type ResolveInvestigationParams struct {
 	ID         uuid.UUID   `json:"id"`
 	Resolution pgtype.Text `json:"resolution"`
+	UserID     uuid.UUID   `json:"user_id"`
 }
 
 func (q *Queries) ResolveInvestigation(ctx context.Context, arg ResolveInvestigationParams) error {
-	_, err := q.db.Exec(ctx, resolveInvestigation, arg.ID, arg.Resolution)
+	_, err := q.db.Exec(ctx, resolveInvestigation, arg.ID, arg.Resolution, arg.UserID)
 	return err
 }
 
 const updateInvestigationFindings = `-- name: UpdateInvestigationFindings :exec
 UPDATE investigations
 SET findings = $2, tool_trace = $3, status = $4, resolved_at = $5
-WHERE id = $1
+WHERE id = $1 AND user_id = $6
 `
 
 type UpdateInvestigationFindingsParams struct {
@@ -208,6 +222,7 @@ type UpdateInvestigationFindingsParams struct {
 	ToolTrace  []byte     `json:"tool_trace"`
 	Status     string     `json:"status"`
 	ResolvedAt *time.Time `json:"resolved_at"`
+	UserID     uuid.UUID  `json:"user_id"`
 }
 
 func (q *Queries) UpdateInvestigationFindings(ctx context.Context, arg UpdateInvestigationFindingsParams) error {
@@ -217,6 +232,7 @@ func (q *Queries) UpdateInvestigationFindings(ctx context.Context, arg UpdateInv
 		arg.ToolTrace,
 		arg.Status,
 		arg.ResolvedAt,
+		arg.UserID,
 	)
 	return err
 }

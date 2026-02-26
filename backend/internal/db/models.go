@@ -69,6 +69,7 @@ type Investigation struct {
 	Resolution    pgtype.Text     `json:"resolution"`
 	StartedAt     time.Time       `json:"started_at"`
 	ResolvedAt    *time.Time      `json:"resolved_at"`
+	UserID        uuid.UUID       `json:"user_id"`
 }
 
 type LogBuffer struct {
@@ -78,6 +79,7 @@ type LogBuffer struct {
 	Severity     pgtype.Text     `json:"severity"`
 	Payload      json.RawMessage `json:"payload"`
 	IngestedAt   time.Time       `json:"ingested_at"`
+	UserID       uuid.UUID       `json:"user_id"`
 }
 
 type User struct {

@@ -14,9 +14,8 @@ import (
 )
 
 const countLogsByUser = `-- name: CountLogsByUser :one
-SELECT count(*) FROM log_buffer lb
-JOIN connections c ON c.id = lb.connection_id
-WHERE c.user_id = $1
+SELECT count(*) FROM log_buffer
+WHERE user_id = $1
 `
 
 func (q *Queries) CountLogsByUser(ctx context.Context, userID uuid.UUID) (int64, error) {
@@ -50,9 +49,9 @@ func (q *Queries) GetConnectionByWebhookToken(ctx context.Context, webhookToken 
 }
 
 const insertLogEntry = `-- name: InsertLogEntry :one
-INSERT INTO log_buffer (connection_id, source_type, severity, payload)
-VALUES ($1, $2, $3, $4)
-RETURNING id, connection_id, source_type, severity, payload, ingested_at
+INSERT INTO log_buffer (connection_id, source_type, severity, payload, user_id)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING id, connection_id, source_type, severity, payload, ingested_at, user_id
 `
 
 type InsertLogEntryParams struct {
@@ -60,6 +59,7 @@ type InsertLogEntryParams struct {
 	SourceType   string          `json:"source_type"`
 	Severity     pgtype.Text     `json:"severity"`
 	Payload      json.RawMessage `json:"payload"`
+	UserID       uuid.UUID       `json:"user_id"`
 }
 
 func (q *Queries) InsertLogEntry(ctx context.Context, arg InsertLogEntryParams) (LogBuffer, error) {
@@ -68,6 +68,7 @@ func (q *Queries) InsertLogEntry(ctx context.Context, arg InsertLogEntryParams) 
 		arg.SourceType,
 		arg.Severity,
 		arg.Payload,
+		arg.UserID,
 	)
 	var i LogBuffer
 	err := row.Scan(
@@ -77,15 +78,15 @@ func (q *Queries) InsertLogEntry(ctx context.Context, arg InsertLogEntryParams) 
 		&i.Severity,
 		&i.Payload,
 		&i.IngestedAt,
+		&i.UserID,
 	)
 	return i, err
 }
 
 const listLogsByUser = `-- name: ListLogsByUser :many
-SELECT lb.id, lb.connection_id, lb.source_type, lb.severity, lb.payload, lb.ingested_at FROM log_buffer lb
-JOIN connections c ON c.id = lb.connection_id
-WHERE c.user_id = $1
-ORDER BY lb.ingested_at DESC
+SELECT id, connection_id, source_type, severity, payload, ingested_at, user_id FROM log_buffer
+WHERE user_id = $1
+ORDER BY ingested_at DESC
 LIMIT $2 OFFSET $3
 `
 
@@ -111,6 +112,7 @@ func (q *Queries) ListLogsByUser(ctx context.Context, arg ListLogsByUserParams) 
 			&i.Severity,
 			&i.Payload,
 			&i.IngestedAt,
+			&i.UserID,
 		); err != nil {
 			return nil, err
 		}
@@ -123,10 +125,9 @@ func (q *Queries) ListLogsByUser(ctx context.Context, arg ListLogsByUserParams) 
 }
 
 const listLogsByUserAndConnection = `-- name: ListLogsByUserAndConnection :many
-SELECT lb.id, lb.connection_id, lb.source_type, lb.severity, lb.payload, lb.ingested_at FROM log_buffer lb
-JOIN connections c ON c.id = lb.connection_id
-WHERE c.user_id = $1 AND lb.connection_id = $2
-ORDER BY lb.ingested_at DESC
+SELECT id, connection_id, source_type, severity, payload, ingested_at, user_id FROM log_buffer
+WHERE user_id = $1 AND connection_id = $2
+ORDER BY ingested_at DESC
 LIMIT $3 OFFSET $4
 `
 
@@ -158,6 +159,7 @@ func (q *Queries) ListLogsByUserAndConnection(ctx context.Context, arg ListLogsB
 			&i.Severity,
 			&i.Payload,
 			&i.IngestedAt,
+			&i.UserID,
 		); err != nil {
 			return nil, err
 		}
@@ -170,10 +172,9 @@ func (q *Queries) ListLogsByUserAndConnection(ctx context.Context, arg ListLogsB
 }
 
 const listLogsByUserAndSeverity = `-- name: ListLogsByUserAndSeverity :many
-SELECT lb.id, lb.connection_id, lb.source_type, lb.severity, lb.payload, lb.ingested_at FROM log_buffer lb
-JOIN connections c ON c.id = lb.connection_id
-WHERE c.user_id = $1 AND lb.severity = $2
-ORDER BY lb.ingested_at DESC
+SELECT id, connection_id, source_type, severity, payload, ingested_at, user_id FROM log_buffer
+WHERE user_id = $1 AND severity = $2
+ORDER BY ingested_at DESC
 LIMIT $3 OFFSET $4
 `
 
@@ -205,6 +206,7 @@ func (q *Queries) ListLogsByUserAndSeverity(ctx context.Context, arg ListLogsByU
 			&i.Severity,
 			&i.Payload,
 			&i.IngestedAt,
+			&i.UserID,
 		); err != nil {
 			return nil, err
 		}

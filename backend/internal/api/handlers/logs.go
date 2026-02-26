@@ -39,6 +39,13 @@ func (s *Server) ListLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	queries, done, err := s.UserQueries(r.Context(), userID)
+	if err != nil {
+		jsonError(w, "database error", http.StatusInternalServerError)
+		return
+	}
+	defer done()
+
 	// Parse pagination params.
 	limit := int32(50)
 	if v := r.URL.Query().Get("limit"); v != "" {
@@ -87,21 +94,21 @@ func (s *Server) ListLogs(w http.ResponseWriter, r *http.Request) {
 				jsonError(w, "invalid connection_id", http.StatusBadRequest)
 				return
 			}
-			rawLogs, err = s.Queries.ListLogsByUserAndConnection(r.Context(), db.ListLogsByUserAndConnectionParams{
+			rawLogs, err = queries.ListLogsByUserAndConnection(r.Context(), db.ListLogsByUserAndConnectionParams{
 				UserID:       userID,
 				ConnectionID: connID,
 				Limit:        limit,
 				Offset:       offset,
 			})
 		case severity != "":
-			rawLogs, err = s.Queries.ListLogsByUserAndSeverity(r.Context(), db.ListLogsByUserAndSeverityParams{
+			rawLogs, err = queries.ListLogsByUserAndSeverity(r.Context(), db.ListLogsByUserAndSeverityParams{
 				UserID:   userID,
 				Severity: pgtype.Text{String: severity, Valid: true},
 				Limit:    limit,
 				Offset:   offset,
 			})
 		default:
-			rawLogs, err = s.Queries.ListLogsByUser(r.Context(), db.ListLogsByUserParams{
+			rawLogs, err = queries.ListLogsByUser(r.Context(), db.ListLogsByUserParams{
 				UserID: userID,
 				Limit:  limit,
 				Offset: offset,
@@ -112,7 +119,7 @@ func (s *Server) ListLogs(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		rawCount, err := s.Queries.CountLogsByUser(r.Context(), userID)
+		rawCount, err := queries.CountLogsByUser(r.Context(), userID)
 		if err != nil {
 			jsonError(w, "failed to count logs", http.StatusInternalServerError)
 			return
@@ -126,7 +133,7 @@ func (s *Server) ListLogs(w http.ResponseWriter, r *http.Request) {
 
 	// Fetch agent log entries.
 	if fetchAgent {
-		agentLogs, err := s.Queries.ListAgentLogByUser(r.Context(), db.ListAgentLogByUserParams{
+		agentLogs, err := queries.ListAgentLogByUser(r.Context(), db.ListAgentLogByUserParams{
 			UserID: userID,
 			Limit:  limit,
 			Offset: offset,
@@ -136,7 +143,7 @@ func (s *Server) ListLogs(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		agentCount, err := s.Queries.CountAgentLogByUser(r.Context(), userID)
+		agentCount, err := queries.CountAgentLogByUser(r.Context(), userID)
 		if err != nil {
 			jsonError(w, "failed to count agent logs", http.StatusInternalServerError)
 			return
