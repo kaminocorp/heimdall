@@ -49,7 +49,9 @@
       "WebFetch(domain:kaminocorp.com)",
       "WebFetch(domain:corpovault.com)",
       "WebFetch(domain:starwars.fandom.com)",
-      "WebFetch(domain:1000logos.net)"
+      "WebFetch(domain:1000logos.net)",
+      "Bash(PGPASSWORD=6FB54NjqYiMpwZSd psql:*)",
+      "Bash(cd \"/Users/philippholke/Crimson Sun/heimdall/backend\" && set -a && . ../.env && set +a && migrate -database \"$DATABASE_URL\" -path migrations up 2>&1)"
     ]
   }
 }

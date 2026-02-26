@@ -5,11 +5,11 @@
    ───────────────────────────────────────────────── */
 
 :root {
-  /* Backgrounds — green-tinted near-blacks */
-  --bg-primary: #080c08;
-  --bg-surface: rgba(14, 24, 14, 0.5);
-  --bg-surface-hover: rgba(14, 24, 14, 0.7);
-  --bg-elevated: #0e150e;
+  /* Backgrounds — near-blacks with faint green undertone */
+  --bg-primary: #060806;
+  --bg-surface: rgba(10, 14, 10, 0.5);
+  --bg-surface-hover: rgba(10, 14, 10, 0.7);
+  --bg-elevated: #0a0e0a;
 
   /* Text — warm whites with subtle green undertone */
   --text-primary: #e8ede8;
@@ -23,9 +23,9 @@
   --accent-subtle: rgba(90, 158, 106, 0.1);
   --accent-border: rgba(90, 158, 106, 0.3);
 
-  /* Borders — green-tinted structural lines */
-  --border: rgba(90, 158, 106, 0.08);
-  --border-hover: rgba(90, 158, 106, 0.18);
+  /* Borders — subtle green-tinted structural lines */
+  --border: rgba(90, 158, 106, 0.06);
+  --border-hover: rgba(90, 158, 106, 0.14);
 
   /* Status — desaturated camo register */
   --status-ok: #5a9e6a;

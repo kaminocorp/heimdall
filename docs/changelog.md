@@ -1,5 +1,7 @@
 # Changelog
 
+- [0.8.2 — Missing Migration Fix](#082--missing-migration-fix-2026-02-26)
+- [0.8.1 — Darker Background Tuning](#081--darker-background-tuning-2026-02-26)
 - [0.8.0 — Techno-Brutalist Redesign](#080--techno-brutalist-redesign-2026-02-26)
 - [0.7.1 — Supabase Auth Wiring](#071--supabase-auth-wiring-2026-02-26)
 - [0.7.0 — Agent Log](#070--agent-log-2026-02-24)
@@ -17,6 +19,49 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.8.2 — Missing Migration Fix (2026-02-26)
+
+Applied migration `010_create_agent_log` which had been missing from the remote Supabase database. The migration was created in v0.7.0 (Phase 6) but never applied, causing 500 errors on `GET /api/logs` — the unified log endpoint queries both `log_buffer` and `agent_log`, and the missing table crashed every request.
+
+### Database
+
+- Applied `010_create_agent_log`: creates `agent_log` table for agent-emitted observations (`tool_call`, `tool_result`, `observation`). Indexes on `(user_id, created_at DESC)` and `(entry_type)`. Schema version now at **10**.
+
+### Backend
+
+- **Fixed WebSocket hijack failure** — the `statusWriter` in the logging middleware wrapped `http.ResponseWriter` but didn't implement `http.Hijacker`, preventing WebSocket upgrades. Added `Unwrap()` method so `coder/websocket` can reach the underlying connection. This was causing `"http.ResponseWriter does not implement http.Hijacker"` on every `/ws/chat` connection attempt.
+
+### Root Cause (500 on /api/logs)
+
+The `ListLogs` handler defaults `source` to `"all"`, which always queries `agent_log` via `ListAgentLogByUser`. With the table missing, the query failed and returned 500 before raw logs could be fetched — making the entire Agent Log page non-functional.
+
+### Root Cause (WebSocket failure)
+
+The `statusWriter` struct in `middleware/logging.go` embeds `http.ResponseWriter` to capture status codes, but Go's type promotion only surfaces the interface methods — not `http.Hijacker` from the concrete server type. The `Unwrap()` method lets the WebSocket library traverse the wrapper chain to find the real hijackable writer.
+
+---
+
+## 0.8.1 — Darker Background Tuning (2026-02-26)
+
+Toned down the green tint on main-area backgrounds, pushing them closer to pure black. Sidebar unchanged. Purely cosmetic — 6 design tokens adjusted in `main.css`.
+
+### Token Changes
+
+| Token | Before | After |
+|-------|--------|-------|
+| `--bg-primary` | `#080c08` | `#060806` |
+| `--bg-surface` | `rgba(14,24,14,0.5)` | `rgba(10,14,10,0.5)` |
+| `--bg-surface-hover` | `rgba(14,24,14,0.7)` | `rgba(10,14,10,0.7)` |
+| `--bg-elevated` | `#0e150e` | `#0a0e0a` |
+| `--border` | `rgba(90,158,106,0.08)` | `rgba(90,158,106,0.06)` |
+| `--border-hover` | `rgba(90,158,106,0.18)` | `rgba(90,158,106,0.14)` |
+
+### Files Changed
+
+1 file: `frontend/src/assets/styles/main.css`
 
 ---
 
