@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.8.4 — Disable Scale-to-Zero](#084--disable-scale-to-zero-2026-02-26)
 - [0.8.3 — Auth Guard Race Condition Fix](#083--auth-guard-race-condition-fix-2026-02-26)
 - [0.8.2 — Missing Migration Fix](#082--missing-migration-fix-2026-02-26)
 - [0.8.1 — Darker Background Tuning](#081--darker-background-tuning-2026-02-26)
@@ -20,6 +21,20 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.8.4 — Disable Scale-to-Zero (2026-02-26)
+
+Set `min_machines_running` from `0` to `1` in the Fly.io configuration to eliminate cold starts. Heimdall's backend now keeps at least one machine running at all times, so WebSocket connections and agent requests are served immediately without a spin-up delay.
+
+### Why
+
+Fly.io defaults to scale-to-zero when no traffic is flowing. For a monitoring agent that needs to be responsive on-demand (WebSocket chat, log ingestion webhooks), a cold start of several seconds is unacceptable — especially for WebSocket upgrades which can time out during machine boot.
+
+### Files Changed
+
+1 file: `backend/fly.toml` — `min_machines_running: 0 → 1`
 
 ---
 
