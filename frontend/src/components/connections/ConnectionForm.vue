@@ -1,10 +1,68 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed, watch } from 'vue'
 import type { CreateConnectionPayload } from '@/types/connection'
+
+interface FieldDef {
+  key: string
+  label: string
+  type: 'text' | 'password' | 'number' | 'select'
+  required: boolean
+  placeholder?: string
+  default?: string | number
+  options?: { value: string; label: string }[]
+}
+
+const configFields: Record<string, FieldDef[]> = {
+  postgres: [
+    { key: 'host', label: 'Host', type: 'text', required: true, placeholder: 'db.example.com' },
+    { key: 'port', label: 'Port', type: 'number', required: false, default: 5432, placeholder: '5432' },
+    { key: 'database', label: 'Database', type: 'text', required: true, placeholder: 'mydb' },
+    { key: 'user', label: 'Username', type: 'text', required: true, placeholder: 'postgres' },
+    { key: 'password', label: 'Password', type: 'password', required: true, placeholder: '••••••••' },
+    { key: 'ssl_mode', label: 'SSL Mode', type: 'select', required: false, default: 'require', options: [
+      { value: 'disable', label: 'Disable' },
+      { value: 'require', label: 'Require' },
+      { value: 'verify-full', label: 'Verify Full' },
+    ]},
+  ],
+  webhook_logs: [],
+  syslog: [
+    { key: 'host', label: 'Host', type: 'text', required: true, placeholder: 'syslog.example.com' },
+    { key: 'port', label: 'Port', type: 'number', required: false, default: 514, placeholder: '514' },
+    { key: 'protocol', label: 'Protocol', type: 'select', required: false, default: 'udp', options: [
+      { value: 'udp', label: 'UDP' },
+      { value: 'tcp', label: 'TCP' },
+    ]},
+  ],
+  github: [
+    { key: 'owner', label: 'Owner', type: 'text', required: true, placeholder: 'my-org' },
+    { key: 'repo', label: 'Repository', type: 'text', required: true, placeholder: 'my-app' },
+    { key: 'token', label: 'Personal Access Token', type: 'password', required: true, placeholder: 'ghp_••••••••' },
+  ],
+}
 
 const name = ref('')
 const type = ref('postgres')
 const direction = ref<'one_way' | 'two_way'>('one_way')
+const config = ref<Record<string, string | number>>({})
+
+const activeFields = computed(() => configFields[type.value] ?? [])
+
+watch(type, () => {
+  config.value = {}
+})
+
+function getFieldValue(field: FieldDef): string | number {
+  return config.value[field.key] ?? field.default ?? ''
+}
+
+function setFieldValue(field: FieldDef, value: string) {
+  if (field.type === 'number') {
+    config.value[field.key] = value === '' ? '' as unknown as number : Number(value)
+  } else {
+    config.value[field.key] = value
+  }
+}
 
 const emit = defineEmits<{
   submit: [data: CreateConnectionPayload]
@@ -12,15 +70,24 @@ const emit = defineEmits<{
 }>()
 
 function handleSubmit() {
+  const builtConfig: Record<string, unknown> = {}
+  for (const field of activeFields.value) {
+    const val = config.value[field.key] ?? field.default
+    if (val !== undefined && val !== '') {
+      builtConfig[field.key] = val
+    }
+  }
+
   emit('submit', {
     name: name.value,
     type: type.value,
     direction: direction.value,
-    config: {},
+    config: builtConfig,
   })
   name.value = ''
   type.value = 'postgres'
   direction.value = 'one_way'
+  config.value = {}
 }
 </script>
 
@@ -47,6 +114,31 @@ function handleSubmit() {
         <option value="two_way">Two-way (ingest + query)</option>
       </select>
     </div>
+    <!-- Config fields -->
+    <template v-if="type === 'webhook_logs'">
+      <div class="border border-border rounded px-4 py-3 bg-bg-elevated/40">
+        <p class="font-mono text-xs text-text-secondary">
+          A webhook token will be generated automatically when this connection is created.
+        </p>
+      </div>
+    </template>
+    <template v-else-if="activeFields.length > 0">
+      <div class="border-t border-border pt-4 mt-2 space-y-4">
+        <p class="font-mono text-[10px] font-medium uppercase tracking-widest text-text-muted">Configuration</p>
+        <div v-for="field in activeFields" :key="field.key">
+          <label class="block font-mono text-xs font-medium uppercase tracking-wider text-text-secondary mb-1.5">{{ field.label }}</label>
+          <select v-if="field.type === 'select'" :value="getFieldValue(field)" @change="setFieldValue(field, ($event.target as HTMLSelectElement).value)"
+            class="block w-full bg-bg-elevated/80 border border-border rounded px-3 py-2 text-text-primary font-mono text-sm focus:border-accent/50 focus:ring-1 focus:ring-accent/20 focus:outline-none transition-colors">
+            <option v-for="opt in field.options" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+          </select>
+          <input v-else :type="field.type === 'number' ? 'text' : field.type" :value="getFieldValue(field)" @input="setFieldValue(field, ($event.target as HTMLInputElement).value)"
+            :required="field.required" :placeholder="field.placeholder"
+            :inputmode="field.type === 'number' ? 'numeric' : undefined"
+            class="block w-full bg-bg-elevated/80 border border-border rounded px-3 py-2 text-text-primary font-mono text-sm placeholder:text-text-muted focus:border-accent/50 focus:ring-1 focus:ring-accent/20 focus:outline-none transition-colors" />
+        </div>
+      </div>
+    </template>
+
     <div class="flex gap-2 pt-2">
       <button type="submit" class="px-4 py-2 bg-accent text-bg-primary font-mono text-sm font-medium uppercase tracking-wider rounded hover:bg-accent-hover transition-colors cursor-pointer">
         Add Connection

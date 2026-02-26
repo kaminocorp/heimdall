@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.8.5 — Connection Config Fields](#085--connection-config-fields-2026-02-26)
 - [0.8.4 — Disable Scale-to-Zero](#084--disable-scale-to-zero-2026-02-26)
 - [0.8.3 — Auth Guard Race Condition Fix](#083--auth-guard-race-condition-fix-2026-02-26)
 - [0.8.2 — Missing Migration Fix](#082--missing-migration-fix-2026-02-26)
@@ -21,6 +22,35 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.8.5 — Connection Config Fields (2026-02-26)
+
+Added dynamic configuration fields to the connection form so users can provide actual credentials and connection details — database host, port, password, API tokens, etc. Previously the form only captured Name, Type, and Direction, sending an empty `config: {}` to the backend.
+
+### Why
+
+The backend's `config` JSONB column and the agent's `query_database` tool already supported full connection credentials, but there was no way to enter them through the UI. Without config data the agent couldn't connect to any user databases.
+
+### Config Fields by Type
+
+| Type | Fields |
+|------|--------|
+| **PostgreSQL** | Host, Port (default 5432), Database, Username, Password, SSL Mode (disable/require/verify-full) |
+| **Webhook Logs** | None — info note explains the webhook token is auto-generated |
+| **Syslog** | Host, Port (default 514), Protocol (UDP/TCP) |
+| **GitHub** | Owner, Repository, Personal Access Token |
+
+Fields render dynamically when the user switches connection type. Password and token fields use `type="password"` inputs. Default values (ports, SSL mode, protocol) are applied if the user doesn't override them.
+
+### Bug Fix
+
+Fixed a field name mismatch: the frontend sent `username` but the backend postgres connector expects `user` (`json:"user"` on `postgresConfig`). The form now sends `user` to match.
+
+### Files Changed
+
+1 file: `frontend/src/components/connections/ConnectionForm.vue`
 
 ---
 
