@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
-import type { CreateConnectionPayload } from '@/types/connection'
+import type { Connection, CreateConnectionPayload } from '@/types/connection'
 
 interface FieldDef {
   key: string
@@ -41,6 +41,12 @@ const configFields: Record<string, FieldDef[]> = {
   ],
 }
 
+const props = defineProps<{
+  initialValues?: Connection | null
+}>()
+
+const isEditing = computed(() => !!props.initialValues)
+
 const name = ref('')
 const type = ref('postgres')
 const direction = ref<'one_way' | 'two_way'>('one_way')
@@ -48,9 +54,25 @@ const config = ref<Record<string, string | number>>({})
 
 const activeFields = computed(() => configFields[type.value] ?? [])
 
-watch(type, () => {
-  config.value = {}
+watch(type, (_newType, oldType) => {
+  if (oldType !== undefined) {
+    config.value = {}
+  }
 })
+
+watch(() => props.initialValues, (conn) => {
+  if (conn) {
+    name.value = conn.name
+    type.value = conn.type
+    direction.value = conn.direction
+    config.value = { ...conn.config } as Record<string, string | number>
+  } else {
+    name.value = ''
+    type.value = 'postgres'
+    direction.value = 'one_way'
+    config.value = {}
+  }
+}, { immediate: true })
 
 function getFieldValue(field: FieldDef): string | number {
   return config.value[field.key] ?? field.default ?? ''
@@ -84,10 +106,13 @@ function handleSubmit() {
     direction: direction.value,
     config: builtConfig,
   })
-  name.value = ''
-  type.value = 'postgres'
-  direction.value = 'one_way'
-  config.value = {}
+
+  if (!isEditing.value) {
+    name.value = ''
+    type.value = 'postgres'
+    direction.value = 'one_way'
+    config.value = {}
+  }
 }
 </script>
 
@@ -100,7 +125,7 @@ function handleSubmit() {
     </div>
     <div>
       <label class="block font-mono text-xs font-medium uppercase tracking-wider text-text-secondary mb-1.5">Type</label>
-      <select v-model="type" class="block w-full bg-bg-elevated/80 border border-border rounded px-3 py-2 text-text-primary font-mono text-sm focus:border-accent/50 focus:ring-1 focus:ring-accent/20 focus:outline-none transition-colors">
+      <select v-model="type" :disabled="isEditing" class="block w-full bg-bg-elevated/80 border border-border rounded px-3 py-2 text-text-primary font-mono text-sm focus:border-accent/50 focus:ring-1 focus:ring-accent/20 focus:outline-none transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
         <option value="postgres">PostgreSQL</option>
         <option value="webhook_logs">Webhook Logs</option>
         <option value="syslog">Syslog</option>
@@ -141,7 +166,7 @@ function handleSubmit() {
 
     <div class="flex gap-2 pt-2">
       <button type="submit" class="px-4 py-2 bg-accent text-bg-primary font-mono text-sm font-medium uppercase tracking-wider rounded hover:bg-accent-hover transition-colors cursor-pointer">
-        Add Connection
+        {{ isEditing ? 'Save Changes' : 'Add Connection' }}
       </button>
       <button type="button" @click="emit('cancel')" class="px-4 py-2 border border-accent-border/50 text-text-secondary font-mono text-sm uppercase tracking-wider rounded hover:border-accent/50 hover:text-text-primary transition-colors cursor-pointer">
         Cancel

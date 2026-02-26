@@ -9,6 +9,8 @@ defineProps<{
 
 const emit = defineEmits<{
   delete: [id: string]
+  edit: [connection: Connection]
+  test: [id: string]
 }>()
 </script>
 
@@ -25,6 +27,8 @@ const emit = defineEmits<{
       class="animate-fade-in"
       :style="{ '--stagger-index': i }"
       @delete="emit('delete', $event)"
+      @edit="emit('edit', $event)"
+      @test="emit('test', $event)"
     />
   </div>
 </template>

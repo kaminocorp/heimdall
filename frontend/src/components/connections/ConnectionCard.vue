@@ -9,6 +9,8 @@ defineProps<{
 
 const emit = defineEmits<{
   delete: [id: string]
+  edit: [connection: Connection]
+  test: [id: string]
 }>()
 </script>
 
@@ -25,12 +27,26 @@ const emit = defineEmits<{
           Testing
         </span>
         <StatusBadge v-else :status="connection.status" />
-        <button
-          @click="emit('delete', connection.id)"
-          class="font-mono text-xs uppercase tracking-wider text-text-muted opacity-0 group-hover:opacity-100 hover:text-status-critical transition-all cursor-pointer"
-        >
-          Delete
-        </button>
+        <div class="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-all">
+          <button
+            @click="emit('test', connection.id)"
+            class="font-mono text-xs uppercase tracking-wider text-text-muted hover:text-accent transition-colors cursor-pointer"
+          >
+            Ping
+          </button>
+          <button
+            @click="emit('edit', connection)"
+            class="font-mono text-xs uppercase tracking-wider text-text-muted hover:text-accent transition-colors cursor-pointer"
+          >
+            Edit
+          </button>
+          <button
+            @click="emit('delete', connection.id)"
+            class="font-mono text-xs uppercase tracking-wider text-text-muted hover:text-status-critical transition-colors cursor-pointer"
+          >
+            Delete
+          </button>
+        </div>
       </div>
     </div>
   </div>

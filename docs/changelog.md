@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.8.7 — Connection Edit & Ping](#087--connection-edit--ping-2026-02-26)
 - [0.8.6 — Connection Test on Create](#086--connection-test-on-create-2026-02-26)
 - [0.8.5 — Connection Config Fields](#085--connection-config-fields-2026-02-26)
 - [0.8.4 — Disable Scale-to-Zero](#084--disable-scale-to-zero-2026-02-26)
@@ -23,6 +24,41 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.8.7 — Connection Edit & Ping (2026-02-26)
+
+Added inline editing and manual connectivity re-testing ("ping") to connection cards. Previously the only way to fix a misconfigured connection was to delete and recreate it, and there was no way to re-verify connectivity after infrastructure changes.
+
+### Why
+
+Users who entered wrong credentials or whose infrastructure changed (password rotation, firewall rules) had to delete and recreate connections from scratch. The connectivity test only ran once at creation time with no way to re-trigger it.
+
+### Edit
+
+- **Edit** button on each connection card (hover-reveal, alongside Delete).
+- Opens the existing `ConnectionForm` pre-populated with the connection's current values.
+- Type selector is locked during edit — changing type would invalidate config fields.
+- Submit button reads **"Save Changes"** instead of "Add Connection".
+- On save, calls `PUT /connections/:id` then automatically re-runs the connectivity test (same flow as create).
+
+### Ping
+
+- **Ping** button on each connection card — triggers `POST /connections/:id/test` on demand.
+- Shows the pulsing "TESTING" badge while running, then updates to ACTIVE or ERROR.
+- Error banner appears if the test fails, same as post-create behaviour.
+
+### Files Changed
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `frontend/src/components/connections/ConnectionCard.vue` | Edit + Ping buttons, new emits |
+| 2 | `frontend/src/components/connections/ConnectionList.vue` | Forward `edit` and `test` events |
+| 3 | `frontend/src/components/connections/ConnectionForm.vue` | `initialValues` prop, edit mode, locked type, dynamic button label |
+| 4 | `frontend/src/pages/ConnectionsPage.vue` | `editingConnection` ref, unified submit handler, ping handler |
+
+No backend changes — the existing `PUT` and `POST .../test` endpoints already covered both flows.
 
 ---
 

@@ -13,8 +13,17 @@ export const useAuthStore = defineStore('auth', () => {
 
   async function init() {
     const { data } = await supabase.auth.getSession()
-    session.value = data.session
-    user.value = data.session?.user ?? null
+
+    // If a cached session exists, force a token refresh so we never send
+    // a stale JWT to the backend (e.g. after a redeploy or token expiry).
+    if (data.session) {
+      const { data: refreshed } = await supabase.auth.refreshSession()
+      session.value = refreshed.session
+      user.value = refreshed.session?.user ?? null
+    } else {
+      session.value = null
+      user.value = null
+    }
 
     supabase.auth.onAuthStateChange((_event, newSession) => {
       session.value = newSession
