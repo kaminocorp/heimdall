@@ -8,7 +8,6 @@ const auth = useAuthStore()
 
 const email = ref('')
 const password = ref('')
-const isSignup = ref(false)
 const loading = ref(false)
 const error = ref('')
 
@@ -16,17 +15,8 @@ async function handleSubmit() {
   loading.value = true
   error.value = ''
   try {
-    if (isSignup.value) {
-      await auth.signup(email.value, password.value)
-      if (!auth.isAuthenticated) {
-        error.value = 'Check your email to confirm your account.'
-        loading.value = false
-        return
-      }
-    } else {
-      await auth.login(email.value, password.value)
-    }
-    router.push('/')
+    await auth.login(email.value, password.value)
+    router.push('/dashboard')
   } catch (e: any) {
     error.value = e.message ?? 'Authentication failed'
   } finally {
@@ -83,19 +73,9 @@ async function handleSubmit() {
           :disabled="loading"
           class="w-full px-4 py-2.5 bg-accent text-bg-primary font-mono text-sm font-medium uppercase tracking-widest rounded hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer"
         >
-          {{ loading ? 'Authenticating…' : isSignup ? 'Register' : 'Authenticate' }}
+          {{ loading ? 'Authenticating…' : 'Authenticate' }}
         </button>
 
-        <p class="text-center font-mono text-xs text-text-muted">
-          {{ isSignup ? 'Already have an account?' : "No account?" }}
-          <button
-            type="button"
-            class="text-accent hover:text-accent-bright transition-colors cursor-pointer ml-1"
-            @click="isSignup = !isSignup; error = ''"
-          >
-            {{ isSignup ? 'Sign in' : 'Register' }}
-          </button>
-        </p>
       </form>
     </div>
   </div>

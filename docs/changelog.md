@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.9.0 — Public Website](#090--public-website-2026-02-27)
 - [0.8.8 — Row Level Security](#088--row-level-security-2026-02-26)
 - [0.8.7 — Connection Edit & Ping](#087--connection-edit--ping-2026-02-26)
 - [0.8.6 — Connection Test on Create](#086--connection-test-on-create-2026-02-26)
@@ -25,6 +26,55 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.9.0 — Public Website (2026-02-27)
+
+Added the public marketing website as Vue routes inside the existing frontend app. Three pages — landing (`/`), features (`/features`), pricing (`/pricing`) — served without authentication alongside the existing dashboard. Dashboard moved from `/` to `/dashboard`.
+
+### Why
+
+Heimdall needed a public-facing presence to explain the product, show features, and present pricing — without spinning up a separate site. Keeping everything in a single Vue app means one Vercel deployment, shared design tokens, and no second build pipeline.
+
+### Pages
+
+- **`/` — Landing**: Full-screen hero with three-line headline, accent-coloured middle line, and two CTAs ("Start Monitoring" + "See How It Works"). No scroll — single viewport with inline footer pinned to bottom.
+- **`/features` — Features**: Four sections — the problem (3-column grid), how it works (3-step sequence), core features (2×3 card grid with hover effects), and a CTA banner.
+- **`/pricing` — Pricing**: Three-column pricing cards (Starter $0 / Pro $49 / Enterprise Custom). Pro tier highlighted with accent border and "Popular" badge. Feature checklists with check icons.
+
+### Routing & Auth
+
+Public routes use `meta: { public: true }` — the auth guard skips these entirely. The `DefaultLayout` was extended to bypass the sidebar/app-shell for public pages (same pattern as the login page). Post-login redirect updated from `/` to `/dashboard`.
+
+### Design
+
+Reuses the existing techno-brutalist design tokens from `main.css` — no new CSS variables or theme work needed. The public nav features the Bifrost Hexagram logo as inline SVG with desktop links, mobile hamburger menu, and active route highlighting.
+
+### Files Changed
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `frontend/src/router/index.ts` | Added 3 public routes, moved dashboard to `/dashboard`, auth guard respects `meta.public` |
+| 2 | `frontend/src/layouts/DefaultLayout.vue` | Layout bypass extended to all `route.meta?.public` pages |
+| 3 | `frontend/src/pages/LoginPage.vue` | Post-login redirect → `/dashboard` |
+| 4 | `frontend/src/components/common/AppSidebar.vue` | Dashboard link → `/dashboard` |
+
+### Files Created
+
+| # | File | Purpose |
+|---|------|---------|
+| 1 | `frontend/src/components/public/PublicNav.vue` | Marketing nav with logo, links, mobile menu |
+| 2 | `frontend/src/components/public/PublicFooter.vue` | Footer with `inline` and `full` variants |
+| 3 | `frontend/src/pages/public/LandingPage.vue` | Single-viewport landing page |
+| 4 | `frontend/src/pages/public/FeaturesPage.vue` | Features page with 4 sections |
+| 5 | `frontend/src/pages/public/PricingPage.vue` | Pricing page with 3 tiers |
+
+### Open Items
+
+1. GitHub link in nav needs real repo URL
+2. Pricing tiers/prices/features are placeholders
+3. Terms & Privacy pages not yet created
 
 ---
 

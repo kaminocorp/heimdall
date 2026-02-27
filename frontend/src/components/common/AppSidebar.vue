@@ -19,7 +19,7 @@ const sections = [
   {
     label: 'Overview',
     items: [
-      { name: 'Dashboard', to: '/', routeName: 'dashboard' },
+      { name: 'Dashboard', to: '/dashboard', routeName: 'dashboard' },
     ],
   },
   {
