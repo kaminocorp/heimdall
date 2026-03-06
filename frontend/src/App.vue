@@ -2,6 +2,7 @@
 import { ref, onMounted } from 'vue'
 import { RouterView, useRouter } from 'vue-router'
 import DefaultLayout from './layouts/DefaultLayout.vue'
+import ToastContainer from '@/components/common/ToastContainer.vue'
 import { useAuthStore } from '@/stores/auth'
 
 const auth = useAuthStore()
@@ -27,4 +28,5 @@ onMounted(async () => {
   <div v-else class="flex items-center justify-center min-h-screen bg-bg-primary text-text-muted font-mono text-sm uppercase tracking-wider">
     Initializing…
   </div>
+  <ToastContainer />
 </template>

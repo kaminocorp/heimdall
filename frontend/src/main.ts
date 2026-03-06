@@ -15,4 +15,20 @@ const app = createApp(App)
 app.use(createPinia())
 app.use(router)
 
+// Global error handler — catches unhandled component errors
+app.config.errorHandler = (err, _instance, info) => {
+  console.error(`[Heimdall] Unhandled error (${info}):`, err)
+  import('./composables/useToast').then(({ useToast }) => {
+    useToast().show('An unexpected error occurred', 'error')
+  })
+}
+
+// Catch unhandled promise rejections
+window.addEventListener('unhandledrejection', (event) => {
+  console.error('[Heimdall] Unhandled rejection:', event.reason)
+  import('./composables/useToast').then(({ useToast }) => {
+    useToast().show('An unexpected error occurred', 'error')
+  })
+})
+
 app.mount('#app')

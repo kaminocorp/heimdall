@@ -3,7 +3,7 @@ import { onMounted, ref } from 'vue'
 import { useLogsStore } from '@/stores/logs'
 import { useConnectionsStore } from '@/stores/connections'
 import LogFeed from '@/components/log/LogFeed.vue'
-import LoadingSpinner from '@/components/common/LoadingSpinner.vue'
+import SkeletonBlock from '@/components/common/SkeletonBlock.vue'
 
 const logsStore = useLogsStore()
 const connectionsStore = useConnectionsStore()
@@ -39,7 +39,14 @@ function handleFilter(filters: { severity?: string; connection_id?: string; sour
       {{ logsStore.error }}
     </div>
 
-    <LoadingSpinner v-if="logsStore.loading && logsStore.entries.length === 0" />
+    <!-- Skeleton loader -->
+    <div v-if="logsStore.loading && logsStore.entries.length === 0" class="border border-border rounded-lg bg-bg-surface p-5 space-y-3">
+      <div v-for="n in 8" :key="n" class="flex items-center gap-3 py-1.5">
+        <SkeletonBlock width="4rem" height="0.75rem" />
+        <SkeletonBlock width="3rem" height="0.75rem" />
+        <SkeletonBlock width="100%" height="0.75rem" />
+      </div>
+    </div>
     <LogFeed
       v-else
       :entries="logsStore.entries"

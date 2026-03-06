@@ -4,7 +4,7 @@ import { useConnectionsStore } from '@/stores/connections'
 import type { Connection, CreateConnectionPayload } from '@/types/connection'
 import ConnectionList from '@/components/connections/ConnectionList.vue'
 import ConnectionForm from '@/components/connections/ConnectionForm.vue'
-import LoadingSpinner from '@/components/common/LoadingSpinner.vue'
+import SkeletonBlock from '@/components/common/SkeletonBlock.vue'
 
 const store = useConnectionsStore()
 const showForm = ref(false)
@@ -106,7 +106,14 @@ async function handleDelete(id: string) {
       @cancel="closeForm"
     />
 
-    <LoadingSpinner v-if="store.loading" />
+    <!-- Skeleton loader -->
+    <div v-if="store.loading" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div v-for="n in 3" :key="n" class="border border-border rounded-lg bg-bg-surface p-5 space-y-3">
+        <SkeletonBlock width="60%" height="1rem" />
+        <SkeletonBlock width="40%" height="0.75rem" />
+        <SkeletonBlock width="30%" height="0.75rem" />
+      </div>
+    </div>
     <div v-else-if="store.error" class="text-status-critical text-sm font-mono">{{ store.error }}</div>
     <ConnectionList v-else :connections="store.connections" :testing-id="store.testingId" @delete="handleDelete" @edit="openEdit" @test="handleTest" />
   </div>

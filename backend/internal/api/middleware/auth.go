@@ -219,6 +219,12 @@ func Auth(jwks *JWKSClient) func(http.Handler) http.Handler {
 	}
 }
 
+// ContextWithUserID returns a new context with the given user ID set.
+// This is primarily useful for testing, where JWT validation is bypassed.
+func ContextWithUserID(ctx context.Context, userID uuid.UUID) context.Context {
+	return context.WithValue(ctx, userIDKey, userID)
+}
+
 // UserIDFromContext extracts the authenticated user's UUID from the request context.
 func UserIDFromContext(ctx context.Context) (uuid.UUID, bool) {
 	id, ok := ctx.Value(userIDKey).(uuid.UUID)

@@ -27,7 +27,7 @@ const emit = defineEmits<{
           Testing
         </span>
         <StatusBadge v-else :status="connection.status" />
-        <div class="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-all">
+        <div class="flex items-center gap-2 sm:opacity-0 sm:group-hover:opacity-100 transition-all">
           <button
             @click="emit('test', connection.id)"
             class="font-mono text-xs uppercase tracking-wider text-text-muted hover:text-accent transition-colors cursor-pointer"

@@ -17,5 +17,11 @@ export const useAgentStore = defineStore('agent', () => {
     }
   }
 
-  return { config, loading, fetchConfig }
+  async function updateConfig(data: Partial<AgentConfig>) {
+    const { data: updated } = await agentApi.updateAgentConfig(data)
+    config.value = updated
+    return updated
+  }
+
+  return { config, loading, fetchConfig, updateConfig }
 })

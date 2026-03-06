@@ -28,7 +28,7 @@ onMounted(async () => {
 <template>
   <div class="h-full flex flex-col">
     <!-- Page header -->
-    <div class="flex items-center justify-between pb-6 mb-6 border-b border-border">
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-6 mb-6 border-b border-border">
       <div>
         <h2 class="font-mono text-2xl font-bold uppercase tracking-wider text-text-primary">Agent Chat</h2>
         <p class="font-sans text-sm text-text-secondary mt-1">Direct terminal link to the monitoring agent</p>

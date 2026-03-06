@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.9.1 — UI Polish & Test Coverage](#091--ui-polish--test-coverage-2026-03-06)
 - [0.9.0 — Public Website](#090--public-website-2026-02-27)
 - [0.8.8 — Row Level Security](#088--row-level-security-2026-02-26)
 - [0.8.7 — Connection Edit & Ping](#087--connection-edit--ping-2026-02-26)
@@ -26,6 +27,81 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.9.1 — UI Polish & Test Coverage (2026-03-06)
+
+Two-track release: UI polish across the frontend and test coverage for both backend and frontend.
+
+### Why
+
+The app was functional but rough around the edges — hardcoded dashboard values, no edit mode on agent config, generic loading spinners, no error feedback, and zero test coverage. This release addresses all of that.
+
+### 7a — UI Polish
+
+- **Toast notifications** — Global notification system via module-level singleton. Any code (including non-component modules like API interceptors) can trigger toasts. Renders via `<Teleport>` with enter/leave transitions.
+- **Agent config editing** — Config page now supports editing model, mode, schedule, and system prompt. Model field uses `<input>` + `<datalist>` so new model IDs work without code changes.
+- **Dashboard enhancement** — New `GET /api/stats` endpoint returns `log_count_24h`, `connection_count`, and `active_connections`. Dashboard now shows real data with a 3-column grid and hourly ingestion rate.
+- **Loading skeletons** — Replaced `LoadingSpinner` with layout-mimicking skeleton loaders on all pages (connections, agent log, config, reports).
+- **Error boundaries** — Global error handler in `main.ts` + axios response interceptor: 401 → auto-logout + redirect, 5xx → error toast, network failure → "Connection lost" toast. Dynamic `import()` avoids circular dependencies.
+- **Responsive audit** — Checked all pages at 375px and 768px. Fixed header stacking on agent config/chat pages and made connection card action buttons always-visible on touch devices.
+
+### 7b — Test Coverage
+
+- **Go test infrastructure** — Tests run against real Supabase DB with per-test user creation and `t.Cleanup` cascade delete. Auth bypass via exported `ContextWithUserID()`.
+- **Handler tests** — Black-box tests (`handlers_test` package) covering connections CRUD, agent config get/update, logs listing, webhook ingestion (valid + invalid token), auth me endpoint, and dashboard stats.
+- **Agent loop tests** — Uses `httptest.Server` with `option.WithBaseURL` to intercept Anthropic API calls. Tests simple response, max iterations, and tool error flows. `stubDBTX` makes DB operations fail gracefully.
+- **Frontend test infrastructure** — Vitest + happy-dom + Vue Test Utils. Fresh Pinia instance and global axios mock per test via setup file.
+- **Store tests** — 17 tests across all four Pinia stores: connections (CRUD + testingId lifecycle), logs (fetch + pagination + source filter), agent (config fetch/update), auth (init/login/logout/isAuthenticated).
+
+### Files Created
+
+| # | File | Purpose |
+|---|------|---------|
+| 1 | `frontend/src/composables/useToast.ts` | Toast singleton: `show()` / `dismiss()` API |
+| 2 | `frontend/src/components/common/ToastContainer.vue` | Fixed bottom-right toast renderer |
+| 3 | `frontend/src/components/common/SkeletonBlock.vue` | Configurable skeleton loader with pulse animation |
+| 4 | `frontend/src/api/stats.ts` | `getDashboardStats()` API function |
+| 5 | `backend/internal/db/queries/stats.sql` | `GetDashboardStats` query |
+| 6 | `backend/internal/db/stats.sql.go` | sqlc generated code |
+| 7 | `backend/internal/api/handlers/stats.go` | `GET /api/stats` handler |
+| 8 | `frontend/src/test/setup.ts` | Vitest setup: Pinia + axios mock |
+| 9 | `frontend/src/stores/__tests__/connections.test.ts` | Connection store tests |
+| 10 | `frontend/src/stores/__tests__/logs.test.ts` | Logs store tests |
+| 11 | `frontend/src/stores/__tests__/agent.test.ts` | Agent store tests |
+| 12 | `frontend/src/stores/__tests__/auth.test.ts` | Auth store tests |
+| 13 | `backend/internal/api/handlers/testhelpers_test.go` | Go test setup + HTTP helper |
+| 14 | `backend/internal/api/handlers/connections_test.go` | Connection handler tests |
+| 15 | `backend/internal/api/handlers/agent_test.go` | Agent config handler tests |
+| 16 | `backend/internal/api/handlers/logs_test.go` | Logs + stats handler tests |
+| 17 | `backend/internal/api/handlers/webhooks_test.go` | Webhook handler tests |
+| 18 | `backend/internal/api/handlers/auth_test.go` | Auth handler tests |
+| 19 | `backend/internal/agent/loop_test.go` | Agent loop tests |
+| 20 | `backend/internal/agent/tools_test.go` | Tool dispatch tests |
+
+### Files Changed
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `frontend/src/App.vue` | Mounted `<ToastContainer />` at app root |
+| 2 | `frontend/src/main.ts` | Global error handler + unhandled rejection listener |
+| 3 | `frontend/src/api/client.ts` | Axios response interceptor (401/5xx/network) |
+| 4 | `frontend/src/stores/agent.ts` | Added `updateConfig()` action |
+| 5 | `frontend/src/types/agent.ts` | Added `'off'` to mode union |
+| 6 | `frontend/src/pages/DashboardPage.vue` | 3-column grid, real stats, error banner |
+| 7 | `frontend/src/pages/AgentConfigPage.vue` | Edit mode, skeleton loader, responsive header |
+| 8 | `frontend/src/pages/AgentChatPage.vue` | Responsive header |
+| 9 | `frontend/src/pages/AgentLogPage.vue` | Skeleton loader |
+| 10 | `frontend/src/pages/ConnectionsPage.vue` | Skeleton loader |
+| 11 | `frontend/src/pages/ReportsPage.vue` | Skeleton loader |
+| 12 | `frontend/src/components/connections/ConnectionCard.vue` | Touch-friendly action buttons |
+| 13 | `backend/internal/api/router.go` | Added `/stats` route |
+| 14 | `backend/internal/api/middleware/auth.go` | Exported `ContextWithUserID()` |
+| 15 | `frontend/vite.config.ts` | Vitest test config |
+| 16 | `frontend/tsconfig.app.json` | Added `vitest/globals` types |
+| 17 | `frontend/package.json` | Test deps + scripts |
+| 18 | `backend/go.mod` | Added `testify` |
 
 ---
 

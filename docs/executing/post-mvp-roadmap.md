@@ -43,9 +43,9 @@ Phases are ordered by impact and dependency. Each phase is self-contained and sh
 
 ---
 
-### Phase 7 — Polish & Hardening
+### Phase 7a — UI Polish
 
-**Why first:** The MVP works end-to-end, but rough edges in the frontend and missing tests make it fragile. Polish before building more features.
+**Why first:** The MVP works end-to-end, but rough edges in the frontend make it feel unfinished. Polish before building more features.
 
 #### Scope
 
@@ -56,11 +56,21 @@ Phases are ordered by impact and dependency. Each phase is self-contained and sh
 - **Loading states** — skeleton loaders for pages that fetch data on mount
 - **Responsive layout** — ensure sidebar and pages work on tablet/mobile widths
 
-#### Tests
+---
+
+### Phase 7b — Test Coverage
+
+**Why parallel:** Tests are essential but shouldn't gate UI polish. Run this track alongside Phase 7a.
+
+#### Scope
 
 - Backend handler tests (connections CRUD, logs, agent run, webhooks)
 - Agent loop unit test (mock Claude API, verify tool dispatch)
 - Frontend store tests (logs, connections, auth)
+
+#### Requires
+
+- None (can start immediately, parallel with Phase 7a)
 
 ---
 
@@ -82,13 +92,30 @@ Phases are ordered by impact and dependency. Each phase is self-contained and sh
 
 #### Requires
 
-- Phase 7 (config editing UI for schedule control)
+- Phase 7a (config editing UI for schedule control)
 
 ---
 
-### Phase 9 — Report Generation
+### Phase 9 — Notifications & Escalation
 
-**Why next:** Completes the final vision platform section. Gives the agent's investigations a permanent, shareable output.
+**Why next:** A monitoring agent that can't notify anyone is a smoke detector with no alarm. Without notifications, users must check the dashboard to see findings — defeating the purpose of autonomous monitoring.
+
+#### Scope
+
+- **Notification channels** — configurable per user: email, Slack webhook, Discord webhook
+- **Severity thresholds** — configure which severity levels trigger notifications (e.g., only `critical` and `high`)
+- **Notification preferences** — new `notification_settings` table and UI page
+- **Escalation rules** — if an observation of severity `critical` goes unacknowledged for N minutes, re-notify or escalate to a secondary channel
+
+#### Requires
+
+- Phase 8 (monitoring mode generates observations worth notifying about)
+
+---
+
+### Phase 10 — Report Generation
+
+**Why next:** Gives the agent's investigations a permanent, shareable output. Completes the final vision platform section.
 
 #### Scope
 
@@ -109,7 +136,7 @@ Phases are ordered by impact and dependency. Each phase is self-contained and sh
 
 ---
 
-### Phase 10 — Elephantasm Long-Term Memory
+### Phase 11 — Elephantasm Long-Term Memory
 
 **Why next:** Memory transforms Heimdall from a stateless responder into an agent that learns. Each incident makes it better at the next.
 
@@ -130,7 +157,7 @@ Reference: [Elephantasm Integration Plan](./elephantasm-integration.md)
 
 ---
 
-### Phase 11 — GitHub Codebase Connector
+### Phase 12 — GitHub Codebase Connector
 
 **Why next:** During investigation, the agent often needs to understand *why* code behaves a certain way. Codebase search closes the investigation loop.
 
@@ -143,24 +170,7 @@ Reference: [Elephantasm Integration Plan](./elephantasm-integration.md)
 
 #### Requires
 
-- Phase 7 (connection config UI for setting up GitHub repos)
-
----
-
-### Phase 12 — Notifications & Escalation
-
-**Why:** The agent watches 24/7, but findings need to reach humans where they already work.
-
-#### Scope
-
-- **Notification channels** — configurable per user: email, Slack webhook, Discord webhook
-- **Severity thresholds** — configure which severity levels trigger notifications (e.g., only `critical` and `high`)
-- **Notification preferences** — new `notification_settings` table and UI page
-- **Escalation rules** — if an observation of severity `critical` goes unacknowledged for N minutes, re-notify or escalate to a secondary channel
-
-#### Requires
-
-- Phase 8 (monitoring mode generates observations worth notifying about)
+- Phase 7a (connection config UI for setting up GitHub repos)
 
 ---
 
@@ -184,12 +194,11 @@ These are ideas from the vision doc and blueprint that don't have concrete plans
 ## Dependencies
 
 ```
-Phase 7: Polish & Hardening
-    ├──▶ Phase 8: Monitoring Mode
-    │         ├──▶ Phase 9: Report Generation
-    │         ├──▶ Phase 10: Elephantasm Memory
-    │         └──▶ Phase 12: Notifications & Escalation
-    └──▶ Phase 11: GitHub Codebase Connector
+Phase 7a: UI Polish ─────┬──▶ Phase 8: Monitoring Mode
+Phase 7b: Test Coverage ─┘         ├──▶ Phase 9: Notifications & Escalation
+(parallel)                         ├──▶ Phase 10: Report Generation
+                                   └──▶ Phase 11: Elephantasm Memory
+Phase 7a ──────────────────────▶ Phase 12: GitHub Codebase Connector
 ```
 
-Phase 7 unblocks everything. Phases 8–12 have some interdependencies but are largely parallelizable after Phase 8.
+Phase 7a/7b run in parallel and unblock everything. After Phase 8, notifications come first (monitoring without alerting has limited real-world value), followed by reports and memory. GitHub connector only needs config UI from Phase 7a.

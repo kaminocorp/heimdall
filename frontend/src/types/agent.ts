@@ -1,7 +1,7 @@
 export interface AgentConfig {
   id: string
   model: string
-  mode: 'continuous' | 'scheduled'
+  mode: 'continuous' | 'scheduled' | 'off'
   schedule: string | null
   system_prompt_override: string | null
   created_at: string
