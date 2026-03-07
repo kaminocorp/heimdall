@@ -53,7 +53,10 @@
       "Bash(PGPASSWORD=6FB54NjqYiMpwZSd psql:*)",
       "Bash(cd \"/Users/philippholke/Crimson Sun/heimdall/backend\" && set -a && . ../.env && set +a && migrate -database \"$DATABASE_URL\" -path migrations up 2>&1)",
       "Bash(npx astro:*)",
-      "Bash(npx vitest:*)"
+      "Bash(npx vitest:*)",
+      "Bash(gh api:*)",
+      "Bash(go doc:*)",
+      "Bash(psql $DATABASE_URL:*)"
     ]
   }
 }

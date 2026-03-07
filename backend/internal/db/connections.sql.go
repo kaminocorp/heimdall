@@ -15,7 +15,7 @@ import (
 const createConnection = `-- name: CreateConnection :one
 INSERT INTO connections (user_id, name, type, direction, config, status)
 VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, name, type, direction, config, status, last_seen, created_at, updated_at, user_id
+RETURNING id, name, type, direction, config, status, last_seen, created_at, updated_at, user_id, app_id
 `
 
 type CreateConnectionParams struct {
@@ -48,6 +48,7 @@ func (q *Queries) CreateConnection(ctx context.Context, arg CreateConnectionPara
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.UserID,
+		&i.AppID,
 	)
 	return i, err
 }
@@ -67,7 +68,7 @@ func (q *Queries) DeleteConnectionByUser(ctx context.Context, arg DeleteConnecti
 }
 
 const getConnectionByUser = `-- name: GetConnectionByUser :one
-SELECT id, name, type, direction, config, status, last_seen, created_at, updated_at, user_id FROM connections WHERE id = $1 AND user_id = $2
+SELECT id, name, type, direction, config, status, last_seen, created_at, updated_at, user_id, app_id FROM connections WHERE id = $1 AND user_id = $2
 `
 
 type GetConnectionByUserParams struct {
@@ -89,12 +90,13 @@ func (q *Queries) GetConnectionByUser(ctx context.Context, arg GetConnectionByUs
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.UserID,
+		&i.AppID,
 	)
 	return i, err
 }
 
 const listConnectionsByUser = `-- name: ListConnectionsByUser :many
-SELECT id, name, type, direction, config, status, last_seen, created_at, updated_at, user_id FROM connections WHERE user_id = $1 ORDER BY created_at DESC
+SELECT id, name, type, direction, config, status, last_seen, created_at, updated_at, user_id, app_id FROM connections WHERE user_id = $1 ORDER BY created_at DESC
 `
 
 func (q *Queries) ListConnectionsByUser(ctx context.Context, userID uuid.UUID) ([]Connection, error) {
@@ -117,6 +119,7 @@ func (q *Queries) ListConnectionsByUser(ctx context.Context, userID uuid.UUID) (
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.UserID,
+			&i.AppID,
 		); err != nil {
 			return nil, err
 		}
@@ -132,7 +135,7 @@ const updateConnection = `-- name: UpdateConnection :one
 UPDATE connections
 SET name = $2, type = $3, direction = $4, config = $5, status = $6, updated_at = now()
 WHERE id = $1 AND user_id = $7
-RETURNING id, name, type, direction, config, status, last_seen, created_at, updated_at, user_id
+RETURNING id, name, type, direction, config, status, last_seen, created_at, updated_at, user_id, app_id
 `
 
 type UpdateConnectionParams struct {
@@ -167,6 +170,7 @@ func (q *Queries) UpdateConnection(ctx context.Context, arg UpdateConnectionPara
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.UserID,
+		&i.AppID,
 	)
 	return i, err
 }

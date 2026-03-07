@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.10.0 — Multi-App Data Model](#0100--multi-app-data-model-2026-03-07)
 - [0.9.1 — UI Polish & Test Coverage](#091--ui-polish--test-coverage-2026-03-06)
 - [0.9.0 — Public Website](#090--public-website-2026-02-27)
 - [0.8.8 — Row Level Security](#088--row-level-security-2026-02-26)
@@ -27,6 +28,79 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.10.0 — Multi-App Data Model (2026-03-07)
+
+Introduced the foundational data model for multi-application monitoring. Replaces the flat user-scoped model with an organizational hierarchy: **User → Organization → Application → Connection**. Adds per-application agent configuration and monitoring state tracking.
+
+### Why
+
+Heimdall previously assumed a single user with a flat set of connections. To support monitoring mode (Phase 8), the system needs to know *which application* each connection belongs to, configure the agent independently per app, and track monitoring progress per app. This release lays all the schema and query groundwork for that.
+
+### Migration 014 — Organizations & Applications
+
+- **`organizations`** table — `id`, `name`, `slug` (unique), timestamps. Represents a team or company.
+- **`users.org_id`** — nullable FK to `organizations`. Null means the user hasn't completed onboarding.
+- **`applications`** table — `id`, `org_id` FK (CASCADE), `name`, `status` (default `'active'`), timestamps. Each app is a distinct monitored system.
+- **`connections.app_id`** — `NOT NULL` FK to `applications` (CASCADE). Connections now belong to apps, not directly to users.
+- Existing `connections` and `log_buffer` rows wiped (test data) to allow the `NOT NULL` constraint.
+
+### Migration 015 — Per-Application Agent Config
+
+- **`app_agent_config`** table — `app_id` PK (1:1 with applications), `model` (default `claude-sonnet-4-6`), `mode` (continuous/periodic/off), `schedule_interval_secs` (default 60), `system_prompt_override` (nullable), timestamps.
+- RLS policy `app_agent_config_org` — users can only access configs for apps within their org, enforced via `app_current_user_id()` subquery.
+- Uses `schedule_interval_secs` (integer) rather than cron — simpler to validate and sufficient for interval-based monitoring.
+
+### Migration 016 — Monitoring State
+
+- **`monitoring_state`** table — `app_id` PK (1:1 with applications), `last_monitored_at` (cursor position), `updated_at`.
+- Skip-on-resume semantics: when monitoring is re-enabled after being off, cursor resets to `now()` — no backfill of missed logs.
+
+### sqlc Queries
+
+Five new query files covering the full data access layer for the new model:
+
+| File | Queries |
+|------|---------|
+| `queries/organizations.sql` | `CreateOrganization`, `GetOrganization`, `GetOrganizationBySlug`, `GetOrganizationByUser`, `UpdateOrganization` |
+| `queries/applications.sql` | `CreateApplication`, `GetApplication`, `ListApplicationsByOrg`, `UpdateApplication`, `DeleteApplication` |
+| `queries/app_agent_config.sql` | `GetAppAgentConfig`, `UpsertAppAgentConfig` |
+| `queries/monitoring.sql` | `GetMonitoringState`, `UpsertMonitoringState`, `ResetMonitoringCursor`, `ListActiveApplications`, `ListLogsSinceForApp` |
+| `queries/users.sql` | Updated `GetUser` to include `org_id`; added `SetUserOrg` |
+
+Key query design:
+- **`ListActiveApplications`** — three-way join (applications + app_agent_config + connections EXISTS) returning only apps with active status, monitoring enabled, and at least one active connection.
+- **`ListLogsSinceForApp`** — fetches logs for an app's connections since the cursor timestamp, ordered ASC with configurable LIMIT for batched processing.
+
+### Files Created
+
+| # | File | Purpose |
+|---|------|---------|
+| 1 | `backend/migrations/014_organizations_applications.up.sql` | Orgs, apps, and connection re-parenting |
+| 2 | `backend/migrations/014_organizations_applications.down.sql` | Reverse migration |
+| 3 | `backend/migrations/015_app_agent_config.up.sql` | Per-app agent config table + RLS |
+| 4 | `backend/migrations/015_app_agent_config.down.sql` | Reverse migration |
+| 5 | `backend/migrations/016_monitoring_state.up.sql` | Monitoring cursor table |
+| 6 | `backend/migrations/016_monitoring_state.down.sql` | Reverse migration |
+| 7 | `backend/internal/db/queries/organizations.sql` | Org CRUD queries |
+| 8 | `backend/internal/db/queries/applications.sql` | App CRUD queries |
+| 9 | `backend/internal/db/queries/app_agent_config.sql` | Agent config queries |
+| 10 | `backend/internal/db/queries/monitoring.sql` | Monitoring state + log fetch queries |
+
+### Files Changed
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `backend/internal/db/queries/users.sql` | `GetUser` returns `org_id`; added `SetUserOrg` |
+| 2 | `backend/internal/db/models.go` | Regenerated — new `Organization`, `Application`, `AppAgentConfig`, `MonitoringState` models |
+| 3 | `backend/internal/db/users.sql.go` | Regenerated — `GetUser` includes `OrgID`, new `SetUserOrg` |
+| 4 | `backend/internal/db/connections.sql.go` | Regenerated — `Connection` model includes `AppID` |
+| 5 | `backend/internal/db/organizations.sql.go` | New generated file — 5 methods |
+| 6 | `backend/internal/db/applications.sql.go` | New generated file — 5 methods |
+| 7 | `backend/internal/db/app_agent_config.sql.go` | New generated file — 2 methods |
+| 8 | `backend/internal/db/monitoring.sql.go` | New generated file — 5 methods |
 
 ---
 

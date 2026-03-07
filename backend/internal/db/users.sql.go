@@ -7,17 +7,45 @@ package db
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const getUser = `-- name: GetUser :one
-SELECT id, email, created_at FROM users WHERE id = $1
+SELECT id, email, org_id, created_at FROM users WHERE id = $1
 `
 
-func (q *Queries) GetUser(ctx context.Context, id uuid.UUID) (User, error) {
+type GetUserRow struct {
+	ID        uuid.UUID   `json:"id"`
+	Email     string      `json:"email"`
+	OrgID     pgtype.UUID `json:"org_id"`
+	CreatedAt time.Time   `json:"created_at"`
+}
+
+func (q *Queries) GetUser(ctx context.Context, id uuid.UUID) (GetUserRow, error) {
 	row := q.db.QueryRow(ctx, getUser, id)
-	var i User
-	err := row.Scan(&i.ID, &i.Email, &i.CreatedAt)
+	var i GetUserRow
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.OrgID,
+		&i.CreatedAt,
+	)
 	return i, err
+}
+
+const setUserOrg = `-- name: SetUserOrg :exec
+UPDATE users SET org_id = $1 WHERE id = $2
+`
+
+type SetUserOrgParams struct {
+	OrgID pgtype.UUID `json:"org_id"`
+	ID    uuid.UUID   `json:"id"`
+}
+
+func (q *Queries) SetUserOrg(ctx context.Context, arg SetUserOrgParams) error {
+	_, err := q.db.Exec(ctx, setUserOrg, arg.OrgID, arg.ID)
+	return err
 }

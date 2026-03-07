@@ -26,7 +26,7 @@ func (q *Queries) CountLogsByUser(ctx context.Context, userID uuid.UUID) (int64,
 }
 
 const getConnectionByWebhookToken = `-- name: GetConnectionByWebhookToken :one
-SELECT id, name, type, direction, config, status, last_seen, created_at, updated_at, user_id FROM connections
+SELECT id, name, type, direction, config, status, last_seen, created_at, updated_at, user_id, app_id FROM connections
 WHERE config->>'webhook_token' = $1::text AND type = 'webhook_logs' AND status = 'active'
 `
 
@@ -44,6 +44,7 @@ func (q *Queries) GetConnectionByWebhookToken(ctx context.Context, webhookToken 
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.UserID,
+		&i.AppID,
 	)
 	return i, err
 }

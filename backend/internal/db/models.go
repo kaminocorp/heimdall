@@ -33,6 +33,25 @@ type AgentLog struct {
 	CreatedAt      time.Time   `json:"created_at"`
 }
 
+type AppAgentConfig struct {
+	AppID                uuid.UUID   `json:"app_id"`
+	Model                string      `json:"model"`
+	Mode                 string      `json:"mode"`
+	ScheduleIntervalSecs int32       `json:"schedule_interval_secs"`
+	SystemPromptOverride pgtype.Text `json:"system_prompt_override"`
+	CreatedAt            time.Time   `json:"created_at"`
+	UpdatedAt            time.Time   `json:"updated_at"`
+}
+
+type Application struct {
+	ID        uuid.UUID `json:"id"`
+	OrgID     uuid.UUID `json:"org_id"`
+	Name      string    `json:"name"`
+	Status    string    `json:"status"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 type Connection struct {
 	ID        uuid.UUID       `json:"id"`
 	Name      string          `json:"name"`
@@ -44,6 +63,7 @@ type Connection struct {
 	CreatedAt time.Time       `json:"created_at"`
 	UpdatedAt time.Time       `json:"updated_at"`
 	UserID    uuid.UUID       `json:"user_id"`
+	AppID     uuid.UUID       `json:"app_id"`
 }
 
 type Conversation struct {
@@ -82,8 +102,23 @@ type LogBuffer struct {
 	UserID       uuid.UUID       `json:"user_id"`
 }
 
-type User struct {
+type MonitoringState struct {
+	AppID           uuid.UUID `json:"app_id"`
+	LastMonitoredAt time.Time `json:"last_monitored_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
+}
+
+type Organization struct {
 	ID        uuid.UUID `json:"id"`
-	Email     string    `json:"email"`
+	Name      string    `json:"name"`
+	Slug      string    `json:"slug"`
 	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+type User struct {
+	ID        uuid.UUID   `json:"id"`
+	Email     string      `json:"email"`
+	CreatedAt time.Time   `json:"created_at"`
+	OrgID     pgtype.UUID `json:"org_id"`
 }
