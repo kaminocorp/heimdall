@@ -25,6 +25,25 @@ func NewRouter(cfg *config.Config, pool *pgxpool.Pool, ag *agent.Agent, jwks *mi
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.Auth(jwks))
 
+			// Organization & onboarding
+			r.Get("/org", s.GetOrganization)
+			r.Post("/onboard", s.Onboard)
+
+			// Applications
+			r.Get("/apps", s.ListApplications)
+			r.Post("/apps", s.CreateApplication)
+
+			// Per-application routes
+			r.Route("/apps/{appId}", func(r chi.Router) {
+				r.Get("/", s.GetApplication)
+				r.Get("/connections", s.ListConnectionsByApp)
+				r.Get("/agent/config", s.GetAppAgentConfig)
+				r.Put("/agent/config", s.UpdateAppAgentConfig)
+				r.Get("/monitoring/status", s.GetMonitoringStatus)
+				r.Get("/stats", s.GetAppDashboardStats)
+			})
+
+			// Connections (user-scoped, for create/update/delete/test)
 			r.Route("/connections", func(r chi.Router) {
 				r.Get("/", s.ListConnections)
 				r.Post("/", s.CreateConnection)
@@ -34,14 +53,7 @@ func NewRouter(cfg *config.Config, pool *pgxpool.Pool, ag *agent.Agent, jwks *mi
 				r.Post("/{id}/test", s.TestConnection)
 			})
 
-			r.Route("/agent", func(r chi.Router) {
-				r.Get("/config", s.GetAgentConfig)
-				r.Put("/config", s.UpdateAgentConfig)
-				r.Post("/run", s.RunAgent)
-			})
-
 			r.Get("/logs", s.ListLogs)
-		r.Get("/stats", s.GetDashboardStats)
 
 			r.Route("/conversations", func(r chi.Router) {
 				r.Get("/", s.ListConversations)

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"log"
 	"net/http"
 	"time"
 
@@ -74,6 +75,7 @@ func (s *Server) GetConnection(w http.ResponseWriter, r *http.Request) {
 }
 
 type createConnectionRequest struct {
+	AppID     string          `json:"app_id"`
 	Name      string          `json:"name"`
 	Type      string          `json:"type"`
 	Direction string          `json:"direction"`
@@ -93,8 +95,24 @@ func (s *Server) CreateConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Name == "" || req.Type == "" {
-		jsonError(w, "name and type are required", http.StatusBadRequest)
+	if req.Name == "" || req.Type == "" || req.AppID == "" {
+		jsonError(w, "app_id, name and type are required", http.StatusBadRequest)
+		return
+	}
+
+	appID, err := uuid.Parse(req.AppID)
+	if err != nil {
+		jsonError(w, "invalid app_id", http.StatusBadRequest)
+		return
+	}
+
+	// Verify the app belongs to the authenticated user's org.
+	_, err = s.Queries.GetApplicationByOrgUser(r.Context(), db.GetApplicationByOrgUserParams{
+		AppID:  appID,
+		UserID: userID,
+	})
+	if err != nil {
+		jsonError(w, "application not found", http.StatusNotFound)
 		return
 	}
 
@@ -142,6 +160,7 @@ func (s *Server) CreateConnection(w http.ResponseWriter, r *http.Request) {
 
 	conn, err := queries.CreateConnection(r.Context(), db.CreateConnectionParams{
 		UserID:    userID,
+		AppID:     appID,
 		Name:      req.Name,
 		Type:      req.Type,
 		Direction: direction,
@@ -268,13 +287,15 @@ func (s *Server) TestConnection(w http.ResponseWriter, r *http.Request) {
 	case "postgres":
 		pg, err := database.New(conn.Config)
 		if err != nil {
-			result = testResult{Success: false, Message: err.Error()}
+			log.Printf("connection test failed for %s: %v", connID, err)
+			result = testResult{Success: false, Message: "Failed to initialize database connector"}
 			break
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		defer cancel()
 		if err := pg.Connect(ctx); err != nil {
-			result = testResult{Success: false, Message: err.Error()}
+			log.Printf("connection test failed for %s: %v", connID, err)
+			result = testResult{Success: false, Message: "Failed to connect to database"}
 		} else {
 			defer pg.Close(ctx)
 			result = testResult{Success: true, Message: "Connection established"}
@@ -288,10 +309,12 @@ func (s *Server) TestConnection(w http.ResponseWriter, r *http.Request) {
 	if !result.Success {
 		newStatus = "error"
 	}
-	_ = queries.UpdateConnectionStatus(r.Context(), db.UpdateConnectionStatusParams{
+	if err := queries.UpdateConnectionStatus(r.Context(), db.UpdateConnectionStatusParams{
 		ID:     connID,
 		Status: newStatus,
-	})
+	}); err != nil {
+		log.Printf("failed to update connection status for %s: %v", connID, err)
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(result)

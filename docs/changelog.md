@@ -1,5 +1,8 @@
 # Changelog
 
+- [0.13.0 — Phase 8 Hardening](#0130--phase-8-hardening-2026-03-07)
+- [0.12.0 — Multi-App UI & API](#0120--multi-app-ui--api-2026-03-07)
+- [0.11.0 — Monitoring Mode](#0110--monitoring-mode-2026-03-07)
 - [0.10.0 — Multi-App Data Model](#0100--multi-app-data-model-2026-03-07)
 - [0.9.1 — UI Polish & Test Coverage](#091--ui-polish--test-coverage-2026-03-06)
 - [0.9.0 — Public Website](#090--public-website-2026-02-27)
@@ -28,6 +31,334 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.13.0 — Phase 8 Hardening (2026-03-07)
+
+Four rounds of review fixes across the full Phase 8 implementation. 21 issues identified and resolved, including 6 P0s covering security, data integrity, and resource management.
+
+### Why
+
+Phase 8 introduced the largest architectural change since scaffolding — multi-app data model, Lumber classifier, autonomous monitor loop, and 15 new API endpoints. Each review round stress-tested a different layer: authorization correctness, production resilience, API contract consistency, and edge-case safety.
+
+### Round 1 — Authorization & Bounds (5 fixes)
+
+- **Per-app authorization gap (P0)** — All `/api/apps/{appId}/*` handlers parsed `appId` from the URL without verifying the app belonged to the user's org. Added `authorizeApp` helper backed by `GetApplicationByOrgUser` query (JOINs applications → users on `org_id`). Every per-app endpoint now goes through this check.
+- **Non-transactional onboarding (P1)** — `POST /api/onboard` ran 4 sequential queries (create org, link user, create app, upsert config). Partial failure left orphaned state. Wrapped in `pool.Begin()` + `Queries.WithTx()`.
+- **Verbose monitoring prompt (P1)** — Replaced Variant A with token-optimized Variant B. Enforces `Severity: <level>` output format for reliable parsing.
+- **Unbounded flagged log payload (P1)** — No limit on payload size or batch count sent to Claude. Added `maxPayloadChars = 2000` (per log) and `maxFlaggedForLLM = 50` (per cycle). Rune-safe truncation.
+- **Semaphore blocking tick loop (P2)** — One hung Claude API call could block the entire tick cycle. Added `monitorAppTimeout = 2 minutes` per-app context deadline.
+
+### Round 2 — Production Readiness (3 fixes)
+
+- **CreateConnection missing app authorization (P0)** — Accepted `app_id` in request body without verifying it belonged to the user's org. A user could inject logs into a foreign org's app. Added `GetApplicationByOrgUser` check.
+- **TestConnection error information leakage (P1)** — Raw Postgres error strings (containing hostnames, IPs) returned to clients. Replaced with generic messages; raw errors logged server-side only.
+- **App.vue init failure (P1)** — No try-catch around `auth.init()` / `app.init()`. If either threw, the app froze on "Initializing..." forever. Added fallback redirect to login.
+
+### Round 3 — API Contract Cleanup (9 fixes)
+
+- **GetDashboardStats auth bypass (P0)** — Discarded `ok` from `UserIDFromContext`, could proceed without authenticated user. Added 401 guard.
+- **ConnectionsPage wrong data source (P0)** — Called legacy `store.fetchConnections()` (user-scoped) instead of `listConnectionsByApp(appId)`. Page always showed wrong app's connections.
+- **Legacy routes removed (P1)** — Deleted superseded endpoints: `GET /api/stats`, `GET/PUT /api/agent/config`, `POST /api/agent/run`. Removed associated test file `agent_test.go`.
+- **UpdateConnectionStatus error silenced (P1)** — Silent `_ =` discard after test. Replaced with `log.Printf`.
+- **Onboarding idempotency (P1)** — `POST /api/onboard` could be called multiple times. Added `org_id` check; returns 409 Conflict if already onboarded.
+- **Mode enum validation (P2)** — `UpdateAppAgentConfig` accepted any string for `mode`. Added switch validation: only `continuous`, `periodic`, `off` accepted; returns 400 otherwise.
+- **String building inefficiency (P2)** — `formatFlaggedLogs` used byte append. Replaced with `strings.Builder`.
+- **Dashboard error accumulation (P2)** — Multiple sequential API calls each overwrote a single error variable. Changed to error array with joined display.
+
+### Round 4 — Edge-Case Safety (4 fixes)
+
+- **emitLog drops entire log on marshal failure (P0)** — If `json.Marshal(detail)` failed, the function returned early — permanently losing the summary, severity, and entry type. Fixed to write with `nil` detail instead.
+- **UTF-8 truncation corruption (P0)** — 5 truncation sites used byte slicing (`summary[:200]`, `payload[:2000]`), which splits multi-byte characters. All converted to rune-safe truncation: `string([]rune(s)[:n])` with `utf8.RuneCountInString()` length checks. Affects `loop.go` (3 sites) and `monitor.go` (2 sites).
+- **Agent.Start() double-start goroutine leak (P0)** — Calling `Start()` twice overwrote the `cancel` function, orphaning the first goroutine. Added guard: if `cancel != nil`, call `Stop()` first.
+
+### Deferred to Phase 9
+
+| Priority | Item | Location |
+|----------|------|----------|
+| P1 | Org slug format validation (regex + max length) | `handlers/organizations.go` |
+| P1 | `SystemPromptOverride` max-length | `handlers/applications.go` |
+| P1 | `UpdateConnectionStatus` SQL lacks `user_id` scope | `queries/connections.sql` |
+| P1 | Missing indexes: `applications(status)`, `connections(app_id, status)` | New migration |
+| P1 | Logs store doesn't filter by `app_id` | `frontend/src/stores/logs.ts` |
+| P2 | Classifier thread-safety for concurrent ONNX inference | `classifier_lumber.go` |
+| P2 | Dead code: `store.fetchConnections()` | `stores/connections.ts` |
+| P2 | Hardcoded model names in frontend datalist | `AgentConfigPage.vue` |
+
+### Files Changed
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `backend/internal/agent/agent.go` | Double-start guard in `Start()` |
+| 2 | `backend/internal/agent/emit.go` | Continue with nil detail on marshal failure |
+| 3 | `backend/internal/agent/loop.go` | Rune-safe truncation at 3 sites |
+| 4 | `backend/internal/agent/monitor.go` | Rune-safe truncation (2 sites), `strings.Builder`, payload/batch caps, per-app timeout, monitoring prompt Variant B |
+| 5 | `backend/internal/agent/prompt.go` | Token-optimized monitoring prompt |
+| 6 | `backend/internal/api/handlers/applications.go` | `authorizeApp` helper, mode enum validation |
+| 7 | `backend/internal/api/handlers/connections.go` | App authorization on create, generic error messages, status update logging |
+| 8 | `backend/internal/api/handlers/organizations.go` | Transactional onboarding, idempotency guard |
+| 9 | `backend/internal/api/handlers/stats.go` | Auth check fix |
+| 10 | `backend/internal/api/router.go` | Legacy routes removed |
+| 11 | `backend/internal/db/queries/applications.sql` | `GetApplicationByOrgUser` query |
+| 12 | `frontend/src/App.vue` | Init error handling with login fallback |
+| 13 | `frontend/src/pages/ConnectionsPage.vue` | App-scoped connection fetching |
+| 14 | `frontend/src/pages/DashboardPage.vue` | Error accumulation fix |
+
+---
+
+## 0.12.0 — Multi-App UI & API (2026-03-07)
+
+Surfaced the multi-app data model in the API and frontend. Added org onboarding flow, application selector, per-app agent configuration, monitoring status dashboard, and new agent log entry badges. Created handler tests for the new organizational and application endpoints.
+
+### Why
+
+The 0.10.0 data model and 0.11.0 monitoring loop had no user-facing surface. Users couldn't create organizations, switch between apps, or see monitoring status. This release wires the entire multi-app model to the API layer and frontend, making it operational end-to-end.
+
+### Backend — API Endpoints
+
+15 new endpoints organized into three route groups:
+
+| Method | Route | Purpose |
+|--------|-------|---------|
+| `GET` | `/api/org` | Get authenticated user's organization |
+| `POST` | `/api/onboard` | Create org + first app + config in one transaction |
+| `GET` | `/api/apps` | List apps in user's org |
+| `POST` | `/api/apps` | Create app (auto-creates default agent config) |
+| `GET` | `/api/apps/{appId}` | Get single app (with org authorization) |
+| `GET` | `/api/apps/{appId}/connections` | List connections for app |
+| `GET` | `/api/apps/{appId}/agent/config` | Get per-app agent config |
+| `PUT` | `/api/apps/{appId}/agent/config` | Update per-app agent config |
+| `GET` | `/api/apps/{appId}/monitoring/status` | Monitoring mode, interval, last check, running state |
+| `GET` | `/api/apps/{appId}/stats` | Per-app dashboard stats (log count, connections) |
+
+Additional query changes:
+- `ListConnectionsByApp(app_id)` — connections scoped to application
+- `GetAppDashboardStats(app_id)` — per-app stats replacing old user-scoped stats
+- `CreateConnection` updated to require `app_id`
+- `GetFirstUserInOrg(org_id)` — resolves a user for agent_log attribution in monitoring
+
+### Frontend — Onboarding Flow
+
+New `OnboardingPage.vue` — linear flow that creates an organization and first application in a single step:
+1. Organization name → auto-generates slug on blur
+2. Organization slug (editable)
+3. First application name
+4. Submits to `POST /api/onboard`; redirects to dashboard
+
+Router guard detects `needsOnboarding` (user has no `org_id`) and redirects unauthenticated or un-onboarded users appropriately. `App.vue` calls `app.init()` post-authentication to load org/app state.
+
+### Frontend — Application Management
+
+- **`useAppStore` (Pinia)** — central store for org, applications list, and `currentAppId` (persisted to `localStorage`). Provides `init()`, `onboard()`, `createApp()`, and computed `currentApp`.
+- **AppSidebar** — application selector dropdown in sidebar with org name in footer. Switching apps triggers reactive data re-fetch across all pages.
+- **DashboardPage** — 4-column grid: Monitoring card (mode, status dot, last check time, logs processed/flagged ratio), Agent card, Connections card, Ingestion card. Watches `currentAppId` for re-fetch.
+- **AgentConfigPage** — per-app config: model selector (datalist), mode toggle (continuous/periodic/off), interval presets (30s, 1m, 5m, 15m) + custom seconds input, system prompt override.
+- **ConnectionsPage** — app-scoped list via `listConnectionsByApp`. Form injects `currentAppId` on create.
+- **LogEntry** — new badges: `Monitor` (amber) for `monitoring` entries, `Heartbeat` (green) for `heartbeat` entries.
+
+### Frontend — Types & API Layer
+
+| File | Contents |
+|------|----------|
+| `types/organization.ts` | `Organization`, `Application`, `AppAgentConfig`, `MonitoringStatus`, `OnboardingPayload`, `OnboardingResponse` |
+| `types/connection.ts` | Updated `Connection` with `app_id`; `CreateConnectionPayload` includes `app_id` |
+| `api/organizations.ts` | `getOrganization()`, `onboard()` |
+| `api/applications.ts` | `listApplications()`, `createApplication()`, `getAppAgentConfig()`, `updateAppAgentConfig()`, `getMonitoringStatus()`, `getAppStats()`, `listConnectionsByApp()` |
+
+### Test Coverage
+
+Test infrastructure overhauled: `testSetup` creates full org → app → config hierarchy. `testEnv` struct extended with `OrgID`, `AppID`. New `createTestConnection` helper.
+
+| File | Tests | Coverage |
+|------|-------|---------|
+| `organizations_test.go` (new) | 4 | GetOrganization, Onboard, Onboard_DuplicateSlug, Onboard_MissingFields |
+| `applications_test.go` (new) | 11 | CRUD, per-app config, monitoring status, stats, connections by app |
+| `connections_test.go` (updated) | 6 | All creates include `app_id`, new `TestCreateConnection_MissingAppID` |
+| `logs_test.go` (updated) | 3 | Connection creation includes `app_id` |
+| `webhooks_test.go` (updated) | 2 | Connection creation includes `app_id` |
+
+**Total handler tests: 29** (was 18, +11 new)
+
+### Files Created
+
+| # | File | Purpose |
+|---|------|---------|
+| 1 | `backend/internal/api/handlers/organizations.go` | Org + onboarding handlers |
+| 2 | `backend/internal/api/handlers/organizations_test.go` | 4 org handler tests |
+| 3 | `backend/internal/api/handlers/applications.go` | 11 per-app endpoint handlers |
+| 4 | `backend/internal/api/handlers/applications_test.go` | 11 app handler tests |
+| 5 | `frontend/src/pages/OnboardingPage.vue` | Onboarding form |
+| 6 | `frontend/src/stores/app.ts` | App/org Pinia store |
+| 7 | `frontend/src/api/organizations.ts` | Org API client |
+| 8 | `frontend/src/api/applications.ts` | App API client |
+| 9 | `frontend/src/types/organization.ts` | Org/app/config types |
+
+### Files Changed
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `backend/internal/api/router.go` | New route groups: `/api/org`, `/api/onboard`, `/api/apps/{appId}/*` |
+| 2 | `backend/internal/api/handlers/connections.go` | `CreateConnection` requires `app_id` |
+| 3 | `backend/internal/api/handlers/stats.go` | Per-app stats query |
+| 4 | `backend/internal/db/queries/connections.sql` | `ListConnectionsByApp` query |
+| 5 | `backend/internal/db/queries/stats.sql` | `GetAppDashboardStats` query |
+| 6 | `backend/internal/db/queries/users.sql` | `GetFirstUserInOrg` query |
+| 7 | `frontend/src/App.vue` | Calls `app.init()` post-auth |
+| 8 | `frontend/src/router/index.ts` | Onboarding route + guard rewrite |
+| 9 | `frontend/src/layouts/DefaultLayout.vue` | Skip sidebar for onboarding |
+| 10 | `frontend/src/components/common/AppSidebar.vue` | App selector + org footer |
+| 11 | `frontend/src/pages/DashboardPage.vue` | 4-column grid, monitoring card |
+| 12 | `frontend/src/pages/AgentConfigPage.vue` | Per-app config editing |
+| 13 | `frontend/src/pages/ConnectionsPage.vue` | App-scoped connections |
+| 14 | `frontend/src/components/connections/ConnectionForm.vue` | Removed `app_id` from form (injected by page) |
+| 15 | `frontend/src/components/log/LogEntry.vue` | Monitor + Heartbeat badges |
+| 16 | `frontend/src/types/connection.ts` | `app_id` on Connection and CreateConnectionPayload |
+| 17 | `backend/internal/api/handlers/testhelpers_test.go` | Full org→app→config test setup |
+| 18 | `backend/internal/api/handlers/connections_test.go` | All tests use `app_id` |
+| 19 | `backend/internal/api/handlers/webhooks_test.go` | Connection creation with `app_id` |
+| 20 | `backend/internal/api/handlers/logs_test.go` | Connection creation with `app_id` |
+
+---
+
+## 0.11.0 — Monitoring Mode (2026-03-07)
+
+Implemented the autonomous monitoring pipeline — the core Phase 8 deliverable. Heimdall now watches systems 24/7 without user interaction: a background goroutine polls for new logs, classifies them through a deterministic Lumber ONNX pipeline, and escalates only flagged entries to Claude for assessment.
+
+### Why
+
+This is the central vision feature. Before 0.11.0, Heimdall only responded to user-initiated chat. Now it runs continuously, processing logs in the background, filtering noise through deterministic classification, and surfacing only what matters — autonomously.
+
+### Classification Pipeline — Lumber Integration
+
+Deterministic log classification using the Lumber ONNX model (in-process, no microservice). The pipeline runs before any LLM call, filtering safe logs so Claude only sees anomalies.
+
+```
+LogBuffer → ExtractText → Lumber.ClassifyBatch → ShouldEscalate → flagged | safe
+```
+
+**Text extraction** (`extract.go`) — converts arbitrary JSON log payloads to classifiable text:
+1. Priority field scan: `message` → `msg` → `error` → `text` → `log` → `body`
+2. Prepends `level`/`severity` field if present (e.g., `"ERROR: connection refused"`)
+3. Falls back to raw JSON string if no known field found
+
+**Classifier interface** (`classifier.go`) — two implementations:
+- `LumberClassifier` — wraps Lumber ONNX with 0.5 confidence threshold. Returns 42-category taxonomy across 8 types (ERROR, REQUEST, DEPLOY, SYSTEM, ACCESS, DATA, SCHEDULED, PERFORMANCE) + UNCLASSIFIED fallback.
+- `PassthroughClassifier` — escalates all logs when Lumber is unavailable.
+
+**Three-way startup mode** via `CLASSIFIER_MODE` env var:
+- `on` — require Lumber, fatal if model unavailable
+- `off` — always use PassthroughClassifier
+- `fallback` (default) — try Lumber, fall back to Passthrough if model loading fails
+
+**Severity gate** (`severity_gate.go`) — pure function `ShouldEscalate(event)` with hardcoded rules per taxonomy type:
+
+| Type | Escalate | Safe |
+|------|----------|------|
+| ERROR | All | — |
+| PERFORMANCE | All | — |
+| REQUEST | server_error, slow_request | success, redirect, client_error |
+| DEPLOY | All | — |
+| SYSTEM | resource_alert, config_change | health_check, process_lifecycle, scaling_event |
+| ACCESS | login_failure, auth_failure, permission_change, api_key_event | login_success, session_expired |
+| DATA | migration | query_executed, replication |
+| SCHEDULED | cron_failed | cron_started, cron_completed |
+| UNCLASSIFIED | Always | — |
+| Unknown | Always (fail-safe) | — |
+
+**Dockerfile changes** — Alpine → Debian bookworm-slim (ONNX requires glibc). 3-stage build: compile, download models from HuggingFace/GitHub, runtime. Models at `/opt/lumber/models`, library at `/usr/local/lib/libonnxruntime.so`.
+
+### Monitor Loop
+
+**Lifecycle** — `Agent.Start(ctx)` launches a background goroutine running `Monitor(ctx)`. `Agent.Stop()` cancels the context and waits via `sync.WaitGroup`. Wired into `main.go` startup/shutdown sequence: start agent after creation, stop before closing classifier and pool.
+
+**Tick cycle** (every 15 seconds):
+1. `ListActiveApplications` — 3-way JOIN returning apps with `status='active'`, `mode!='off'`, and at least one active connection
+2. For each app (up to 10 concurrent via semaphore, 2-minute timeout each):
+   - Resolve org user for log attribution (`GetFirstUserInOrg`)
+   - Get cursor position (`GetMonitoringState`); first run initializes to `now()` and skips
+   - Fetch up to 200 logs since cursor (`ListLogsSinceForApp`, ASC order)
+   - Classify through Lumber pipeline
+   - Emit heartbeat always (`logs_processed`, `safe`, `flagged` counts)
+   - If flagged > 0: cap at 50 logs, truncate payloads to 2000 chars, format for LLM, call `RunMonitoring`
+   - Emit monitoring entry with assessment text and severity
+   - Advance cursor to last log's `ingested_at`
+
+**Constants:**
+
+| Constant | Value | Purpose |
+|----------|-------|---------|
+| `monitorTickInterval` | 15s | Global polling rate |
+| `maxConcurrentApps` | 10 | Semaphore bound for concurrent app processing |
+| `logBatchLimit` | 200 | Max logs fetched per app per cycle |
+| `maxFlaggedForLLM` | 50 | Max flagged logs sent to Claude per cycle |
+| `maxPayloadChars` | 2000 | Per-log payload truncation limit |
+| `monitorAppTimeout` | 2m | Per-app processing deadline |
+
+### RunMonitoring — Agent Method
+
+New `RunMonitoring(ctx, userID, appConfig, flaggedLogs) → (assessment, severity)`:
+- Uses monitoring-specific system prompt (Variant B — token-optimized, requests explicit `Severity: <level>` format)
+- Loads per-app model from `app_agent_config` (falls back to `claude-sonnet-4-6`)
+- Sessionless — no conversation history, no persistence
+- Full tool-use loop (search_logs, query_database) capped at 10 iterations
+- Error resilient: returns degraded assessment with `"error"` severity on API failure (never crashes the monitor)
+
+**Severity parsing** from agent response:
+1. Explicit marker: `Severity: critical|error|warning|info`
+2. Heuristic keyword scan (priority order: critical > error > warning)
+3. Default: `info`
+
+### Agent Log Entries
+
+Two new entry types emitted by the monitor:
+- **`heartbeat`** — every cycle, every app. Contains `logs_processed`, `safe`, `flagged` counts. Lightweight status indicator.
+- **`monitoring`** — only when flagged logs exist. Contains full assessment text, severity, flagged count. Triggers frontend amber badge.
+
+### EmitLog Refactor
+
+Refactored emit layer to support severity:
+- `EmitLog(ctx, userID, conversationID, entryType, summary, detail)` — existing, severity defaults to empty
+- `EmitLogWithSeverity(...)` — new, accepts explicit severity string
+- Private `emitLog` delegate handles both. Fire-and-forget: errors logged but never propagated.
+
+### Test Coverage
+
+| File | Tests | Coverage |
+|------|-------|---------|
+| `extract_test.go` | 12 | Message field priority, level prepending, Supabase-style payloads, non-JSON fallback, batch extraction |
+| `severity_gate_test.go` | 32 | All 8 taxonomy types × escalate/safe sub-cases, UNCLASSIFIED, unknown types |
+| `classifier_test.go` | 7 | PassthroughClassifier (3 pure), LumberClassifier (4 integration, gated by `LUMBER_MODEL_DIR`) |
+| `monitor_test.go` | 16 | Format (single/multi/metadata), severity parsing (explicit/heuristic/fallback/priority), scheduling (continuous/periodic/no-state), RunMonitoring (simple/tool-use/max-iterations), lifecycle (start/stop/context), error handling (DB failures, no panic) |
+
+**Total agent tests: 63** (was 6 before Phase 8)
+
+### Files Created
+
+| # | File | Purpose |
+|---|------|---------|
+| 1 | `backend/internal/agent/classifier.go` | `Classifier` interface, `ClassifiedLog` struct, `PassthroughClassifier` |
+| 2 | `backend/internal/agent/classifier_lumber.go` | `LumberClassifier` wrapping ONNX model |
+| 3 | `backend/internal/agent/extract.go` | `ExtractText` — JSON payload → classifiable string |
+| 4 | `backend/internal/agent/severity_gate.go` | `ShouldEscalate` — deterministic escalation rules |
+| 5 | `backend/internal/agent/extract_test.go` | 12 extraction tests |
+| 6 | `backend/internal/agent/severity_gate_test.go` | 32 severity gate tests |
+| 7 | `backend/internal/agent/classifier_test.go` | 7 classifier tests |
+| 8 | `backend/internal/agent/monitor_test.go` | 16 monitor loop tests |
+
+### Files Changed
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `backend/internal/agent/agent.go` | Added `classifier` field, `cancel`/`wg` for lifecycle, `Start()`/`Stop()` methods |
+| 2 | `backend/internal/agent/monitor.go` | Full rewrite: tick loop, classification pipeline, monitorApp flow |
+| 3 | `backend/internal/agent/loop.go` | Added `RunMonitoring` method, `parseSeverityFromResponse` |
+| 4 | `backend/internal/agent/emit.go` | Refactored: `EmitLogWithSeverity`, private delegate |
+| 5 | `backend/internal/agent/prompt.go` | Added `monitoringSystemPrompt` (Variant B), `BuildMonitoringPrompt()` |
+| 6 | `backend/internal/config/config.go` | Added `ClassifierMode`, `LumberModelDir` config fields |
+| 7 | `backend/cmd/heimdall/main.go` | Classifier init (3-way mode switch), `ag.Start()`, shutdown sequence |
+| 8 | `backend/Dockerfile` | Alpine → Debian, 3-stage build, ONNX model download |
+| 9 | `backend/go.mod` / `backend/go.sum` | Lumber dependency |
 
 ---
 

@@ -9,9 +9,11 @@ export interface Connection {
   created_at: string
   updated_at: string
   user_id: string
+  app_id: string
 }
 
 export interface CreateConnectionPayload {
+  app_id: string
   name: string
   type: string
   direction: 'one_way' | 'two_way'

@@ -1,12 +1,15 @@
 -- name: ListConnectionsByUser :many
 SELECT * FROM connections WHERE user_id = $1 ORDER BY created_at DESC;
 
+-- name: ListConnectionsByApp :many
+SELECT * FROM connections WHERE app_id = $1 ORDER BY created_at DESC;
+
 -- name: GetConnectionByUser :one
 SELECT * FROM connections WHERE id = $1 AND user_id = $2;
 
 -- name: CreateConnection :one
-INSERT INTO connections (user_id, name, type, direction, config, status)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO connections (user_id, app_id, name, type, direction, config, status)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 RETURNING *;
 
 -- name: UpdateConnection :one

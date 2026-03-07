@@ -5,9 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/google/uuid"
+
+	"github.com/hejijunhao/heimdall/backend/internal/db"
 )
 
 const maxIterations = 10
@@ -73,8 +77,8 @@ func (a *Agent) RunConversation(ctx context.Context, userID uuid.UUID, conversat
 
 			// Emit observation for the final agent response.
 			summary := text
-			if len(summary) > 200 {
-				summary = summary[:200] + "..."
+			if utf8.RuneCountInString(summary) > 200 {
+				summary = string([]rune(summary)[:200]) + "..."
 			}
 			a.EmitLog(ctx, userID, conversationID, "observation", summary, nil)
 
@@ -139,8 +143,8 @@ func (a *Agent) RunConversation(ctx context.Context, userID uuid.UUID, conversat
 
 						// Emit tool_result success entry.
 						resultSummary := result
-						if len(resultSummary) > 200 {
-							resultSummary = resultSummary[:200] + "..."
+						if utf8.RuneCountInString(resultSummary) > 200 {
+							resultSummary = string([]rune(resultSummary)[:200]) + "..."
 						}
 						a.EmitLog(ctx, userID, conversationID, "tool_result",
 							fmt.Sprintf("%s returned results", tu.Name),
@@ -158,6 +162,139 @@ func (a *Agent) RunConversation(ctx context.Context, userID uuid.UUID, conversat
 	}
 
 	return "", fmt.Errorf("agent loop: exceeded max iterations (%d)", maxIterations)
+}
+
+// RunMonitoring executes the agent's tool-use loop for monitoring mode.
+// Unlike RunConversation, this is sessionless (no conversation persistence),
+// uses the monitoring-specific system prompt, and loads per-app agent config.
+// Returns (assessment text, severity string).
+func (a *Agent) RunMonitoring(ctx context.Context, userID uuid.UUID, appConfig db.AppAgentConfig, flaggedLogs string) (string, string) {
+	model := anthropic.Model(appConfig.Model)
+	if appConfig.Model == "" {
+		model = anthropic.ModelClaudeSonnet4_5
+	}
+
+	override := ""
+	if appConfig.SystemPromptOverride.Valid {
+		override = appConfig.SystemPromptOverride.String
+	}
+	sysPrompt := BuildMonitoringPrompt(override)
+	tools := ToolRegistry()
+
+	messages := []anthropic.MessageParam{
+		anthropic.NewUserMessage(anthropic.NewTextBlock(flaggedLogs)),
+	}
+
+	for i := range maxIterations {
+		slog.Info("monitoring loop iteration", "iteration", i+1, "app_id", appConfig.AppID)
+
+		resp, err := a.client.Messages.New(ctx, anthropic.MessageNewParams{
+			Model:     model,
+			MaxTokens: 4096,
+			System: []anthropic.TextBlockParam{
+				{Text: sysPrompt},
+			},
+			Messages: messages,
+			Tools:    tools,
+		})
+		if err != nil {
+			slog.Error("monitoring loop: claude api error", "err", err, "app_id", appConfig.AppID)
+			return "Monitoring assessment failed: Claude API error", "error"
+		}
+
+		if resp.StopReason == anthropic.StopReasonEndTurn {
+			text := extractText(resp)
+			severity := parseSeverityFromResponse(text)
+			return text, severity
+		}
+
+		if resp.StopReason == anthropic.StopReasonToolUse {
+			var assistantBlocks []anthropic.ContentBlockParamUnion
+			for _, block := range resp.Content {
+				switch v := block.AsAny().(type) {
+				case anthropic.TextBlock:
+					assistantBlocks = append(assistantBlocks, anthropic.NewTextBlock(v.Text))
+				case anthropic.ToolUseBlock:
+					assistantBlocks = append(assistantBlocks, anthropic.ContentBlockParamUnion{
+						OfToolUse: &anthropic.ToolUseBlockParam{
+							ID:    v.ID,
+							Name:  v.Name,
+							Input: v.Input,
+						},
+					})
+				}
+			}
+			messages = append(messages, anthropic.NewAssistantMessage(assistantBlocks...))
+
+			var toolResults []anthropic.ContentBlockParamUnion
+			for _, block := range resp.Content {
+				if tu, ok := block.AsAny().(anthropic.ToolUseBlock); ok {
+					var toolInput map[string]any
+					if err := json.Unmarshal(tu.Input, &toolInput); err != nil {
+						toolResults = append(toolResults, anthropic.NewToolResultBlock(
+							tu.ID, fmt.Sprintf("failed to parse tool input: %v", err), true,
+						))
+						continue
+					}
+
+					a.EmitLog(ctx, userID, nil, "tool_call",
+						fmt.Sprintf("Monitoring: called %s", tu.Name),
+						map[string]any{"tool": tu.Name, "input": toolInput, "app_id": appConfig.AppID},
+					)
+
+					slog.Info("monitoring dispatching tool", "tool", tu.Name, "app_id", appConfig.AppID)
+					result, err := a.Dispatch(ctx, userID, tu.Name, toolInput)
+					if err != nil {
+						slog.Warn("monitoring tool error", "tool", tu.Name, "err", err)
+						toolResults = append(toolResults, anthropic.NewToolResultBlock(
+							tu.ID, fmt.Sprintf("Tool error: %v", err), true,
+						))
+						a.EmitLog(ctx, userID, nil, "tool_result",
+							fmt.Sprintf("Monitoring: %s failed: %v", tu.Name, err),
+							map[string]any{"tool": tu.Name, "error": err.Error(), "app_id": appConfig.AppID},
+						)
+					} else {
+						toolResults = append(toolResults, anthropic.NewToolResultBlock(
+							tu.ID, result, false,
+						))
+						resultSummary := result
+						if utf8.RuneCountInString(resultSummary) > 200 {
+							resultSummary = string([]rune(resultSummary)[:200]) + "..."
+						}
+						a.EmitLog(ctx, userID, nil, "tool_result",
+							fmt.Sprintf("Monitoring: %s returned results", tu.Name),
+							map[string]any{"tool": tu.Name, "result_preview": resultSummary, "app_id": appConfig.AppID},
+						)
+					}
+				}
+			}
+			messages = append(messages, anthropic.NewUserMessage(toolResults...))
+			continue
+		}
+
+		return extractText(resp), "info"
+	}
+
+	return "Monitoring assessment exceeded max iterations", "warning"
+}
+
+// parseSeverityFromResponse attempts to extract a severity keyword from
+// the agent's response text. Defaults to "info" if not found.
+func parseSeverityFromResponse(text string) string {
+	lower := strings.ToLower(text)
+	// Check for explicit severity markers in order of priority.
+	for _, sev := range []string{"critical", "error", "warning", "info"} {
+		if strings.Contains(lower, "severity: "+sev) || strings.Contains(lower, "severity:"+sev) {
+			return sev
+		}
+	}
+	// Fall back to heuristic keyword scan.
+	for _, sev := range []string{"critical", "error", "warning"} {
+		if strings.Contains(lower, sev) {
+			return sev
+		}
+	}
+	return "info"
 }
 
 // extractText concatenates all text blocks from a Claude response.

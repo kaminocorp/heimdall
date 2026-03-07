@@ -8,8 +8,8 @@ const mobileMenuOpen = ref(false)
 </script>
 
 <template>
-  <!-- Hide sidebar + layout on login and public pages -->
-  <template v-if="route.name === 'login' || route.meta?.public">
+  <!-- Hide sidebar + layout on login, public, and onboarding pages -->
+  <template v-if="route.name === 'login' || route.name === 'onboarding' || route.meta?.public">
     <slot />
   </template>
 

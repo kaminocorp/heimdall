@@ -2,8 +2,10 @@
 import { computed } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { useAppStore } from '@/stores/app'
 
 const auth = useAuthStore()
+const app = useAppStore()
 const route = useRoute()
 const router = useRouter()
 
@@ -50,7 +52,13 @@ function isActive(routeName: string): boolean {
   return currentRoute.value === routeName
 }
 
+function handleSelectApp(event: Event) {
+  const target = event.target as HTMLSelectElement
+  app.selectApp(target.value)
+}
+
 async function handleLogout() {
+  app.reset()
   await auth.logout()
   router.push({ name: 'login' })
 }
@@ -76,6 +84,26 @@ function handleNav() {
       <div class="mt-1.5 pl-[18px] font-mono text-[10px] uppercase tracking-wider text-text-muted">
         Status: Active
       </div>
+    </div>
+
+    <!-- App selector -->
+    <div v-if="app.applications.length > 0" class="px-3 py-3 border-b border-border">
+      <label class="block font-mono text-[10px] uppercase tracking-widest text-text-muted mb-1.5 px-2">
+        Application
+      </label>
+      <select
+        :value="app.currentAppId"
+        @change="handleSelectApp"
+        class="w-full px-2 py-1.5 bg-bg-surface border border-border rounded text-xs text-text-primary font-mono focus:outline-none focus:border-accent cursor-pointer appearance-none"
+      >
+        <option
+          v-for="a in app.applications"
+          :key="a.id"
+          :value="a.id"
+        >
+          {{ a.name }}
+        </option>
+      </select>
     </div>
 
     <!-- Navigation sections -->
@@ -111,6 +139,9 @@ function handleNav() {
 
     <!-- User footer -->
     <div class="mt-auto border-t border-border px-5 py-4">
+      <div v-if="app.organization" class="font-mono text-[10px] uppercase tracking-wider text-text-muted mb-1.5">
+        {{ app.organization.name }}
+      </div>
       <div v-if="auth.user" class="font-mono text-[11px] text-text-muted truncate mb-2">
         {{ auth.user.email }}
       </div>

@@ -8,7 +8,11 @@ import (
 )
 
 func (s *Server) GetDashboardStats(w http.ResponseWriter, r *http.Request) {
-	userID, _ := middleware.UserIDFromContext(r.Context())
+	userID, ok := middleware.UserIDFromContext(r.Context())
+	if !ok {
+		jsonError(w, "missing user context", http.StatusUnauthorized)
+		return
+	}
 	queries, done, err := s.UserQueries(r.Context(), userID)
 	if err != nil {
 		jsonError(w, "internal error", http.StatusInternalServerError)

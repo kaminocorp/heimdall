@@ -13,12 +13,17 @@ const timestamp = computed(() => {
 
 const isAgent = computed(() => props.entry.source === 'agent')
 
+const isMonitoring = computed(() => props.entry.source_type === 'monitoring')
+const isHeartbeat = computed(() => props.entry.source_type === 'heartbeat')
+
 const entryTypeLabel = computed(() => {
   if (!isAgent.value) return props.entry.source_type
   switch (props.entry.source_type) {
     case 'tool_call': return 'Tool Call'
     case 'tool_result': return 'Tool Result'
     case 'observation': return 'Observation'
+    case 'monitoring': return 'Monitoring'
+    case 'heartbeat': return 'Heartbeat'
     default: return props.entry.source_type
   }
 })
@@ -35,7 +40,15 @@ const entryTypeLabel = computed(() => {
     <div class="flex items-baseline gap-2 flex-wrap">
       <span class="text-text-muted text-xs shrink-0">{{ timestamp }}</span>
       <span
-        v-if="isAgent"
+        v-if="isMonitoring"
+        class="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border border-status-warn/30 bg-status-warn/10 text-status-warn shrink-0"
+      >Monitor</span>
+      <span
+        v-else-if="isHeartbeat"
+        class="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border border-status-ok/30 bg-status-ok/10 text-status-ok shrink-0"
+      >Heartbeat</span>
+      <span
+        v-else-if="isAgent"
         class="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border border-accent-border/50 bg-accent-subtle text-accent shrink-0"
       >Agent</span>
       <span

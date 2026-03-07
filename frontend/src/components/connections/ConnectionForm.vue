@@ -87,7 +87,7 @@ function setFieldValue(field: FieldDef, value: string) {
 }
 
 const emit = defineEmits<{
-  submit: [data: CreateConnectionPayload]
+  submit: [data: Omit<CreateConnectionPayload, 'app_id'>]
   cancel: []
 }>()
 

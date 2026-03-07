@@ -1,50 +1,64 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
-import { useAgentStore } from '@/stores/agent'
-import { useConnectionsStore } from '@/stores/connections'
+import { ref, onMounted, computed, watch } from 'vue'
+import { useAppStore } from '@/stores/app'
 import { useLogsStore } from '@/stores/logs'
-import { getDashboardStats, type DashboardStats } from '@/api/stats'
+import { getAppStats, getAppAgentConfig, getMonitoringStatus, listConnectionsByApp } from '@/api/applications'
+import type { AppAgentConfig, MonitoringStatus } from '@/types/organization'
+import type { Connection } from '@/types/connection'
 import StatusBadge from '@/components/common/StatusBadge.vue'
 import SkeletonBlock from '@/components/common/SkeletonBlock.vue'
 
-const agentStore = useAgentStore()
-const connectionsStore = useConnectionsStore()
+const appStore = useAppStore()
 const logsStore = useLogsStore()
 
-const stats = ref<DashboardStats | null>(null)
+const connections = ref<Connection[]>([])
+const agentConfig = ref<AppAgentConfig | null>(null)
+const monitoring = ref<MonitoringStatus | null>(null)
+const stats = ref<{ log_count_24h: number; connection_count: number; active_connections: number } | null>(null)
 const statsError = ref('')
 const fetchError = ref('')
 
-onMounted(async () => {
-  try { await agentStore.fetchConfig() } catch { fetchError.value = 'Failed to load agent config' }
-  try { await connectionsStore.fetchConnections() } catch { fetchError.value = 'Failed to load connections' }
-  try { await logsStore.fetchLogs() } catch { fetchError.value = 'Failed to load logs' }
-  try {
-    const { data } = await getDashboardStats()
-    stats.value = data
-  } catch {
-    statsError.value = 'Failed to load stats'
+async function loadData() {
+  const appId = appStore.currentAppId
+  if (!appId) return
+
+  fetchError.value = ''
+  statsError.value = ''
+  const errors: string[] = []
+
+  try { agentConfig.value = await getAppAgentConfig(appId) } catch { errors.push('agent config') }
+  try { connections.value = await listConnectionsByApp(appId) } catch { errors.push('connections') }
+  try { await logsStore.fetchLogs() } catch { errors.push('logs') }
+  try { stats.value = await getAppStats(appId) } catch { statsError.value = 'Failed to load stats' }
+  try { monitoring.value = await getMonitoringStatus(appId) } catch { /* optional */ }
+
+  if (errors.length) {
+    fetchError.value = `Failed to load: ${errors.join(', ')}`
   }
-})
+}
+
+onMounted(loadData)
+watch(() => appStore.currentAppId, loadData)
 
 const agentStatus = computed(() => {
-  if (!agentStore.config) return { label: '...', color: 'text-text-muted', dot: 'bg-text-muted' }
-  switch (agentStore.config.mode) {
-    case 'continuous': return { label: 'Active', color: 'text-accent', dot: 'bg-status-ok animate-pulse' }
-    case 'scheduled': return { label: `Scheduled`, color: 'text-status-info', dot: 'bg-status-info' }
+  if (!agentConfig.value) return { label: '...', color: 'text-text-muted', dot: 'bg-text-muted' }
+  switch (agentConfig.value.mode) {
+    case 'continuous': return { label: 'Continuous', color: 'text-accent', dot: 'bg-status-ok animate-pulse' }
+    case 'periodic': return { label: 'Periodic', color: 'text-status-info', dot: 'bg-status-info' }
     case 'off': return { label: 'Inactive', color: 'text-text-muted', dot: 'bg-text-muted' }
-    default: return { label: agentStore.config.mode, color: 'text-text-muted', dot: 'bg-text-muted' }
+    default: return { label: agentConfig.value.mode, color: 'text-text-muted', dot: 'bg-text-muted' }
   }
 })
 
-const activeCount = computed(() =>
-  connectionsStore.connections.filter(c => c.status === 'active').length
-)
-const inactiveCount = computed(() =>
-  connectionsStore.connections.filter(c => c.status !== 'active').length
-)
-
+const activeCount = computed(() => connections.value.filter(c => c.status === 'active').length)
+const inactiveCount = computed(() => connections.value.filter(c => c.status !== 'active').length)
 const recentEntries = computed(() => logsStore.entries.slice(0, 8))
+
+function formatInterval(secs: number): string {
+  if (secs < 60) return `${secs}s`
+  if (secs < 3600) return `${Math.round(secs / 60)}m`
+  return `${Math.round(secs / 3600)}h`
+}
 </script>
 
 <template>
@@ -52,7 +66,9 @@ const recentEntries = computed(() => logsStore.entries.slice(0, 8))
     <!-- Page header -->
     <div class="pb-6 mb-8 border-b border-border">
       <h2 class="font-mono text-2xl font-bold uppercase tracking-wider text-text-primary">Dashboard</h2>
-      <p class="font-sans text-sm text-text-secondary mt-1">System overview and recent activity</p>
+      <p class="font-sans text-sm text-text-secondary mt-1">
+        {{ appStore.currentApp?.name ?? 'System overview' }} — monitoring &amp; recent activity
+      </p>
     </div>
 
     <!-- Error banner -->
@@ -62,41 +78,52 @@ const recentEntries = computed(() => logsStore.entries.slice(0, 8))
     </div>
 
     <!-- Status cards row -->
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-      <!-- System Status -->
-      <div class="border border-border rounded-lg bg-bg-surface p-5 glow-active animate-fade-in" :style="{ '--stagger-index': 0 }">
-        <div class="font-mono text-[10px] font-medium uppercase tracking-widest text-text-muted mb-4">System Status</div>
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+      <!-- Monitoring Status -->
+      <div class="border border-border rounded-lg bg-bg-surface p-5 animate-fade-in" :style="{ '--stagger-index': 0 }">
+        <div class="font-mono text-[10px] font-medium uppercase tracking-widest text-text-muted mb-4">Monitoring</div>
         <div class="space-y-3">
           <div class="flex items-center justify-between">
-            <span class="font-mono text-xs uppercase tracking-wider text-text-secondary">Agent</span>
+            <span class="font-mono text-xs uppercase tracking-wider text-text-secondary">Mode</span>
             <div class="flex items-center gap-2">
               <span class="w-1.5 h-1.5 rounded-full" :class="agentStatus.dot" />
               <span class="font-mono text-xs uppercase tracking-wider" :class="agentStatus.color">{{ agentStatus.label }}</span>
             </div>
           </div>
-          <div class="flex items-center justify-between" v-if="agentStore.config">
-            <span class="font-mono text-xs uppercase tracking-wider text-text-secondary">Model</span>
-            <span class="font-mono text-xs text-text-primary">{{ agentStore.config.model }}</span>
+          <div v-if="agentConfig?.mode === 'periodic'" class="flex items-center justify-between">
+            <span class="font-mono text-xs uppercase tracking-wider text-text-secondary">Interval</span>
+            <span class="font-mono text-xs text-text-primary">{{ formatInterval(agentConfig.schedule_interval_secs) }}</span>
           </div>
-          <div class="flex items-center justify-between" v-if="agentStore.config?.mode === 'scheduled' && agentStore.config.schedule">
-            <span class="font-mono text-xs uppercase tracking-wider text-text-secondary">Schedule</span>
-            <span class="font-mono text-xs text-text-primary">{{ agentStore.config.schedule }}</span>
+          <div v-if="monitoring?.last_monitored_at" class="flex items-center justify-between">
+            <span class="font-mono text-xs uppercase tracking-wider text-text-secondary">Last Check</span>
+            <span class="font-mono text-xs text-text-primary tabular-nums">{{ new Date(monitoring.last_monitored_at).toLocaleTimeString() }}</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- System Status -->
+      <div class="border border-border rounded-lg bg-bg-surface p-5 animate-fade-in" :style="{ '--stagger-index': 1 }">
+        <div class="font-mono text-[10px] font-medium uppercase tracking-widest text-text-muted mb-4">Agent</div>
+        <div class="space-y-3">
+          <div v-if="agentConfig" class="flex items-center justify-between">
+            <span class="font-mono text-xs uppercase tracking-wider text-text-secondary">Model</span>
+            <span class="font-mono text-xs text-text-primary">{{ agentConfig.model }}</span>
           </div>
         </div>
       </div>
 
       <!-- Connections -->
-      <div class="border border-border rounded-lg bg-bg-surface p-5 animate-fade-in" :style="{ '--stagger-index': 1 }">
+      <div class="border border-border rounded-lg bg-bg-surface p-5 animate-fade-in" :style="{ '--stagger-index': 2 }">
         <div class="font-mono text-[10px] font-medium uppercase tracking-widest text-text-muted mb-4">Connections</div>
         <div class="font-mono text-xs text-text-secondary mb-3">
           {{ activeCount }} active<span v-if="inactiveCount"> · {{ inactiveCount }} inactive</span>
         </div>
-        <div v-if="connectionsStore.connections.length === 0" class="font-mono text-xs text-text-muted">
+        <div v-if="connections.length === 0" class="font-mono text-xs text-text-muted">
           No connections configured.
         </div>
         <div v-else class="space-y-2">
           <div
-            v-for="conn in connectionsStore.connections"
+            v-for="conn in connections"
             :key="conn.id"
             class="flex items-center justify-between"
           >
@@ -107,7 +134,7 @@ const recentEntries = computed(() => logsStore.entries.slice(0, 8))
       </div>
 
       <!-- Log Ingestion -->
-      <div class="border border-border rounded-lg bg-bg-surface p-5 animate-fade-in" :style="{ '--stagger-index': 2 }">
+      <div class="border border-border rounded-lg bg-bg-surface p-5 animate-fade-in" :style="{ '--stagger-index': 3 }">
         <div class="font-mono text-[10px] font-medium uppercase tracking-widest text-text-muted mb-4">Log Ingestion</div>
         <div v-if="statsError" class="font-mono text-xs text-status-critical">{{ statsError }}</div>
         <div v-else-if="stats" class="space-y-3">
@@ -125,7 +152,7 @@ const recentEntries = computed(() => logsStore.entries.slice(0, 8))
     </div>
 
     <!-- Recent Activity -->
-    <div class="border border-border rounded-lg bg-bg-surface p-5 animate-fade-in" :style="{ '--stagger-index': 3 }">
+    <div class="border border-border rounded-lg bg-bg-surface p-5 animate-fade-in" :style="{ '--stagger-index': 4 }">
       <div class="font-mono text-[10px] font-medium uppercase tracking-widest text-text-muted mb-4">Recent Activity</div>
       <div v-if="logsStore.loading" class="font-mono text-xs text-text-muted">Loading...</div>
       <div v-else-if="recentEntries.length === 0" class="font-mono text-xs text-text-muted">

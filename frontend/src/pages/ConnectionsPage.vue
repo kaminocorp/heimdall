@@ -1,19 +1,35 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import { useConnectionsStore } from '@/stores/connections'
+import { useAppStore } from '@/stores/app'
+import { listConnectionsByApp } from '@/api/applications'
 import type { Connection, CreateConnectionPayload } from '@/types/connection'
 import ConnectionList from '@/components/connections/ConnectionList.vue'
 import ConnectionForm from '@/components/connections/ConnectionForm.vue'
 import SkeletonBlock from '@/components/common/SkeletonBlock.vue'
 
 const store = useConnectionsStore()
+const appStore = useAppStore()
 const showForm = ref(false)
 const editingConnection = ref<Connection | null>(null)
 const actionError = ref<string | null>(null)
 
-onMounted(() => {
-  store.fetchConnections()
-})
+async function fetchAppConnections() {
+  const appId = appStore.currentAppId
+  if (!appId) return
+  store.loading = true
+  store.error = null
+  try {
+    store.connections = await listConnectionsByApp(appId)
+  } catch (e: any) {
+    store.error = e.response?.data?.error ?? 'Failed to load connections'
+  } finally {
+    store.loading = false
+  }
+}
+
+onMounted(fetchAppConnections)
+watch(() => appStore.currentAppId, fetchAppConnections)
 
 function openCreate() {
   editingConnection.value = null
@@ -30,7 +46,7 @@ function closeForm() {
   editingConnection.value = null
 }
 
-async function handleSubmit(payload: CreateConnectionPayload) {
+async function handleSubmit(payload: Omit<CreateConnectionPayload, 'app_id'>) {
   actionError.value = null
   const isEdit = !!editingConnection.value
   try {
@@ -42,7 +58,10 @@ async function handleSubmit(payload: CreateConnectionPayload) {
       })
       connId = updated.id
     } else {
-      const created = await store.createConnection(payload)
+      const created = await store.createConnection({
+        ...payload,
+        app_id: appStore.currentAppId!,
+      })
       connId = created.id
     }
     closeForm()
@@ -50,6 +69,7 @@ async function handleSubmit(payload: CreateConnectionPayload) {
     if (!result.success) {
       actionError.value = `${isEdit ? 'Connection updated' : 'Connection created'} but test failed: ${result.message}`
     }
+    await fetchAppConnections()
   } catch (e: any) {
     actionError.value = e.response?.data?.error ?? `Failed to ${isEdit ? 'update' : 'create'} connection`
   }

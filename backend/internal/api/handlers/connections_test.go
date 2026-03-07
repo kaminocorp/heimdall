@@ -14,11 +14,7 @@ func TestListConnections(t *testing.T) {
 
 	// Create two connections.
 	for _, name := range []string{"conn-a", "conn-b"} {
-		rr := env.request(t, http.MethodPost, "/api/connections", map[string]string{
-			"name": name,
-			"type": "webhook_logs",
-		})
-		require.Equal(t, http.StatusCreated, rr.Code, "create %s", name)
+		env.createTestConnection(t, name)
 	}
 
 	// List and verify both are returned.
@@ -41,6 +37,7 @@ func TestCreateConnection(t *testing.T) {
 	env := testSetup(t)
 
 	body := map[string]interface{}{
+		"app_id": env.AppID,
 		"name":   "my-postgres",
 		"type":   "postgres",
 		"config": map[string]string{"host": "localhost"},
@@ -54,8 +51,20 @@ func TestCreateConnection(t *testing.T) {
 	assert.Equal(t, "my-postgres", conn["name"])
 	assert.Equal(t, "postgres", conn["type"])
 	assert.Equal(t, "inactive", conn["status"])
+	assert.Equal(t, env.AppID, conn["app_id"])
 	assert.NotEmpty(t, conn["id"])
 	assert.NotEmpty(t, conn["created_at"])
+}
+
+func TestCreateConnection_MissingAppID(t *testing.T) {
+	env := testSetup(t)
+
+	// Missing app_id.
+	rr := env.request(t, http.MethodPost, "/api/connections", map[string]string{
+		"name": "valid-name",
+		"type": "postgres",
+	})
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
 }
 
 func TestCreateConnection_InvalidType(t *testing.T) {
@@ -63,15 +72,17 @@ func TestCreateConnection_InvalidType(t *testing.T) {
 
 	// Missing name.
 	rr := env.request(t, http.MethodPost, "/api/connections", map[string]string{
-		"name": "",
-		"type": "postgres",
+		"app_id": env.AppID,
+		"name":   "",
+		"type":   "postgres",
 	})
 	assert.Equal(t, http.StatusBadRequest, rr.Code)
 
 	// Missing type.
 	rr = env.request(t, http.MethodPost, "/api/connections", map[string]string{
-		"name": "valid-name",
-		"type": "",
+		"app_id": env.AppID,
+		"name":   "valid-name",
+		"type":   "",
 	})
 	assert.Equal(t, http.StatusBadRequest, rr.Code)
 }
@@ -79,19 +90,10 @@ func TestCreateConnection_InvalidType(t *testing.T) {
 func TestUpdateConnection(t *testing.T) {
 	env := testSetup(t)
 
-	// Create a connection.
-	rr := env.request(t, http.MethodPost, "/api/connections", map[string]string{
-		"name": "original-name",
-		"type": "webhook_logs",
-	})
-	require.Equal(t, http.StatusCreated, rr.Code)
-
-	var created map[string]interface{}
-	require.NoError(t, json.NewDecoder(rr.Body).Decode(&created))
-	connID := created["id"].(string)
+	connID := env.createTestConnection(t, "original-name")
 
 	// Update the connection name.
-	rr = env.request(t, http.MethodPut, "/api/connections/"+connID, map[string]string{
+	rr := env.request(t, http.MethodPut, "/api/connections/"+connID, map[string]string{
 		"name": "updated-name",
 		"type": "webhook_logs",
 	})
@@ -106,19 +108,10 @@ func TestUpdateConnection(t *testing.T) {
 func TestDeleteConnection(t *testing.T) {
 	env := testSetup(t)
 
-	// Create a connection.
-	rr := env.request(t, http.MethodPost, "/api/connections", map[string]string{
-		"name": "to-delete",
-		"type": "webhook_logs",
-	})
-	require.Equal(t, http.StatusCreated, rr.Code)
-
-	var created map[string]interface{}
-	require.NoError(t, json.NewDecoder(rr.Body).Decode(&created))
-	connID := created["id"].(string)
+	connID := env.createTestConnection(t, "to-delete")
 
 	// Delete the connection.
-	rr = env.request(t, http.MethodDelete, "/api/connections/"+connID, nil)
+	rr := env.request(t, http.MethodDelete, "/api/connections/"+connID, nil)
 	require.Equal(t, http.StatusNoContent, rr.Code)
 
 	// List should return empty.

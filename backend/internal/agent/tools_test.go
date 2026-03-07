@@ -18,8 +18,9 @@ import (
 func newToolTestAgent() *Agent {
 	queries := db.New(&stubDBTX{})
 	return &Agent{
-		queries: queries,
-		config:  &config.Config{AnthropicKey: "test-key"},
+		queries:    queries,
+		config:     &config.Config{AnthropicKey: "test-key"},
+		classifier: &PassthroughClassifier{},
 	}
 }
 

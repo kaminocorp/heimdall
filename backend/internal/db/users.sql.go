@@ -13,6 +13,17 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const getFirstUserInOrg = `-- name: GetFirstUserInOrg :one
+SELECT id FROM users WHERE org_id = $1 ORDER BY created_at ASC LIMIT 1
+`
+
+func (q *Queries) GetFirstUserInOrg(ctx context.Context, orgID pgtype.UUID) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, getFirstUserInOrg, orgID)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
 const getUser = `-- name: GetUser :one
 SELECT id, email, org_id, created_at FROM users WHERE id = $1
 `

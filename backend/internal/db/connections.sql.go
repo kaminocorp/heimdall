@@ -13,13 +13,14 @@ import (
 )
 
 const createConnection = `-- name: CreateConnection :one
-INSERT INTO connections (user_id, name, type, direction, config, status)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO connections (user_id, app_id, name, type, direction, config, status)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 RETURNING id, name, type, direction, config, status, last_seen, created_at, updated_at, user_id, app_id
 `
 
 type CreateConnectionParams struct {
 	UserID    uuid.UUID       `json:"user_id"`
+	AppID     uuid.UUID       `json:"app_id"`
 	Name      string          `json:"name"`
 	Type      string          `json:"type"`
 	Direction string          `json:"direction"`
@@ -30,6 +31,7 @@ type CreateConnectionParams struct {
 func (q *Queries) CreateConnection(ctx context.Context, arg CreateConnectionParams) (Connection, error) {
 	row := q.db.QueryRow(ctx, createConnection,
 		arg.UserID,
+		arg.AppID,
 		arg.Name,
 		arg.Type,
 		arg.Direction,
@@ -93,6 +95,42 @@ func (q *Queries) GetConnectionByUser(ctx context.Context, arg GetConnectionByUs
 		&i.AppID,
 	)
 	return i, err
+}
+
+const listConnectionsByApp = `-- name: ListConnectionsByApp :many
+SELECT id, name, type, direction, config, status, last_seen, created_at, updated_at, user_id, app_id FROM connections WHERE app_id = $1 ORDER BY created_at DESC
+`
+
+func (q *Queries) ListConnectionsByApp(ctx context.Context, appID uuid.UUID) ([]Connection, error) {
+	rows, err := q.db.Query(ctx, listConnectionsByApp, appID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Connection{}
+	for rows.Next() {
+		var i Connection
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Type,
+			&i.Direction,
+			&i.Config,
+			&i.Status,
+			&i.LastSeen,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.UserID,
+			&i.AppID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listConnectionsByUser = `-- name: ListConnectionsByUser :many

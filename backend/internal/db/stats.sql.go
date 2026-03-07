@@ -11,6 +11,26 @@ import (
 	"github.com/google/uuid"
 )
 
+const getAppDashboardStats = `-- name: GetAppDashboardStats :one
+SELECT
+  (SELECT count(*) FROM log_buffer lb JOIN connections c ON c.id = lb.connection_id WHERE c.app_id = $1 AND lb.ingested_at > now() - interval '24 hours')::bigint AS log_count_24h,
+  (SELECT count(*) FROM connections WHERE connections.app_id = $1)::bigint AS connection_count,
+  (SELECT count(*) FROM connections WHERE connections.app_id = $1 AND status = 'active')::bigint AS active_connections
+`
+
+type GetAppDashboardStatsRow struct {
+	LogCount24h       int64 `json:"log_count_24h"`
+	ConnectionCount   int64 `json:"connection_count"`
+	ActiveConnections int64 `json:"active_connections"`
+}
+
+func (q *Queries) GetAppDashboardStats(ctx context.Context, appID uuid.UUID) (GetAppDashboardStatsRow, error) {
+	row := q.db.QueryRow(ctx, getAppDashboardStats, appID)
+	var i GetAppDashboardStatsRow
+	err := row.Scan(&i.LogCount24h, &i.ConnectionCount, &i.ActiveConnections)
+	return i, err
+}
+
 const getDashboardStats = `-- name: GetDashboardStats :one
 SELECT
   (SELECT count(*) FROM log_buffer WHERE log_buffer.user_id = $1 AND ingested_at > now() - interval '24 hours')::bigint AS log_count_24h,

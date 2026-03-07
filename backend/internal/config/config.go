@@ -12,6 +12,8 @@ type Config struct {
 	ElephantasmURL string
 	ElephantasmKey string
 	SupabaseURL    string
+	ClassifierMode string
+	LumberModelDir string
 }
 
 func Load() *Config {
@@ -22,6 +24,8 @@ func Load() *Config {
 		ElephantasmURL: getEnv("ELEPHANTASM_URL", ""),
 		ElephantasmKey: getEnv("ELEPHANTASM_API_KEY", ""),
 		SupabaseURL:    getEnv("SUPABASE_URL", ""),
+		ClassifierMode: getEnv("CLASSIFIER_MODE", "fallback"),
+		LumberModelDir: getEnv("LUMBER_MODEL_DIR", "/opt/lumber/models"),
 	}
 }
 

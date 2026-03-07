@@ -29,14 +29,17 @@ type testEnv struct {
 	Server  *handlers.Server
 	Router  http.Handler
 	UserID  string
+	OrgID   string
+	AppID   string
 }
 
 // testSetup creates a full test environment:
 //  1. Connects to the database using DATABASE_URL from the environment.
 //  2. Creates a test user (in both auth.users and public.users).
-//  3. Builds a Server and a chi Router that bypasses JWT validation
+//  3. Creates an organization and application for the user.
+//  4. Builds a Server and a chi Router that bypasses JWT validation
 //     by injecting the test user ID into every request context.
-//  4. Registers t.Cleanup to delete the test user (cascade deletes all data)
+//  5. Registers t.Cleanup to delete the test user (cascade deletes all data)
 //     and close the pool.
 func testSetup(t *testing.T) *testEnv {
 	t.Helper()
@@ -73,9 +76,36 @@ func testSetup(t *testing.T) *testEnv {
 	_, err = pool.Exec(ctx, "INSERT INTO users (id, email) VALUES ($1, $2)", userID, email)
 	require.NoError(t, err)
 
-	// Cleanup: cascade-delete the auth.users row (which cascades to public.users
-	// and all user-scoped data), then close the pool.
+	// Create an organization and application for the test user.
+	orgID := uuid.New()
+	orgSlug := fmt.Sprintf("test-org-%s", orgID.String()[:8])
+	_, err = pool.Exec(ctx,
+		"INSERT INTO organizations (id, name, slug) VALUES ($1, $2, $3)",
+		orgID, "Test Org", orgSlug,
+	)
+	require.NoError(t, err)
+
+	_, err = pool.Exec(ctx, "UPDATE users SET org_id = $1 WHERE id = $2", orgID, userID)
+	require.NoError(t, err)
+
+	appID := uuid.New()
+	_, err = pool.Exec(ctx,
+		"INSERT INTO applications (id, org_id, name, status) VALUES ($1, $2, $3, $4)",
+		appID, orgID, "Test App", "active",
+	)
+	require.NoError(t, err)
+
+	// Create default agent config for the app.
+	_, err = pool.Exec(ctx,
+		"INSERT INTO app_agent_config (app_id, model, mode, schedule_interval_secs) VALUES ($1, $2, $3, $4)",
+		appID, "claude-sonnet-4-6", "off", 60,
+	)
+	require.NoError(t, err)
+
+	// Cleanup: cascade-delete the auth.users row and the org (which cascades to
+	// apps, connections, app_agent_config, etc.), then close the pool.
 	t.Cleanup(func() {
+		pool.Exec(context.Background(), "DELETE FROM organizations WHERE id = $1", orgID)
 		pool.Exec(context.Background(), "DELETE FROM auth.users WHERE id = $1", userID)
 		pool.Close()
 	})
@@ -109,6 +139,24 @@ func testSetup(t *testing.T) *testEnv {
 	router.Route("/api", func(r chi.Router) {
 		r.Post("/webhooks/logs", srv.IngestWebhookLogs)
 
+		// Organization & onboarding
+		r.Get("/org", srv.GetOrganization)
+		r.Post("/onboard", srv.Onboard)
+
+		// Applications
+		r.Get("/apps", srv.ListApplications)
+		r.Post("/apps", srv.CreateApplication)
+
+		// Per-application routes
+		r.Route("/apps/{appId}", func(r chi.Router) {
+			r.Get("/", srv.GetApplication)
+			r.Get("/connections", srv.ListConnectionsByApp)
+			r.Get("/agent/config", srv.GetAppAgentConfig)
+			r.Put("/agent/config", srv.UpdateAppAgentConfig)
+			r.Get("/monitoring/status", srv.GetMonitoringStatus)
+			r.Get("/stats", srv.GetAppDashboardStats)
+		})
+
 		r.Route("/connections", func(r chi.Router) {
 			r.Get("/", srv.ListConnections)
 			r.Post("/", srv.CreateConnection)
@@ -116,12 +164,6 @@ func testSetup(t *testing.T) *testEnv {
 			r.Put("/{id}", srv.UpdateConnection)
 			r.Delete("/{id}", srv.DeleteConnection)
 			r.Post("/{id}/test", srv.TestConnection)
-		})
-
-		r.Route("/agent", func(r chi.Router) {
-			r.Get("/config", srv.GetAgentConfig)
-			r.Put("/config", srv.UpdateAgentConfig)
-			r.Post("/run", srv.RunAgent)
 		})
 
 		r.Get("/logs", srv.ListLogs)
@@ -132,8 +174,6 @@ func testSetup(t *testing.T) *testEnv {
 		})
 
 		r.Get("/auth/me", srv.Me)
-
-		r.Get("/stats", srv.GetDashboardStats)
 
 		r.Route("/reports", func(r chi.Router) {
 			r.Get("/", srv.ListReports)
@@ -147,6 +187,8 @@ func testSetup(t *testing.T) *testEnv {
 		Server:  srv,
 		Router:  router,
 		UserID:  userID.String(),
+		OrgID:   orgID.String(),
+		AppID:   appID.String(),
 	}
 }
 
@@ -169,4 +211,20 @@ func (e *testEnv) request(t *testing.T, method, path string, body interface{}) *
 	rr := httptest.NewRecorder()
 	e.Router.ServeHTTP(rr, req)
 	return rr
+}
+
+// createTestConnection is a helper that creates a webhook_logs connection
+// within the test app and returns its ID.
+func (e *testEnv) createTestConnection(t *testing.T, name string) string {
+	t.Helper()
+	rr := e.request(t, http.MethodPost, "/api/connections", map[string]string{
+		"app_id": e.AppID,
+		"name":   name,
+		"type":   "webhook_logs",
+	})
+	require.Equal(t, http.StatusCreated, rr.Code, "failed to create test connection %q", name)
+
+	var conn map[string]interface{}
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&conn))
+	return conn["id"].(string)
 }

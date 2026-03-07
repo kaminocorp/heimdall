@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { useAppStore } from '@/stores/app'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -22,6 +23,12 @@ const router = createRouter({
       name: 'pricing',
       component: () => import('@/pages/public/PricingPage.vue'),
       meta: { public: true },
+    },
+    // ── Onboarding ──
+    {
+      path: '/onboarding',
+      name: 'onboarding',
+      component: () => import('@/pages/OnboardingPage.vue'),
     },
     // ── App routes ──
     {
@@ -77,6 +84,16 @@ router.beforeEach((to) => {
   // Redirect authenticated users away from login page
   if (to.name === 'login' && auth.isAuthenticated) {
     return { name: 'dashboard' }
+  }
+  // Redirect to onboarding if user hasn't set up their org yet
+  const app = useAppStore()
+  if (
+    auth.isAuthenticated &&
+    app.needsOnboarding &&
+    to.name !== 'onboarding' &&
+    !to.meta?.public
+  ) {
+    return { name: 'onboarding' }
   }
 })
 

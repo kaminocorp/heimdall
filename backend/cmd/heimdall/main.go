@@ -39,7 +39,34 @@ func main() {
 	}
 	defer pool.Close()
 
-	ag := agent.New(db.New(pool), cfg)
+	// Initialize classifier based on CLASSIFIER_MODE
+	var classifier agent.Classifier
+	switch cfg.ClassifierMode {
+	case "on":
+		c, err := agent.NewLumberClassifier(cfg.LumberModelDir)
+		if err != nil {
+			slog.Error("classifier required but failed to initialize", "err", err)
+			os.Exit(1)
+		}
+		classifier = c
+		slog.Info("lumber classifier initialized", "model_dir", cfg.LumberModelDir)
+	case "off":
+		classifier = &agent.PassthroughClassifier{}
+		slog.Info("classifier disabled, all logs will be escalated")
+	default: // "fallback"
+		c, err := agent.NewLumberClassifier(cfg.LumberModelDir)
+		if err != nil {
+			slog.Warn("lumber classifier unavailable, falling back to passthrough", "err", err)
+			classifier = &agent.PassthroughClassifier{}
+		} else {
+			classifier = c
+			slog.Info("lumber classifier initialized", "model_dir", cfg.LumberModelDir)
+		}
+	}
+
+	ag := agent.New(db.New(pool), cfg, classifier)
+	ag.Start(context.Background())
+
 	router := api.NewRouter(cfg, pool, ag, jwks)
 
 	srv := &http.Server{
@@ -67,5 +94,9 @@ func main() {
 	defer cancel()
 	if err := srv.Shutdown(ctx); err != nil {
 		slog.Error("server shutdown error", "err", err)
+	}
+	ag.Stop()
+	if err := classifier.Close(); err != nil {
+		slog.Error("classifier shutdown error", "err", err)
 	}
 }

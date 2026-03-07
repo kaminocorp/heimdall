@@ -19,8 +19,9 @@ func TestIngestWebhookLogs(t *testing.T) {
 
 	// Create a webhook_logs connection (auto-generates a webhook_token in config).
 	rr := env.request(t, http.MethodPost, "/api/connections", map[string]string{
-		"name": "webhook-ingest",
-		"type": "webhook_logs",
+		"app_id": env.AppID,
+		"name":   "webhook-ingest",
+		"type":   "webhook_logs",
 	})
 	require.Equal(t, http.StatusCreated, rr.Code)
 
