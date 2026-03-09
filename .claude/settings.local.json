@@ -56,7 +56,8 @@
       "Bash(npx vitest:*)",
       "Bash(gh api:*)",
       "Bash(go doc:*)",
-      "Bash(psql $DATABASE_URL:*)"
+      "Bash(psql $DATABASE_URL:*)",
+      "Bash(fly logs:*)"
     ]
   }
 }
