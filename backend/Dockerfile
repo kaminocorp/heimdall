@@ -12,10 +12,16 @@ WORKDIR /tmp
 RUN mkdir -p /models/2_Dense && \
     curl -fsSL -o /models/model_quantized.onnx \
       https://huggingface.co/onnx-community/mdbr-leaf-mt-ONNX/resolve/main/onnx/model_quantized.onnx && \
+    curl -fsSL -o /models/model_quantized.onnx_data \
+      https://huggingface.co/onnx-community/mdbr-leaf-mt-ONNX/resolve/main/onnx/model_quantized.onnx_data && \
     curl -fsSL -o /models/vocab.txt \
       https://huggingface.co/onnx-community/mdbr-leaf-mt-ONNX/resolve/main/vocab.txt && \
+    curl -fsSL -o /models/tokenizer_config.json \
+      https://huggingface.co/onnx-community/mdbr-leaf-mt-ONNX/resolve/main/tokenizer_config.json && \
     curl -fsSL -o /models/2_Dense/model.safetensors \
-      https://huggingface.co/Snowflake/mdbr-leaf-mt/resolve/main/2_Dense/model.safetensors
+      https://huggingface.co/MongoDB/mdbr-leaf-mt/resolve/main/2_Dense/model.safetensors && \
+    curl -fsSL -o /models/2_Dense/config.json \
+      https://huggingface.co/MongoDB/mdbr-leaf-mt/resolve/main/2_Dense/config.json
 # ONNX Runtime shared library — Lumber expects libonnxruntime.so in the model directory
 RUN curl -fSL "https://github.com/microsoft/onnxruntime/releases/download/v1.24.1/onnxruntime-linux-x64-1.24.1.tgz" \
       -o /tmp/ort.tgz && \

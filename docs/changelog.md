@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.14.0 — Dockerfile Model Fix](#0140--dockerfile-model-fix-2026-03-09)
 - [0.13.0 — Phase 8 Hardening](#0130--phase-8-hardening-2026-03-07)
 - [0.12.0 — Multi-App UI & API](#0120--multi-app-ui--api-2026-03-07)
 - [0.11.0 — Monitoring Mode](#0110--monitoring-mode-2026-03-07)
@@ -31,6 +32,27 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.14.0 — Dockerfile Model Fix (2026-03-09)
+
+Fixed deployment failure caused by the Lumber ONNX model Dockerfile stage pointing at a deleted HuggingFace repo. Also added missing model files that could cause silent runtime failures.
+
+### Why
+
+`fly deploy` failed with `curl: (22) The requested URL returned error: 401` during the Docker build. The `2_Dense/model.safetensors` download URL pointed at `Snowflake/mdbr-leaf-mt`, a HuggingFace repo that no longer exists (404). The Lumber library's own Makefile uses `MongoDB/mdbr-leaf-mt` as the correct source — both repos (`onnx-community/mdbr-leaf-mt-ONNX` and `MongoDB/mdbr-leaf-mt`) are public and require no authentication.
+
+### Changes
+
+- **Fixed broken model URL (P0)** — Replaced `Snowflake/mdbr-leaf-mt` with `MongoDB/mdbr-leaf-mt` for the `2_Dense/model.safetensors` projection layer download. The Snowflake repo has been deleted.
+- **Added missing model files (P1)** — Dockerfile was missing `model_quantized.onnx_data` (external data tensor), `tokenizer_config.json`, and `2_Dense/config.json`, all of which the Lumber Makefile downloads. Their absence could cause silent classifier failures at runtime, falling back to PassthroughClassifier.
+
+### Files Changed
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `backend/Dockerfile` | Fixed `2_Dense` URL from Snowflake → MongoDB; added 3 missing model file downloads |
 
 ---
 
