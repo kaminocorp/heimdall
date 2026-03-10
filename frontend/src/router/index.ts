@@ -5,24 +5,28 @@ import { useAppStore } from '@/stores/app'
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
-    // ── Public (marketing) routes ──
+    // ── Public (marketing) routes — shared layout with nav + footer ──
     {
       path: '/',
-      name: 'landing',
-      component: () => import('@/pages/public/LandingPage.vue'),
+      component: () => import('@/layouts/PublicLayout.vue'),
       meta: { public: true },
-    },
-    {
-      path: '/features',
-      name: 'features',
-      component: () => import('@/pages/public/FeaturesPage.vue'),
-      meta: { public: true },
-    },
-    {
-      path: '/pricing',
-      name: 'pricing',
-      component: () => import('@/pages/public/PricingPage.vue'),
-      meta: { public: true },
+      children: [
+        {
+          path: '',
+          name: 'landing',
+          component: () => import('@/pages/public/LandingPage.vue'),
+        },
+        {
+          path: 'features',
+          name: 'features',
+          component: () => import('@/pages/public/FeaturesPage.vue'),
+        },
+        {
+          path: 'pricing',
+          name: 'pricing',
+          component: () => import('@/pages/public/PricingPage.vue'),
+        },
+      ],
     },
     // ── Onboarding ──
     {
@@ -78,7 +82,8 @@ router.beforeEach((to) => {
   const auth = useAuthStore()
   // Before auth is initialized, allow navigation (App.vue handles the loading state)
   if (!auth.initialized) return
-  if (to.name !== 'login' && !to.meta?.public && !auth.isAuthenticated) {
+  const isPublic = to.matched.some(r => r.meta.public)
+  if (to.name !== 'login' && !isPublic && !auth.isAuthenticated) {
     return { name: 'login' }
   }
   // Redirect authenticated users away from login page
@@ -91,7 +96,7 @@ router.beforeEach((to) => {
     auth.isAuthenticated &&
     app.needsOnboarding &&
     to.name !== 'onboarding' &&
-    !to.meta?.public
+    !isPublic
   ) {
     return { name: 'onboarding' }
   }

@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.14.3 — Public Layout, Heading & Mesh Refinement](#0143--public-layout-heading--mesh-refinement-2026-03-10)
 - [0.14.2 — Hero Mesh Animation](#0142--hero-mesh-animation-2026-03-10)
 - [0.14.1 — Public Site Header & Footer Redesign](#0141--public-site-header--footer-redesign-2026-03-10)
 - [0.14.0 — Dockerfile Model Fix](#0140--dockerfile-model-fix-2026-03-09)
@@ -34,6 +35,50 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.14.3 — Public Layout, Heading & Mesh Refinement (2026-03-10)
+
+Extracted a shared public layout, fixed the scrollbar-induced nav shift, refined the hero heading, and rebuilt the mesh renderer for ultra-high density.
+
+### Why
+
+The nav bar shifted horizontally when navigating between pages with and without scrollbars. Each public page independently imported `PublicNav` and `PublicFooter`, meaning any change required touching three files. The hero heading ("The all-seeing eye") was poetic but vague — didn't communicate what the product does. The mesh needed higher density and better text legibility.
+
+### Shared Public Layout
+
+- **`PublicLayout.vue`** — New layout wrapper renders `PublicNav`, a `<RouterView />` slot, and `PublicFooter`. All public pages now get identical nav/footer from one source.
+- **Nested routes** — Public routes restructured as children of a parent layout route in `router/index.ts`. `meta: { public: true }` lives on the parent only.
+- **Auth guard fix** — Changed `to.meta?.public` to `to.matched.some(r => r.meta.public)` so child routes inherit the parent's public flag. Without this, the guard would redirect unauthenticated users to login on all public pages.
+- **Stripped nav/footer** — Removed `PublicNav` and `PublicFooter` imports and rendering from `LandingPage`, `FeaturesPage`, and `PricingPage`.
+
+### Scrollbar Layout Shift Fix
+
+- **`scrollbar-gutter: stable`** on `html` — Reserves scrollbar gutter space on all pages, even when content doesn't overflow. Eliminates the ~15px nav shift when navigating between non-scrolling (landing) and scrolling (Platform, Pricing) pages.
+
+### Hero Heading
+
+- **"Autonomous system surveillance."** — Replaced "The all-seeing eye." with a blunt, techno-brutalist statement that explicitly describes what Heimdall does. Two lines: "Autonomous system" (white) / "surveillance." (accent green).
+
+### Mesh Renderer Rebuild
+
+- **107,520 dots** (420 × 256 grid, up from 13,500) — Ultra-fine density where individual dots are imperceptible; the surface reads as a woven material.
+- **ImageData pixel writing** — Replaced Canvas `arc()` draw calls with direct RGBA writes to an `ImageData` buffer, `putImageData` once per frame. Single draw call regardless of point count — necessary for 108k points at 60fps.
+- **Single-pixel dots** — Each point is one pixel at DPR resolution. At this density, the grid structure itself creates the surface texture.
+- **Camera repositioned** — Mesh pushed to the lower portion of the hero (`CAMERA_Y` raised to 140). Top gradient extended (opaque to 20%, transparent at 65%) so heading and subtitle sit on clean dark background.
+
+### Files Changed
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `frontend/src/layouts/PublicLayout.vue` | New — shared layout with nav + RouterView + footer |
+| 2 | `frontend/src/router/index.ts` | Nested public routes under layout; `to.matched.some()` auth guard fix |
+| 3 | `frontend/src/assets/styles/main.css` | Added `scrollbar-gutter: stable` to html |
+| 4 | `frontend/src/components/public/HeroMesh.vue` | Rebuilt: 420×256 grid, ImageData renderer, repositioned camera |
+| 5 | `frontend/src/pages/public/LandingPage.vue` | New heading, gradient tuning, removed nav/footer |
+| 6 | `frontend/src/pages/public/FeaturesPage.vue` | Removed nav/footer (provided by layout) |
+| 7 | `frontend/src/pages/public/PricingPage.vue` | Removed nav/footer (provided by layout) |
 
 ---
 

@@ -1,7 +1,4 @@
 <script setup lang="ts">
-import PublicNav from '@/components/public/PublicNav.vue'
-import PublicFooter from '@/components/public/PublicFooter.vue'
-
 const problems = [
   {
     icon: 'M15.536 8.464a5 5 0 010 7.072M12 12h.01M18.364 5.636a9 9 0 010 12.728M5.636 18.364a9 9 0 010-12.728M8.464 15.536a5 5 0 010-7.072',
@@ -61,10 +58,7 @@ const features = [
 </script>
 
 <template>
-  <div class="min-h-screen bg-bg-primary flex flex-col">
-    <PublicNav />
-
-    <main class="pt-20 flex-1">
+  <main class="pt-20 flex-1">
       <!-- Section 1: The Problem -->
       <section class="py-20 px-6">
         <div class="max-w-6xl mx-auto">
@@ -145,8 +139,5 @@ const features = [
           </p>
         </div>
       </section>
-    </main>
-
-    <PublicFooter />
-  </div>
+  </main>
 </template>

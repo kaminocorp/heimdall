@@ -1,27 +1,22 @@
 <script setup lang="ts">
-import PublicNav from '@/components/public/PublicNav.vue'
-import PublicFooter from '@/components/public/PublicFooter.vue'
 import HeroMesh from '@/components/public/HeroMesh.vue'
 </script>
 
 <template>
-  <div class="min-h-screen flex flex-col bg-bg-primary">
-    <PublicNav />
-
-    <!-- Hero: mesh background with text overlay -->
-    <main class="flex-1 flex items-center justify-center relative overflow-hidden">
+  <!-- Hero: mesh background with text overlay -->
+  <main class="flex-1 flex items-center justify-center relative overflow-hidden">
       <!-- Animated dot mesh -->
       <HeroMesh />
 
-      <!-- Gradient overlay to fade mesh edges and improve text legibility -->
-      <div class="absolute inset-0 bg-gradient-to-b from-bg-primary via-transparent to-bg-primary pointer-events-none" />
+      <!-- Gradient overlays: clear top for text, fade mesh at edges -->
+      <div class="absolute inset-0 pointer-events-none" style="background: linear-gradient(to bottom, var(--bg-primary) 20%, transparent 65%, var(--bg-primary) 95%)" />
       <div class="absolute inset-0 bg-gradient-to-r from-bg-primary/60 via-transparent to-bg-primary/60 pointer-events-none" />
 
       <!-- Text content -->
-      <div class="relative z-10 w-full max-w-5xl text-center px-6 sm:px-10 lg:px-16">
+      <div class="relative z-10 w-full max-w-5xl text-center px-6 sm:px-10 lg:px-16 -mt-24">
         <h1 class="font-mono text-5xl sm:text-6xl lg:text-8xl font-bold leading-[1.05] tracking-tight uppercase">
-          <span class="block">The all-seeing</span>
-          <span class="block text-accent">eye.</span>
+          <span class="block">Autonomous system</span>
+          <span class="block text-accent">surveillance.</span>
         </h1>
 
         <p class="mt-8 text-lg sm:text-xl text-text-secondary max-w-2xl mx-auto leading-relaxed">
@@ -48,8 +43,5 @@ import HeroMesh from '@/components/public/HeroMesh.vue'
           Set up in under 5 minutes. No credit card required.
         </p>
       </div>
-    </main>
-
-    <PublicFooter />
-  </div>
+  </main>
 </template>

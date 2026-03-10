@@ -81,6 +81,7 @@ html {
   background-color: var(--bg-primary);
   color: var(--text-primary);
   font-family: var(--font-sans);
+  scrollbar-gutter: stable;
 }
 
 body {
