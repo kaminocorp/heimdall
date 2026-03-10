@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.14.2 — Hero Mesh Animation](#0142--hero-mesh-animation-2026-03-10)
 - [0.14.1 — Public Site Header & Footer Redesign](#0141--public-site-header--footer-redesign-2026-03-10)
 - [0.14.0 — Dockerfile Model Fix](#0140--dockerfile-model-fix-2026-03-09)
 - [0.13.0 — Phase 8 Hardening](#0130--phase-8-hardening-2026-03-07)
@@ -33,6 +34,38 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.14.2 — Hero Mesh Animation (2026-03-10)
+
+Added an animated 3D wireframe mesh to the landing page hero section, themed around real-time log monitoring. Shortened the headline to a punchier tagline.
+
+### Why
+
+The landing page had no visual hook — just text on a flat dark background. The mesh gives the page a distinctive, high-end feel while reinforcing what Heimdall does: watching data streams and detecting anomalies.
+
+### Animated Mesh (`HeroMesh.vue`)
+
+- **3D wireframe surface** — 150 x 90 dot grid (13,500 points) with thin connecting lines between adjacent dots, perspective-projected onto a Canvas 2D context.
+- **Data stream flow** — Base sine waves travel right-to-left, evoking a real-time log timeline.
+- **Anomaly peaks** — 5 Gaussian peaks that drift slowly across the surface and pulse in amplitude. Represent incidents rising above the noise floor.
+- **Scan sweep** — A green band (`#5a9e6a`) sweeps continuously across the mesh. Flat areas get a faint tint; anomaly peaks glow brightly with an outer halo when the sweep passes — Heimdall detecting something.
+- **Depth-aware rendering** — Per-frame depth range calculation drives alpha fade, dot sizing, and line opacity. Anomaly peaks get physically larger dots.
+- **Performance** — Pre-allocated 2D point array (zero per-frame allocations), DPR-capped at 2x, `prefers-reduced-motion` respected.
+
+### Hero Copy
+
+- **Headline** — Changed from three-line "Watches everything / Investigates automatically / Reports what matters" to **"The all-seeing eye."** (two lines, references Heimdall's Norse mythology origin).
+- **Subtitle** — Condensed to two sentences: "Autonomous AI monitoring for production systems. Watches 24/7. Investigates anomalies. Reports what matters."
+- **Gradient overlays** — Vertical and horizontal gradient fades blend the mesh edges into the dark background for text legibility.
+
+### Files Changed
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `frontend/src/components/public/HeroMesh.vue` | New — animated 3D wireframe mesh canvas component |
+| 2 | `frontend/src/pages/public/LandingPage.vue` | Integrated mesh background, shortened headline, gradient overlays |
 
 ---
 
