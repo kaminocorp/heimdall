@@ -64,7 +64,7 @@ const features = [
   <div class="min-h-screen bg-bg-primary flex flex-col">
     <PublicNav />
 
-    <main class="pt-14 flex-1">
+    <main class="pt-20 flex-1">
       <!-- Section 1: The Problem -->
       <section class="py-20 px-6">
         <div class="max-w-6xl mx-auto">

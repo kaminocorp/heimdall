@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.14.1 — Public Site Header & Footer Redesign](#0141--public-site-header--footer-redesign-2026-03-10)
 - [0.14.0 — Dockerfile Model Fix](#0140--dockerfile-model-fix-2026-03-09)
 - [0.13.0 — Phase 8 Hardening](#0130--phase-8-hardening-2026-03-07)
 - [0.12.0 — Multi-App UI & API](#0120--multi-app-ui--api-2026-03-07)
@@ -32,6 +33,38 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.14.1 — Public Site Header & Footer Redesign (2026-03-10)
+
+Redesigned the public website header and footer to match the Elephantasm design language — full-width, compact, typographic.
+
+### Header
+
+- **Full-width layout** — Removed `max-w-6xl` container; nav now stretches edge-to-edge.
+- **Typographic brand** — Replaced SVG hexagon logo with spaced-out `H E I M D A L L` wordmark.
+- **True-centered nav** — Navigation links use absolute positioning to center in the viewport independent of brand/actions widths.
+- **Three nav items** — Platform (was Features), Pricing, Security.
+- **Outlined CTA** — "Get Started" button changed from filled green to outlined accent border with hover fill. GitHub button gets matching outlined treatment with icon + label.
+- **Uppercase throughout** — All nav text uses uppercase + wide tracking.
+
+### Footer
+
+- **Single-line, full-width** — Collapsed from two-variant component (inline vs. full with logo and columns) into one compact bar.
+- **Three-zone layout** — Left: "A Kamino Corporation product." / Center: copyright + middot-separated links (Terms, Privacy, Platform, Pricing, Security, GitHub, X icon) / Right: italic quote.
+- **X icon** — Replaced text "X" with the X/Twitter SVG logo.
+- **Added Terms & Privacy** — Placeholder links at `/terms` and `/privacy`.
+
+### Files Changed
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `frontend/src/components/public/PublicNav.vue` | Full-width, typographic brand, centered nav, outlined buttons, uppercase, Security link |
+| 2 | `frontend/src/components/public/PublicFooter.vue` | Single-line three-zone footer, removed variant system, X icon, Terms/Privacy links |
+| 3 | `frontend/src/pages/public/LandingPage.vue` | Larger hero text (8xl), uppercase, wider container |
+| 4 | `frontend/src/pages/public/FeaturesPage.vue` | Updated `pt-` offset for taller nav |
+| 5 | `frontend/src/pages/public/PricingPage.vue` | Updated `pt-` offset for taller nav |
 
 ---
 

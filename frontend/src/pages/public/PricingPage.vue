@@ -41,7 +41,7 @@ const tiers = [
   <div class="min-h-screen bg-bg-primary flex flex-col">
     <PublicNav />
 
-    <main class="pt-14 flex-1">
+    <main class="pt-20 flex-1">
       <section class="py-20 px-6">
         <div class="max-w-6xl mx-auto">
           <p class="text-xs font-mono text-accent tracking-widest uppercase mb-3">Pricing</p>
