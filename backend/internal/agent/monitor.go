@@ -171,16 +171,22 @@ func (a *Agent) monitorApp(ctx context.Context, app db.ListActiveApplicationsRow
 		if utf8.RuneCountInString(summary) > 200 {
 			summary = string([]rune(summary)[:200]) + "..."
 		}
-		a.EmitLogWithSeverity(ctx, userID, nil, "monitoring", summary,
+		logEntryID := a.EmitLogWithSeverity(ctx, userID, nil, "monitoring", summary,
 			map[string]any{
-				"app_id":      app.ID,
-				"app_name":    app.Name,
-				"flagged":     len(flagged),
-				"assessment":  assessment,
-				"auto_severity": severity,
+				"app_id":         app.ID,
+				"app_name":       app.Name,
+				"flagged":        len(flagged),
+				"assessment":     assessment,
+				"auto_severity":  severity,
 			},
 			severity,
 		)
+
+		// Dispatch notification (fire-and-forget).
+		// Use context.WithoutCancel so the notification isn't killed when monitorApp returns.
+		if a.notifier != nil && logEntryID != uuid.Nil {
+			go a.notifier.Notify(context.WithoutCancel(ctx), app.ID, logEntryID, app.Name, severity, summary, assessment)
+		}
 	}
 
 	// Advance cursor to the last processed log's timestamp.

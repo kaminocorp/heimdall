@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+  <!--
+    Heimdall Logo — Bifrost Starburst
+    6-fold forked rays with center eye.
+    Monochrome on transparent — tint with CSS fill as needed.
+  -->
+  <g transform="translate(100,100)" fill="currentColor">
+    <!-- Fork at 0° (up) -->
+    <polygon points="-4,-17 4,-17 4,-72 -4,-83" transform="rotate(-10)"/>
+    <polygon points="-4,-17 4,-17 4,-83 -4,-72" transform="rotate(10)"/>
+
+    <!-- Fork at 60° -->
+    <polygon points="-4,-17 4,-17 4,-72 -4,-83" transform="rotate(50)"/>
+    <polygon points="-4,-17 4,-17 4,-83 -4,-72" transform="rotate(70)"/>
+
+    <!-- Fork at 120° -->
+    <polygon points="-4,-17 4,-17 4,-72 -4,-83" transform="rotate(110)"/>
+    <polygon points="-4,-17 4,-17 4,-83 -4,-72" transform="rotate(130)"/>
+
+    <!-- Fork at 180° (down) -->
+    <polygon points="-4,-17 4,-17 4,-72 -4,-83" transform="rotate(170)"/>
+    <polygon points="-4,-17 4,-17 4,-83 -4,-72" transform="rotate(190)"/>
+
+    <!-- Fork at 240° -->
+    <polygon points="-4,-17 4,-17 4,-72 -4,-83" transform="rotate(230)"/>
+    <polygon points="-4,-17 4,-17 4,-83 -4,-72" transform="rotate(250)"/>
+
+    <!-- Fork at 300° -->
+    <polygon points="-4,-17 4,-17 4,-72 -4,-83" transform="rotate(290)"/>
+    <polygon points="-4,-17 4,-17 4,-83 -4,-72" transform="rotate(310)"/>
+
+    <!-- Center eye (the pupil) -->
+    <circle r="5.5"/>
+  </g>
+</svg>

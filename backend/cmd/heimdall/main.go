@@ -16,6 +16,7 @@ import (
 	"github.com/hejijunhao/heimdall/backend/internal/api/middleware"
 	"github.com/hejijunhao/heimdall/backend/internal/config"
 	"github.com/hejijunhao/heimdall/backend/internal/db"
+	"github.com/hejijunhao/heimdall/backend/internal/notifications"
 )
 
 func main() {
@@ -64,7 +65,9 @@ func main() {
 		}
 	}
 
-	ag := agent.New(db.New(pool), cfg, classifier)
+	queries := db.New(pool)
+	notifier := notifications.NewDispatcher(queries, cfg)
+	ag := agent.New(queries, cfg, classifier, notifier)
 	ag.Start(context.Background())
 
 	router := api.NewRouter(cfg, pool, ag, jwks)

@@ -36,6 +36,7 @@ const sections = [
       { name: 'Configuration', to: '/agent/config', routeName: 'agent-config' },
       { name: 'Chat', to: '/agent/chat', routeName: 'agent-chat' },
       { name: 'Log', to: '/agent/log', routeName: 'agent-log' },
+      { name: 'Notifications', to: '/notifications', routeName: 'notifications' },
     ],
   },
   {

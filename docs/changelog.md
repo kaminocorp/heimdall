@@ -1,5 +1,7 @@
 # Changelog
 
+- [0.15.0 — Notifications & Escalation](#0150--notifications--escalation-2026-03-11)
+- [0.14.5 — Logo & Favicon](#0145--logo--favicon-2026-03-11)
 - [0.14.4 — Feldgrau Colour Theme](#0144--feldgrau-colour-theme-2026-03-11)
 - [0.14.3 — Public Layout, Heading & Mesh Refinement](#0143--public-layout-heading--mesh-refinement-2026-03-10)
 - [0.14.2 — Hero Mesh Animation](#0142--hero-mesh-animation-2026-03-10)
@@ -36,6 +38,174 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.15.0 — Notifications & Escalation (2026-03-11)
+
+Heimdall can now alert you when it finds something. When the monitoring agent assesses flagged logs as `warning`, `error`, or `critical`, Heimdall dispatches notifications through configured channels — Email (via Resend), Slack (incoming webhook), or Discord (webhook). A monitoring agent that can't reach anyone is a smoke detector with no alarm.
+
+### Why
+
+Phase 8 gave Heimdall the ability to see — the monitor loop classifies logs, escalates to Claude, and writes assessments to the agent log. But findings stayed locked inside the dashboard. Users had to check Heimdall to learn something was wrong, which defeats the purpose of autonomous monitoring. Phase 9 closes the loop: Heimdall now speaks.
+
+### Architecture
+
+```
+Monitor loop emits agent_log entry (severity ≥ threshold)
+   ↓
+┌─────────────────────────────────────┐
+│  Notification Dispatcher            │  ← In-process, async goroutine
+│  1. Load app notification prefs     │
+│  2. Apply severity threshold filter │
+│  3. Apply cooldown (dedup window)   │
+│  4. Fan out to enabled channels     │
+└─────────────┬───────────────────────┘
+              │
+     ┌────────┼────────────┐
+     │        │            │
+   Email    Slack       Discord
+  (Resend   (Webhook)   (Webhook)
+   API)
+     │        │            │
+     └────────┼────────────┘
+              │
+       Write to notification_log
+       (delivery tracking)
+```
+
+**Key design decisions:**
+
+- **Fire-and-forget.** Notification dispatch runs in a goroutine with `context.WithoutCancel()` — a failed or slow notification never blocks the monitor loop or cursor advance. Matches the existing `EmitLog` pattern.
+- **Per-app cooldown.** A single cooldown window (default 15 minutes) suppresses all channels for an app. Prevents a noisy app from flooding every channel every 15 seconds.
+- **Single retry.** One retry on failure, then mark as `failed`. No exponential backoff — monitoring is continuous, so the next cycle will re-notify if the issue persists.
+- **Channel interface.** Same factory pattern as the `Classifier` interface. Each channel type is isolated, testable, and swappable.
+
+### Database (Migrations 017–019)
+
+Three new tables:
+
+- **`notification_channels`** — Per-app, multiple channels. Type (`email`/`slack`/`discord`), name, JSONB config (recipients for email, webhook URL for Slack/Discord), enabled flag.
+- **`notification_preferences`** — Per-app 1:1. Master enabled toggle, severity threshold (`info`/`warning`/`error`/`critical`), cooldown minutes. Defaults: disabled, warning threshold, 15-minute cooldown.
+- **`notification_log`** — Every notification attempt tracked. Status (`pending`/`sent`/`failed`), error message, FK to `agent_log` for correlation, FK to `notification_channels` for channel metadata.
+
+12 sqlc queries across 3 files: channel CRUD + enabled-only listing, preference get/upsert, log insert/update/list/last-sent.
+
+### Backend — Notification Package
+
+New `internal/notifications/` package:
+
+- **`notifier.go`** — `Channel` interface, `NewChannel` factory, `Dispatcher` orchestrator (preference check → severity filter → cooldown → fan-out → delivery logging).
+- **`slack.go`** — Slack Block Kit payload: header with severity emoji, section with summary, code block with full assessment, context with timestamp. Text truncated to safe limits (2000/2900 chars) with UTF-8-aware slicing.
+- **`discord.go`** — Discord embed: severity-mapped colour (red/orange/yellow/blue), summary + assessment in description, timestamp footer. Truncated to 1800 chars.
+- **`email.go`** — Resend API (`POST https://api.resend.com/emails`). HTML template with inline styles, severity badge, assessment block. Requires `RESEND_API_KEY` and `NOTIFICATION_FROM_EMAIL` env vars (optional — email channel only works if configured).
+- **`format.go`** — Shared helpers: `SeverityEmoji()`, `SeverityColor()`, `FormatEmailHTML()`.
+
+### Backend — Integration
+
+- **`agent.go`** — Agent struct gains `notifier *notifications.Dispatcher` field. Passed from `main.go` at startup. Nil-safe — tests and non-notification environments skip dispatch.
+- **`emit.go`** — `emitLog` and `EmitLogWithSeverity` now return `uuid.UUID` (the inserted `agent_log.id`). Returns `uuid.Nil` on error. Existing callers unaffected.
+- **`monitor.go`** — After `EmitLogWithSeverity`, calls `go a.notifier.Notify(...)` in a goroutine with the agent log ID, app name, severity, summary, and assessment.
+- **`config.go`** — Two new optional env vars: `RESEND_API_KEY`, `NOTIFICATION_FROM_EMAIL`.
+
+### Backend — API Endpoints
+
+8 new endpoints under `/apps/{appId}/notifications`, all using `authorizeApp()`:
+
+| Method | Path | Handler |
+|--------|------|---------|
+| GET | `/notifications/preferences` | Returns preferences (sensible defaults if none set) |
+| PUT | `/notifications/preferences` | Validates severity enum, cooldown 1–1440 |
+| GET | `/notifications/channels` | Lists all channels for app |
+| POST | `/notifications/channels` | Validates type, config shape per type |
+| PUT | `/notifications/channels/{channelId}` | Verifies channel belongs to app |
+| DELETE | `/notifications/channels/{channelId}` | Verifies channel belongs to app |
+| POST | `/notifications/channels/{channelId}/test` | Sends synthetic test notification |
+| GET | `/notifications/history` | Paginated notification log with channel metadata |
+
+Webhook URL validation uses proper `url.Parse` + domain/path checks (not prefix matching) to prevent spoofing.
+
+### Frontend
+
+- **`NotificationsPage.vue`** — Three sections: preferences form (enable toggle, severity dropdown, cooldown input), channels list (add/edit/delete/test), recent notification history table with status badges. Watches `currentAppId` for app switches.
+- **`api/notifications.ts`** — 8 API client functions matching all endpoints.
+- **`types/notification.ts`** — TypeScript interfaces for preferences, channels, channel configs, log entries.
+- **Router** — `/notifications` route added, lazy-loaded.
+- **Sidebar** — "Notifications" nav item added under Agent section.
+
+### Production Hardening (Step 9)
+
+8 fixes applied during review:
+
+1. **Context cancellation** — Notification goroutines used the monitor context, which cancelled before sends completed. Fixed with `context.WithoutCancel()`.
+2. **UTF-8 truncation** — Slack/Discord text truncation could slice mid-codepoint. Fixed with `utf8.Valid` boundary checking.
+3. **Silent DB errors** — `UpdateNotificationLogStatus` errors were swallowed. Now logged.
+4. **JSON null vs empty array** — Empty channel/history lists returned `null` instead of `[]`. Fixed with slice initialisation.
+5. **HTTP client timeouts** — Webhook client had no timeout. Added 10-second timeout.
+6. **Truncate panic** — `truncateText` panicked if max < 4. Added bounds check.
+7. **Webhook URL spoofing** — Prefix-based URL validation could be bypassed (`hooks.slack.com.evil.com`). Replaced with `url.Parse` + explicit host matching.
+8. **Response body errors** — Missing error checks on `io.ReadAll` for error response bodies. Fixed with `io.LimitReader`.
+
+### Files Changed
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `backend/migrations/017_notification_channels.up.sql` | New — channels table + index |
+| 2 | `backend/migrations/017_notification_channels.down.sql` | New — drop table |
+| 3 | `backend/migrations/018_notification_preferences.up.sql` | New — preferences table |
+| 4 | `backend/migrations/018_notification_preferences.down.sql` | New — drop table |
+| 5 | `backend/migrations/019_notification_log.up.sql` | New — log table + indices |
+| 6 | `backend/migrations/019_notification_log.down.sql` | New — drop table |
+| 7 | `backend/internal/db/queries/notification_channels.sql` | New — 6 queries |
+| 8 | `backend/internal/db/queries/notification_preferences.sql` | New — 2 queries |
+| 9 | `backend/internal/db/queries/notification_log.sql` | New — 4 queries |
+| 10 | `backend/internal/db/notification_channels.sql.go` | Regenerated — sqlc |
+| 11 | `backend/internal/db/notification_preferences.sql.go` | Regenerated — sqlc |
+| 12 | `backend/internal/db/notification_log.sql.go` | Regenerated — sqlc |
+| 13 | `backend/internal/db/models.go` | Regenerated — 3 new model structs |
+| 14 | `backend/internal/notifications/notifier.go` | New — Channel interface, factory, Dispatcher |
+| 15 | `backend/internal/notifications/slack.go` | New — Slack Block Kit webhook |
+| 16 | `backend/internal/notifications/discord.go` | New — Discord embed webhook |
+| 17 | `backend/internal/notifications/email.go` | New — Resend API email |
+| 18 | `backend/internal/notifications/format.go` | New — shared formatting helpers |
+| 19 | `backend/internal/agent/agent.go` | Add notifier field to Agent struct |
+| 20 | `backend/internal/agent/emit.go` | Return uuid.UUID from emitLog/EmitLogWithSeverity |
+| 21 | `backend/internal/agent/monitor.go` | Call notifier.Notify after emit |
+| 22 | `backend/internal/config/config.go` | Add Resend env vars |
+| 23 | `backend/internal/api/handlers/notifications.go` | New — 8 handlers with validation |
+| 24 | `backend/internal/api/router.go` | Register notification routes |
+| 25 | `backend/cmd/heimdall/main.go` | Create dispatcher, pass to agent |
+| 26 | `frontend/src/types/notification.ts` | New — TypeScript interfaces |
+| 27 | `frontend/src/api/notifications.ts` | New — API client functions |
+| 28 | `frontend/src/pages/NotificationsPage.vue` | New — preferences, channels, history |
+| 29 | `frontend/src/router/index.ts` | Add /notifications route |
+| 30 | `frontend/src/components/common/AppSidebar.vue` | Add Notifications nav item |
+
+---
+
+## 0.14.5 — Logo & Favicon (2026-03-11)
+
+Created the official Heimdall logo — a six-pointed forked starburst with a centre eye dot. Hybrid of Concept B's hexagonal symmetry and a bold split-ray graphic style.
+
+### Why
+
+Heimdall had no brand mark — just a placeholder `.ico` and concept explorations in `docs/logos/`. Needed a minimal, distinctive icon that reads at favicon scale and reinforces the surveillance/all-seeing-eye identity.
+
+### Design
+
+- **6 forked rays** at 60° intervals (hexagonal symmetry, Bifrost connection). Each ray is two diverging prongs with angled tips — the outer edge extends further, creating directional tension.
+- **Centre dot** (r=5.5) acts as the pupil — the all-seeing eye motif.
+- **Void ring** between the dot and prong starts provides breathing room and reads clearly at small sizes.
+- **12 prongs total**, all generated from the same base polygon with rotation transforms.
+
+### Files Changed
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `docs/logos/heimdall-logo.svg` | New — monochrome logo with `currentColor` fill (CSS-tintable) |
+| 2 | `docs/logos/heimdall-logo-preview.svg` | New — preview on dark background with labels |
+| 3 | `frontend/public/favicon.svg` | New — white on black, square (browser applies its own clipping) |
+| 4 | `frontend/index.html` | SVG favicon as primary, `.ico` as fallback |
 
 ---
 

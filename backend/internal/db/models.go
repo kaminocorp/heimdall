@@ -108,6 +108,39 @@ type MonitoringState struct {
 	UpdatedAt       time.Time `json:"updated_at"`
 }
 
+type NotificationChannel struct {
+	ID        uuid.UUID       `json:"id"`
+	AppID     uuid.UUID       `json:"app_id"`
+	Type      string          `json:"type"`
+	Name      string          `json:"name"`
+	Config    json.RawMessage `json:"config"`
+	Enabled   bool            `json:"enabled"`
+	CreatedAt time.Time       `json:"created_at"`
+	UpdatedAt time.Time       `json:"updated_at"`
+}
+
+type NotificationLog struct {
+	ID           uuid.UUID   `json:"id"`
+	AppID        uuid.UUID   `json:"app_id"`
+	ChannelID    uuid.UUID   `json:"channel_id"`
+	AgentLogID   pgtype.UUID `json:"agent_log_id"`
+	Severity     string      `json:"severity"`
+	Summary      string      `json:"summary"`
+	Status       string      `json:"status"`
+	ErrorMessage pgtype.Text `json:"error_message"`
+	SentAt       *time.Time  `json:"sent_at"`
+	CreatedAt    time.Time   `json:"created_at"`
+}
+
+type NotificationPreference struct {
+	AppID             uuid.UUID `json:"app_id"`
+	Enabled           bool      `json:"enabled"`
+	SeverityThreshold string    `json:"severity_threshold"`
+	CooldownMinutes   int32     `json:"cooldown_minutes"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
+}
+
 type Organization struct {
 	ID        uuid.UUID `json:"id"`
 	Name      string    `json:"name"`

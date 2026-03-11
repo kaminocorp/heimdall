@@ -6,14 +6,16 @@ import (
 )
 
 type Config struct {
-	Port           string
-	DatabaseURL    string
-	AnthropicKey   string
-	ElephantasmURL string
-	ElephantasmKey string
-	SupabaseURL    string
-	ClassifierMode string
-	LumberModelDir string
+	Port                  string
+	DatabaseURL           string
+	AnthropicKey          string
+	ElephantasmURL        string
+	ElephantasmKey        string
+	SupabaseURL           string
+	ClassifierMode        string
+	LumberModelDir        string
+	ResendAPIKey          string
+	NotificationFromEmail string
 }
 
 func Load() *Config {
@@ -24,8 +26,10 @@ func Load() *Config {
 		ElephantasmURL: getEnv("ELEPHANTASM_URL", ""),
 		ElephantasmKey: getEnv("ELEPHANTASM_API_KEY", ""),
 		SupabaseURL:    getEnv("SUPABASE_URL", ""),
-		ClassifierMode: getEnv("CLASSIFIER_MODE", "fallback"),
-		LumberModelDir: getEnv("LUMBER_MODEL_DIR", "/opt/lumber/models"),
+		ClassifierMode:        getEnv("CLASSIFIER_MODE", "fallback"),
+		LumberModelDir:        getEnv("LUMBER_MODEL_DIR", "/opt/lumber/models"),
+		ResendAPIKey:          getEnv("RESEND_API_KEY", ""),
+		NotificationFromEmail: getEnv("NOTIFICATION_FROM_EMAIL", ""),
 	}
 }
 

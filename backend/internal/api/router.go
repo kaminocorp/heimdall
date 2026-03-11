@@ -41,6 +41,16 @@ func NewRouter(cfg *config.Config, pool *pgxpool.Pool, ag *agent.Agent, jwks *mi
 				r.Put("/agent/config", s.UpdateAppAgentConfig)
 				r.Get("/monitoring/status", s.GetMonitoringStatus)
 				r.Get("/stats", s.GetAppDashboardStats)
+
+				// Notification management
+				r.Get("/notifications/preferences", s.GetNotificationPreferences)
+				r.Put("/notifications/preferences", s.UpdateNotificationPreferences)
+				r.Get("/notifications/channels", s.ListNotificationChannels)
+				r.Post("/notifications/channels", s.CreateNotificationChannel)
+				r.Put("/notifications/channels/{channelId}", s.UpdateNotificationChannel)
+				r.Delete("/notifications/channels/{channelId}", s.DeleteNotificationChannel)
+				r.Post("/notifications/channels/{channelId}/test", s.TestNotificationChannel)
+				r.Get("/notifications/history", s.ListNotificationHistory)
 			})
 
 			// Connections (user-scoped, for create/update/delete/test)
