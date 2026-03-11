@@ -1,6 +1,10 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
 import type { Connection, CreateConnectionPayload } from '@/types/connection'
+import { useAppStore } from '@/stores/app'
+import { getGitHubInstallURL } from '@/api/github'
+
+const appStore = useAppStore()
 
 interface FieldDef {
   key: string
@@ -34,11 +38,23 @@ const configFields: Record<string, FieldDef[]> = {
       { value: 'tcp', label: 'TCP' },
     ]},
   ],
-  github: [
-    { key: 'owner', label: 'Owner', type: 'text', required: true, placeholder: 'my-org' },
-    { key: 'repo', label: 'Repository', type: 'text', required: true, placeholder: 'my-app' },
-    { key: 'token', label: 'Personal Access Token', type: 'password', required: true, placeholder: 'ghp_••••••••' },
-  ],
+  github: [],
+}
+
+const githubInstalling = ref(false)
+const githubError = ref<string | null>(null)
+
+async function installGitHubApp() {
+  if (!appStore.currentAppId) return
+  githubInstalling.value = true
+  githubError.value = null
+  try {
+    const { url } = await getGitHubInstallURL(appStore.currentAppId)
+    window.location.href = url
+  } catch (e: any) {
+    githubError.value = e.response?.data?.error ?? 'Failed to start GitHub App installation'
+    githubInstalling.value = false
+  }
 }
 
 const props = defineProps<{
@@ -140,7 +156,23 @@ function handleSubmit() {
       </select>
     </div>
     <!-- Config fields -->
-    <template v-if="type === 'webhook_logs'">
+    <template v-if="type === 'github' && !isEditing">
+      <div class="border border-border rounded px-4 py-3 bg-bg-elevated/40 space-y-3">
+        <p class="font-mono text-xs text-text-secondary">
+          Heimdall uses a GitHub App for secure, org-scoped access to your repositories. Click below to install the app on your GitHub organization.
+        </p>
+        <div v-if="githubError" class="text-sm font-mono text-status-critical">{{ githubError }}</div>
+        <button
+          type="button"
+          :disabled="githubInstalling"
+          @click="installGitHubApp"
+          class="px-4 py-2 bg-accent text-bg-primary font-mono text-sm font-medium uppercase tracking-wider rounded hover:bg-accent-hover transition-colors cursor-pointer disabled:opacity-50"
+        >
+          {{ githubInstalling ? 'Redirecting...' : 'Install GitHub App' }}
+        </button>
+      </div>
+    </template>
+    <template v-else-if="type === 'webhook_logs'">
       <div class="border border-border rounded px-4 py-3 bg-bg-elevated/40">
         <p class="font-mono text-xs text-text-secondary">
           A webhook token will be generated automatically when this connection is created.
@@ -164,10 +196,15 @@ function handleSubmit() {
       </div>
     </template>
 
-    <div class="flex gap-2 pt-2">
+    <div v-if="!(type === 'github' && !isEditing)" class="flex gap-2 pt-2">
       <button type="submit" class="px-4 py-2 bg-accent text-bg-primary font-mono text-sm font-medium uppercase tracking-wider rounded hover:bg-accent-hover transition-colors cursor-pointer">
         {{ isEditing ? 'Save Changes' : 'Add Connection' }}
       </button>
+      <button type="button" @click="emit('cancel')" class="px-4 py-2 border border-accent-border/50 text-text-secondary font-mono text-sm uppercase tracking-wider rounded hover:border-accent/50 hover:text-text-primary transition-colors cursor-pointer">
+        Cancel
+      </button>
+    </div>
+    <div v-else class="flex gap-2 pt-2">
       <button type="button" @click="emit('cancel')" class="px-4 py-2 border border-accent-border/50 text-text-secondary font-mono text-sm uppercase tracking-wider rounded hover:border-accent/50 hover:text-text-primary transition-colors cursor-pointer">
         Cancel
       </button>

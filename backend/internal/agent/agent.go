@@ -10,27 +10,30 @@ import (
 
 	"github.com/hejijunhao/heimdall/backend/internal/config"
 	"github.com/hejijunhao/heimdall/backend/internal/db"
+	"github.com/hejijunhao/heimdall/backend/internal/github"
 	"github.com/hejijunhao/heimdall/backend/internal/notifications"
 )
 
 type Agent struct {
-	queries    *db.Queries
-	client     *anthropic.Client
-	config     *config.Config
-	classifier Classifier
-	notifier   *notifications.Dispatcher
-	cancel     context.CancelFunc
-	wg         sync.WaitGroup
+	queries      *db.Queries
+	client       *anthropic.Client
+	config       *config.Config
+	classifier   Classifier
+	notifier     *notifications.Dispatcher
+	githubClient *github.Client
+	cancel       context.CancelFunc
+	wg           sync.WaitGroup
 }
 
-func New(queries *db.Queries, cfg *config.Config, classifier Classifier, notifier *notifications.Dispatcher) *Agent {
+func New(queries *db.Queries, cfg *config.Config, classifier Classifier, notifier *notifications.Dispatcher, gh *github.Client) *Agent {
 	client := anthropic.NewClient(option.WithAPIKey(cfg.AnthropicKey))
 	return &Agent{
-		queries:    queries,
-		client:     &client,
-		config:     cfg,
-		classifier: classifier,
-		notifier:   notifier,
+		queries:      queries,
+		client:       &client,
+		config:       cfg,
+		classifier:   classifier,
+		notifier:     notifier,
+		githubClient: gh,
 	}
 }
 

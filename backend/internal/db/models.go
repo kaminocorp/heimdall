@@ -76,6 +76,16 @@ type Conversation struct {
 	UserID          uuid.UUID       `json:"user_id"`
 }
 
+type GithubRepo struct {
+	ID            uuid.UUID `json:"id"`
+	ConnectionID  uuid.UUID `json:"connection_id"`
+	RepoFullName  string    `json:"repo_full_name"`
+	RepoID        int64     `json:"repo_id"`
+	DefaultBranch string    `json:"default_branch"`
+	Enabled       bool      `json:"enabled"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
 type Investigation struct {
 	ID            uuid.UUID       `json:"id"`
 	TriggerType   string          `json:"trigger_type"`

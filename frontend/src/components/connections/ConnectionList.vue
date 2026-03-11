@@ -11,6 +11,7 @@ const emit = defineEmits<{
   delete: [id: string]
   edit: [connection: Connection]
   test: [id: string]
+  'manage-repos': [id: string]
 }>()
 </script>
 
@@ -29,6 +30,7 @@ const emit = defineEmits<{
       @delete="emit('delete', $event)"
       @edit="emit('edit', $event)"
       @test="emit('test', $event)"
+      @manage-repos="emit('manage-repos', $event)"
     />
   </div>
 </template>

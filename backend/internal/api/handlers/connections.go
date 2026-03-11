@@ -300,8 +300,15 @@ func (s *Server) TestConnection(w http.ResponseWriter, r *http.Request) {
 			defer pg.Close(ctx)
 			result = testResult{Success: true, Message: "Connection established"}
 		}
+	case "github":
+		if s.GitHub != nil {
+			success, msg := s.TestGitHubConnection(r.Context(), conn.Config)
+			result = testResult{Success: success, Message: msg}
+		} else {
+			result = testResult{Success: false, Message: "GitHub App not configured on server"}
+		}
 	default:
-		// webhook_logs, syslog, github — no remote target to test, auto-pass.
+		// webhook_logs, syslog — no remote target to test, auto-pass.
 		result = testResult{Success: true, Message: "Connection established"}
 	}
 

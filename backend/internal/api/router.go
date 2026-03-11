@@ -8,18 +8,21 @@ import (
 	"github.com/hejijunhao/heimdall/backend/internal/api/handlers"
 	"github.com/hejijunhao/heimdall/backend/internal/api/middleware"
 	"github.com/hejijunhao/heimdall/backend/internal/config"
+	"github.com/hejijunhao/heimdall/backend/internal/github"
 )
 
-func NewRouter(cfg *config.Config, pool *pgxpool.Pool, ag *agent.Agent, jwks *middleware.JWKSClient) *chi.Mux {
-	s := handlers.NewServer(cfg, pool, ag, jwks)
+func NewRouter(cfg *config.Config, pool *pgxpool.Pool, ag *agent.Agent, jwks *middleware.JWKSClient, gh *github.Client) *chi.Mux {
+	s := handlers.NewServer(cfg, pool, ag, jwks, gh)
 	r := chi.NewRouter()
 
 	r.Use(middleware.Logging)
 	r.Use(middleware.CORS)
 
 	r.Route("/api", func(r chi.Router) {
-		// Public routes — token-based auth, no JWT required.
+		// Public routes — no JWT required.
 		r.Post("/webhooks/logs", s.IngestWebhookLogs)
+		// GitHub callback is hit by browser redirect from GitHub — auth via state JWT, not session.
+		r.Get("/github/callback", s.GitHubCallback)
 
 		// Protected routes — require Supabase JWT.
 		r.Group(func(r chi.Router) {
@@ -53,6 +56,9 @@ func NewRouter(cfg *config.Config, pool *pgxpool.Pool, ag *agent.Agent, jwks *mi
 				r.Get("/notifications/history", s.ListNotificationHistory)
 			})
 
+			// GitHub App integration (install requires JWT; callback is public above)
+			r.Get("/github/install", s.InstallGitHub)
+
 			// Connections (user-scoped, for create/update/delete/test)
 			r.Route("/connections", func(r chi.Router) {
 				r.Get("/", s.ListConnections)
@@ -61,6 +67,8 @@ func NewRouter(cfg *config.Config, pool *pgxpool.Pool, ag *agent.Agent, jwks *mi
 				r.Put("/{id}", s.UpdateConnection)
 				r.Delete("/{id}", s.DeleteConnection)
 				r.Post("/{id}/test", s.TestConnection)
+				r.Get("/{id}/github/repos", s.ListGitHubRepos)
+				r.Put("/{id}/github/repos", s.UpdateGitHubRepos)
 			})
 
 			r.Get("/logs", s.ListLogs)

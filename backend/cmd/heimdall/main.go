@@ -16,6 +16,7 @@ import (
 	"github.com/hejijunhao/heimdall/backend/internal/api/middleware"
 	"github.com/hejijunhao/heimdall/backend/internal/config"
 	"github.com/hejijunhao/heimdall/backend/internal/db"
+	"github.com/hejijunhao/heimdall/backend/internal/github"
 	"github.com/hejijunhao/heimdall/backend/internal/notifications"
 )
 
@@ -65,12 +66,26 @@ func main() {
 		}
 	}
 
+	// Initialize GitHub App client (optional — nil if not configured).
+	var ghClient *github.Client
+	if cfg.GitHubAppID != "" {
+		var err error
+		ghClient, err = github.NewClient(cfg.GitHubAppID, cfg.GitHubClientID, cfg.GitHubPrivateKey)
+		if err != nil {
+			slog.Error("failed to initialize GitHub App client", "err", err)
+			os.Exit(1)
+		}
+		if ghClient != nil {
+			slog.Info("GitHub App configured", "app_id", cfg.GitHubAppID)
+		}
+	}
+
 	queries := db.New(pool)
 	notifier := notifications.NewDispatcher(queries, cfg)
-	ag := agent.New(queries, cfg, classifier, notifier)
+	ag := agent.New(queries, cfg, classifier, notifier, ghClient)
 	ag.Start(context.Background())
 
-	router := api.NewRouter(cfg, pool, ag, jwks)
+	router := api.NewRouter(cfg, pool, ag, jwks, ghClient)
 
 	srv := &http.Server{
 		Addr:         ":" + cfg.Port,

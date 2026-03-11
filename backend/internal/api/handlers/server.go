@@ -7,6 +7,7 @@ import (
 	"github.com/hejijunhao/heimdall/backend/internal/api/middleware"
 	"github.com/hejijunhao/heimdall/backend/internal/config"
 	"github.com/hejijunhao/heimdall/backend/internal/db"
+	"github.com/hejijunhao/heimdall/backend/internal/github"
 )
 
 // Server holds shared dependencies for all handlers.
@@ -16,14 +17,16 @@ type Server struct {
 	Queries *db.Queries
 	Agent   *agent.Agent
 	JWKS    *middleware.JWKSClient
+	GitHub  *github.Client
 }
 
-func NewServer(cfg *config.Config, pool *pgxpool.Pool, ag *agent.Agent, jwks *middleware.JWKSClient) *Server {
+func NewServer(cfg *config.Config, pool *pgxpool.Pool, ag *agent.Agent, jwks *middleware.JWKSClient, gh *github.Client) *Server {
 	return &Server{
 		Config:  cfg,
 		Pool:    pool,
 		Queries: db.New(pool),
 		Agent:   ag,
 		JWKS:    jwks,
+		GitHub:  gh,
 	}
 }

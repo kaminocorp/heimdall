@@ -49,16 +49,48 @@ func ToolRegistry() []anthropic.ToolUnionParam {
 				Required: []string{"sql", "connection_id"},
 			},
 		}},
+		{OfTool: &anthropic.ToolParam{
+			Name:        "search_codebase",
+			Description: anthropic.String("Search or read code in connected GitHub repositories. Use to understand application code, find error sources, or investigate configuration."),
+			InputSchema: anthropic.ToolInputSchemaParam{
+				Properties: map[string]any{
+					"action": map[string]any{
+						"type":        "string",
+						"enum":        []string{"search_code", "read_file", "list_tree"},
+						"description": "The operation to perform",
+					},
+					"query": map[string]any{
+						"type":        "string",
+						"description": "Search query (required for search_code)",
+					},
+					"path": map[string]any{
+						"type":        "string",
+						"description": "File or directory path (required for read_file/list_tree)",
+					},
+					"repo": map[string]any{
+						"type":        "string",
+						"description": "Repository in owner/repo format. If omitted, searches all connected repos.",
+					},
+					"ref": map[string]any{
+						"type":        "string",
+						"description": "Git ref (branch/tag/SHA). Defaults to the repo's default branch.",
+					},
+				},
+				Required: []string{"action"},
+			},
+		}},
 	}
 }
 
 // Dispatch routes a tool call to the appropriate implementation.
-func (a *Agent) Dispatch(ctx context.Context, userID uuid.UUID, name string, input map[string]any) (string, error) {
+func (a *Agent) Dispatch(ctx context.Context, userID uuid.UUID, appID uuid.UUID, name string, input map[string]any) (string, error) {
 	switch name {
 	case "search_logs":
 		return a.toolSearchLogs(ctx, userID, input)
 	case "query_database":
 		return a.toolQueryDatabase(ctx, userID, input)
+	case "search_codebase":
+		return a.toolSearchCodebase(ctx, userID, appID, input)
 	default:
 		return "", fmt.Errorf("unknown tool: %s", name)
 	}

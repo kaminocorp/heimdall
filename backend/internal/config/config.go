@@ -16,6 +16,11 @@ type Config struct {
 	LumberModelDir        string
 	ResendAPIKey          string
 	NotificationFromEmail string
+	GitHubAppID           string
+	GitHubPrivateKey      string
+	GitHubClientID        string
+	GitHubAppSlug         string
+	GitHubWebhookSecret   string
 }
 
 func Load() *Config {
@@ -30,6 +35,11 @@ func Load() *Config {
 		LumberModelDir:        getEnv("LUMBER_MODEL_DIR", "/opt/lumber/models"),
 		ResendAPIKey:          getEnv("RESEND_API_KEY", ""),
 		NotificationFromEmail: getEnv("NOTIFICATION_FROM_EMAIL", ""),
+		GitHubAppID:           getEnv("GITHUB_APP_ID", ""),
+		GitHubPrivateKey:      getEnv("GITHUB_PRIVATE_KEY", ""),
+		GitHubClientID:        getEnv("GITHUB_CLIENT_ID", ""),
+		GitHubAppSlug:         getEnv("GITHUB_APP_SLUG", "heimdall-agent"),
+		GitHubWebhookSecret:   getEnv("GITHUB_WEBHOOK_SECRET", ""),
 	}
 }
 

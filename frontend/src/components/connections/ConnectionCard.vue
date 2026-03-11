@@ -11,6 +11,7 @@ const emit = defineEmits<{
   delete: [id: string]
   edit: [connection: Connection]
   test: [id: string]
+  'manage-repos': [id: string]
 }>()
 </script>
 
@@ -28,6 +29,13 @@ const emit = defineEmits<{
         </span>
         <StatusBadge v-else :status="connection.status" />
         <div class="flex items-center gap-2 sm:opacity-0 sm:group-hover:opacity-100 transition-all">
+          <button
+            v-if="connection.type === 'github'"
+            @click="emit('manage-repos', connection.id)"
+            class="font-mono text-xs uppercase tracking-wider text-text-muted hover:text-accent transition-colors cursor-pointer"
+          >
+            Repos
+          </button>
           <button
             @click="emit('test', connection.id)"
             class="font-mono text-xs uppercase tracking-wider text-text-muted hover:text-accent transition-colors cursor-pointer"

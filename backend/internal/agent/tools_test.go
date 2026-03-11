@@ -29,7 +29,7 @@ func TestDispatch_UnknownTool(t *testing.T) {
 	ctx := context.Background()
 	userID := uuid.New()
 
-	result, err := agent.Dispatch(ctx, userID, "nonexistent_tool", map[string]any{})
+	result, err := agent.Dispatch(ctx, userID, uuid.Nil, "nonexistent_tool", map[string]any{})
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown tool: nonexistent_tool")
@@ -44,12 +44,46 @@ func TestDispatch_SearchLogs(t *testing.T) {
 	// search_logs will be dispatched to toolSearchLogs, which queries
 	// the DB via stubDBTX. The stub returns an error, confirming that
 	// dispatch correctly routed to the search_logs implementation.
-	result, err := agent.Dispatch(ctx, userID, "search_logs", map[string]any{
+	result, err := agent.Dispatch(ctx, userID, uuid.Nil, "search_logs", map[string]any{
 		"query": "error",
 	})
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "search_logs:")
+	assert.Empty(t, result)
+}
+
+func TestDispatch_SearchCodebase_NoClient(t *testing.T) {
+	agent := newToolTestAgent()
+	ctx := context.Background()
+	userID := uuid.New()
+
+	// search_codebase dispatches to toolSearchCodebase, which checks
+	// githubClient != nil. Our test agent has no GitHub client, so it
+	// should return a clear "not configured" error.
+	result, err := agent.Dispatch(ctx, userID, uuid.New(), "search_codebase", map[string]any{
+		"action": "search_code",
+		"query":  "main",
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "search_codebase:")
+	assert.Contains(t, err.Error(), "GitHub App not configured")
+	assert.Empty(t, result)
+}
+
+func TestDispatch_SearchCodebase_MissingAction(t *testing.T) {
+	agent := newToolTestAgent()
+	ctx := context.Background()
+	userID := uuid.New()
+
+	// search_codebase without an action parameter should fail,
+	// confirming it routes through to toolSearchCodebase (not the
+	// nil-client check since that fires first for our test agent).
+	result, err := agent.Dispatch(ctx, userID, uuid.Nil, "search_codebase", map[string]any{})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "search_codebase:")
 	assert.Empty(t, result)
 }
 
@@ -64,7 +98,7 @@ func TestDispatch_QueryDatabase(t *testing.T) {
 	// the connection from DB via stubDBTX. The stub returns an error,
 	// confirming that dispatch correctly routed to the query_database
 	// implementation.
-	result, err := agent.Dispatch(ctx, userID, "query_database", map[string]any{
+	result, err := agent.Dispatch(ctx, userID, uuid.Nil, "query_database", map[string]any{
 		"sql":           "SELECT 1",
 		"connection_id": connID.String(),
 	})

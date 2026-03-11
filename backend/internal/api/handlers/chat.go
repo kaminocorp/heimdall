@@ -54,6 +54,15 @@ func (s *Server) HandleChat(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.CloseNow()
 
+	// Parse optional app_id for app-scoped tools (e.g. search_codebase).
+	var appID uuid.UUID
+	if appIDStr := r.URL.Query().Get("app_id"); appIDStr != "" {
+		parsed, err := uuid.Parse(appIDStr)
+		if err == nil {
+			appID = parsed
+		}
+	}
+
 	ctx := r.Context()
 
 	// Load or create conversation.
@@ -164,7 +173,7 @@ func (s *Server) HandleChat(w http.ResponseWriter, r *http.Request) {
 		history := toAgentHistory(storedMessages[:len(storedMessages)-1])
 
 		// Run agent with conversation history.
-		response, err := s.Agent.RunConversation(ctx, userID, &convID, history, msg.Content)
+		response, err := s.Agent.RunConversation(ctx, userID, appID, &convID, history, msg.Content)
 		if err != nil {
 			slog.Error("agent error", "err", err, "user_id", userID, "conversation_id", convID)
 			if writeErr := wsjson.Write(ctx, conn, map[string]string{

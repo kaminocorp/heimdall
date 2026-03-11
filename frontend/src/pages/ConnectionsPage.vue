@@ -1,18 +1,24 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useConnectionsStore } from '@/stores/connections'
 import { useAppStore } from '@/stores/app'
 import { listConnectionsByApp } from '@/api/applications'
 import type { Connection, CreateConnectionPayload } from '@/types/connection'
 import ConnectionList from '@/components/connections/ConnectionList.vue'
 import ConnectionForm from '@/components/connections/ConnectionForm.vue'
+import GitHubRepoSelector from '@/components/connections/GitHubRepoSelector.vue'
 import SkeletonBlock from '@/components/common/SkeletonBlock.vue'
 
 const store = useConnectionsStore()
 const appStore = useAppStore()
+const route = useRoute()
+const router = useRouter()
 const showForm = ref(false)
 const editingConnection = ref<Connection | null>(null)
 const actionError = ref<string | null>(null)
+const repoSelectorConnectionId = ref<string | null>(null)
+const githubInstalledMessage = ref<string | null>(null)
 
 async function fetchAppConnections() {
   const appId = appStore.currentAppId
@@ -28,7 +34,22 @@ async function fetchAppConnections() {
   }
 }
 
-onMounted(fetchAppConnections)
+onMounted(async () => {
+  await fetchAppConnections()
+
+  // Handle ?github=installed redirect from callback.
+  if (route.query.github === 'installed') {
+    githubInstalledMessage.value = 'GitHub App installed successfully. Select which repositories Heimdall can access.'
+    // Find the newly created GitHub connection and open repo selector.
+    const ghConn = store.connections.find(c => c.type === 'github')
+    if (ghConn) {
+      repoSelectorConnectionId.value = ghConn.id
+    }
+    // Clean up query param.
+    router.replace({ query: {} })
+  }
+})
+
 watch(() => appStore.currentAppId, fetchAppConnections)
 
 function openCreate() {
@@ -95,6 +116,16 @@ async function handleDelete(id: string) {
     actionError.value = e.response?.data?.error ?? 'Failed to delete connection'
   }
 }
+
+function openRepoSelector(connectionId: string) {
+  repoSelectorConnectionId.value = connectionId
+}
+
+function closeRepoSelector() {
+  repoSelectorConnectionId.value = null
+  githubInstalledMessage.value = null
+  fetchAppConnections()
+}
 </script>
 
 <template>
@@ -114,9 +145,22 @@ async function handleDelete(id: string) {
       </button>
     </div>
 
+    <!-- GitHub installed success banner -->
+    <div v-if="githubInstalledMessage" class="mb-4 rounded border border-accent/30 bg-accent/10 px-4 py-2 text-sm font-mono text-accent">
+      {{ githubInstalledMessage }}
+    </div>
+
     <div v-if="actionError" class="mb-4 rounded border border-status-critical/30 bg-status-critical/10 px-4 py-2 text-sm font-mono text-status-critical">
       {{ actionError }}
     </div>
+
+    <!-- Repo selector -->
+    <GitHubRepoSelector
+      v-if="repoSelectorConnectionId"
+      :connection-id="repoSelectorConnectionId"
+      class="mb-6"
+      @close="closeRepoSelector"
+    />
 
     <ConnectionForm
       v-if="showForm"
@@ -135,6 +179,6 @@ async function handleDelete(id: string) {
       </div>
     </div>
     <div v-else-if="store.error" class="text-status-critical text-sm font-mono">{{ store.error }}</div>
-    <ConnectionList v-else :connections="store.connections" :testing-id="store.testingId" @delete="handleDelete" @edit="openEdit" @test="handleTest" />
+    <ConnectionList v-else :connections="store.connections" :testing-id="store.testingId" @delete="handleDelete" @edit="openEdit" @test="handleTest" @manage-repos="openRepoSelector" />
   </div>
 </template>

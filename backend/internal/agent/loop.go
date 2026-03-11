@@ -19,13 +19,14 @@ const maxIterations = 10
 // RunLoop executes the agent's tool-use loop for a single input with no prior history.
 // It delegates to RunConversation with an empty history.
 func (a *Agent) RunLoop(ctx context.Context, userID uuid.UUID, input string) (string, error) {
-	return a.RunConversation(ctx, userID, nil, nil, input)
+	return a.RunConversation(ctx, userID, uuid.Nil, nil, nil, input)
 }
 
 // RunConversation executes the agent's tool-use loop with full conversation history.
 // Prior messages are converted to Claude message params so the agent has multi-turn context.
 // conversationID is optional — when provided, agent observations are emitted to agent_log.
-func (a *Agent) RunConversation(ctx context.Context, userID uuid.UUID, conversationID *uuid.UUID, history []Message, input string) (string, error) {
+// appID is optional — when provided, enables app-scoped tools like search_codebase.
+func (a *Agent) RunConversation(ctx context.Context, userID uuid.UUID, appID uuid.UUID, conversationID *uuid.UUID, history []Message, input string) (string, error) {
 	// Load agent config from DB (fallback to defaults if no row).
 	model := anthropic.ModelClaudeSonnet4_5
 	systemOverride := ""
@@ -124,7 +125,7 @@ func (a *Agent) RunConversation(ctx context.Context, userID uuid.UUID, conversat
 					)
 
 					slog.Info("agent dispatching tool", "tool", tu.Name, "user_id", userID)
-					result, err := a.Dispatch(ctx, userID, tu.Name, toolInput)
+					result, err := a.Dispatch(ctx, userID, appID, tu.Name, toolInput)
 					if err != nil {
 						slog.Warn("agent tool error", "tool", tu.Name, "err", err)
 						toolResults = append(toolResults, anthropic.NewToolResultBlock(
@@ -243,7 +244,7 @@ func (a *Agent) RunMonitoring(ctx context.Context, userID uuid.UUID, appConfig d
 					)
 
 					slog.Info("monitoring dispatching tool", "tool", tu.Name, "app_id", appConfig.AppID)
-					result, err := a.Dispatch(ctx, userID, tu.Name, toolInput)
+					result, err := a.Dispatch(ctx, userID, appConfig.AppID, tu.Name, toolInput)
 					if err != nil {
 						slog.Warn("monitoring tool error", "tool", tu.Name, "err", err)
 						toolResults = append(toolResults, anthropic.NewToolResultBlock(

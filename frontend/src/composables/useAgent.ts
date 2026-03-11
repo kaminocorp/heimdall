@@ -2,9 +2,11 @@ import { ref, watch } from 'vue'
 import type { ChatMessage } from '@/types/agent'
 import { useWebSocket } from './useWebSocket'
 import { useAuthStore } from '@/stores/auth'
+import { useAppStore } from '@/stores/app'
 
 export function useAgent(existingConversationId?: string) {
   const auth = useAuthStore()
+  const appStore = useAppStore()
   const messages = ref<ChatMessage[]>([])
   const conversationId = ref<string | null>(existingConversationId ?? null)
   const isThinking = ref(false)
@@ -15,6 +17,7 @@ export function useAgent(existingConversationId?: string) {
   const { data, status, send } = useWebSocket(wsUrl, {
     token: auth.token ?? undefined,
     conversationId: existingConversationId,
+    appId: appStore.currentAppId ?? undefined,
   })
 
   watch(data, (raw) => {

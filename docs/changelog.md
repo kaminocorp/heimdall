@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.16.0 — GitHub App Integration](#0160--github-app-integration-2026-03-11)
 - [0.15.1 — Notifications Build Fix](#0151--notifications-build-fix-2026-03-11)
 - [0.15.0 — Notifications & Escalation](#0150--notifications--escalation-2026-03-11)
 - [0.14.5 — Logo & Favicon](#0145--logo--favicon-2026-03-11)
@@ -39,6 +40,166 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.16.0 — GitHub App Integration (2026-03-11)
+
+Heimdall can now read your code. Connect a GitHub organization via a first-party GitHub App, select which repositories the agent can access, and Heimdall gains a `search_codebase` tool — code search, file reading, and tree listing — available in both interactive chat and the monitoring loop. When the agent investigates an anomaly, it can now trace errors back to the source.
+
+### Why
+
+Heimdall could search logs and query databases, but had no way to look at the code behind the systems it monitors. When the monitoring agent flagged an error spike, it could describe *what* happened but not *why* — it couldn't inspect the handler that returned 500s, the config that changed, or the migration that ran. GitHub App integration closes that gap: the agent can now correlate runtime behavior with source code.
+
+### Architecture
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  GitHub App Installation Flow                                     │
+│                                                                   │
+│  Frontend                    Backend                   GitHub     │
+│  ────────                    ───────                   ──────     │
+│  "Install GitHub App" ──→ GET /github/install                     │
+│                           (generate state JWT) ──→ redirect to    │
+│                                                   github.com/apps │
+│                           ←── GET /github/callback ←── redirect   │
+│                           (validate state JWT,                    │
+│                            verify installation,                   │
+│                            create connection)                     │
+│  /connections?github=installed ←── 302 redirect                   │
+│  (auto-open repo selector)                                        │
+└──────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────┐
+│  Agent Tool: search_codebase                                      │
+│                                                                   │
+│  Agent Loop ──→ Dispatch("search_codebase", {action, query, ...}) │
+│                   │                                               │
+│                   ├─ ListEnabledGitHubReposByApp(appID)           │
+│                   ├─ Create codebase.GitHub connector              │
+│                   ├─ Connect() → InstallationTokenFor() [cached]  │
+│                   └─ Query() ──→ GitHub API                       │
+│                        ├─ search_code  → GET /search/code         │
+│                        ├─ read_file    → GET /repos/.../contents  │
+│                        └─ list_tree    → GET /repos/.../git/trees │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+**Key design decisions:**
+
+- **GitHub App, not PATs.** Organization-scoped installation with fine-grained repo permissions. Tokens are short-lived (1 hour) and cached in-memory with a 5-minute refresh margin. No long-lived secrets stored per-user.
+- **State JWT for OAuth callback.** The install flow redirects through GitHub and back. The callback authenticates via a signed RS256 JWT (15-minute expiry, nonce) embedded in the `state` parameter — no session cookie required.
+- **Nil-safe client.** If `GITHUB_APP_ID` is unset, the client is `nil` and the entire integration is disabled. All consumers check for nil before use, matching the existing `notifier` pattern.
+- **Connector, not direct API.** The GitHub connector implements `QueryConnector`, the same interface as the Postgres connector. The agent tool doesn't know it's talking to GitHub — it marshals an action and calls `Query()`.
+
+### Database (Migration 020)
+
+One new table:
+
+- **`github_repos`** — Per-connection repository tracking. Links a `connection_id` to a GitHub `repo_id` with an `enabled` toggle. Unique index on `(connection_id, repo_id)` for upsert semantics. RLS policy scopes access via the parent connection's `user_id`.
+
+4 sqlc queries: list by connection, upsert, delete, and list enabled repos by app (JOIN through connections for the agent tool).
+
+### Backend — GitHub Client (`internal/github/client.go`)
+
+Core GitHub App authentication:
+
+- **RSA private key** loading from env var (raw PEM) or file path
+- **JWT generation** — RS256, `iss` = App ID, 10-minute expiry per GitHub spec
+- **Installation token cache** — `sync.RWMutex`-protected map, keyed by installation ID, auto-refreshes 5 minutes before expiry
+- **Authenticated API requests** — `APIRequest()` with `context.Context`, `X-GitHub-Api-Version` header, 10-second timeout
+
+### Backend — GitHub Connector (`internal/connectors/codebase/github.go`)
+
+Implements `QueryConnector` with three actions:
+
+| Action | GitHub API | Guardrails |
+|--------|-----------|------------|
+| `search_code` | `GET /search/code` | 20 results max, 20 `repo:` qualifiers max, `url.Values` encoding |
+| `read_file` | `GET /repos/.../contents` | Skip >1MB, truncate >50KB, binary detection, per-segment path escaping |
+| `list_tree` | `GET /repos/.../git/trees?recursive=1` | 5,000 entries max, 10-second timeout |
+
+All API calls route through `ghClient.APIRequest()` for consistent headers, timeouts, and `io.LimitReader` (5MB cap).
+
+### Backend — Agent Tool Integration
+
+- **`tools.go`** — `search_codebase` added to `ToolRegistry()` and `Dispatch()`. Breaking change: `Dispatch` signature now includes `appID uuid.UUID` for app-scoped tool access.
+- **`tools_codebase.go`** — Loads enabled repos from DB, creates connector, executes query. Returns JSON results following the error-as-tool-result pattern.
+- **`loop.go`** — `RunConversation` accepts `appID`; monitoring mode passes `appConfig.AppID`.
+- **`prompt.go`** — Both system prompts updated to mention `search_codebase`.
+
+### Backend — API Endpoints
+
+| Method | Path | Auth | Purpose |
+|--------|------|------|---------|
+| `GET` | `/api/github/install?app_id={id}` | JWT | Returns GitHub App install URL with signed state |
+| `GET` | `/api/github/callback` | State JWT | Handles post-install redirect, creates/updates connection |
+| `GET` | `/api/connections/{id}/github/repos` | JWT | Lists repos from GitHub API, merged with DB enabled state |
+| `PUT` | `/api/connections/{id}/github/repos` | JWT | Upserts repo enabled/disabled state |
+
+`TestConnection` extended to handle `type="github"` — verifies installation token validity.
+
+### Frontend
+
+- **`ConnectionForm.vue`** — GitHub type shows "Install GitHub App" button instead of config fields. Redirects browser to GitHub install URL.
+- **`GitHubRepoSelector.vue`** — Fetches repos, shows toggle checkboxes with branch badges, scrollable list (max 320px), save/cancel.
+- **`ConnectionCard.vue`** — "Repos" button for GitHub connections.
+- **`ConnectionsPage.vue`** — Handles `?github=installed` redirect (success banner, auto-opens repo selector).
+- **`useWebSocket.ts`** — Added `appId` to WebSocket options, passed as `?app_id=` query param.
+- **`useAgent.ts`** — Passes `currentAppId` from Pinia store to WebSocket connection.
+
+### Production Hardening (3 rounds, 20 fixes)
+
+| Round | Fixes | Key Items |
+|-------|-------|-----------|
+| 1 (7.5→8.5) | 7 | RLS policy on `github_repos`, configurable app slug, error propagation on duplicate check, user-scoped queries for repo operations, dedicated HTTP client, context propagation, pagination bound |
+| 2 (8.5→9) | 8 | **Callback route moved to public group** (was blocked by JWT middleware), search query double-encoding fix, `context.Context` on all GitHub API methods, DB error returns 500 (not silent continue), `io.LimitReader` on request body, unified connector HTTP client, per-segment path escaping |
+| 3 (9→9.5) | 5 | Callback `UserQueries()` consistency, search query length bound (20 repos), `io.ReadAll` error check, dispatch routing tests for `search_codebase` |
+
+### Environment Variables
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `GITHUB_APP_ID` | No | — | GitHub App ID (numeric). If empty, integration is disabled. |
+| `GITHUB_PRIVATE_KEY` | No | — | RSA private key (PEM string or file path) |
+| `GITHUB_CLIENT_ID` | No | — | GitHub App client ID |
+| `GITHUB_APP_SLUG` | No | `heimdall-agent` | GitHub App URL slug |
+| `GITHUB_WEBHOOK_SECRET` | No | — | Webhook secret (reserved for future use) |
+
+### Files Changed
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `backend/internal/github/client.go` | New — GitHub App client: JWT generation, installation token cache, authenticated API requests |
+| 2 | `backend/internal/connectors/codebase/github.go` | Rewrite — QueryConnector with search_code, read_file, list_tree via GitHub API |
+| 3 | `backend/internal/connectors/codebase/github_test.go` | Updated — nil client error test |
+| 4 | `backend/internal/api/handlers/github.go` | New — InstallGitHub, GitHubCallback, ListGitHubRepos, UpdateGitHubRepos, TestGitHubConnection |
+| 5 | `backend/internal/api/handlers/server.go` | Add `GitHub *github.Client` field to Server struct |
+| 6 | `backend/internal/api/handlers/connections.go` | TestConnection handles `type="github"` |
+| 7 | `backend/internal/api/handlers/chat.go` | Parse `app_id` from WebSocket query param, pass to RunConversation |
+| 8 | `backend/internal/api/router.go` | Register GitHub routes; callback in public group, install in protected group |
+| 9 | `backend/internal/agent/agent.go` | Add `githubClient` field; updated New() signature |
+| 10 | `backend/internal/agent/tools.go` | Add `search_codebase` to ToolRegistry and Dispatch; appID parameter |
+| 11 | `backend/internal/agent/tools_codebase.go` | New — toolSearchCodebase implementation |
+| 12 | `backend/internal/agent/loop.go` | RunConversation accepts appID; monitoring passes appConfig.AppID |
+| 13 | `backend/internal/agent/prompt.go` | Both system prompts mention search_codebase |
+| 14 | `backend/internal/agent/tools_test.go` | Add SearchCodebase dispatch tests; updated existing tests with appID |
+| 15 | `backend/internal/config/config.go` | Add 5 GitHub env vars |
+| 16 | `backend/cmd/heimdall/main.go` | Conditional GitHub client init; pass to agent and router |
+| 17 | `backend/migrations/020_github_repos.up.sql` | New — github_repos table with RLS |
+| 18 | `backend/migrations/020_github_repos.down.sql` | New — drop table |
+| 19 | `backend/internal/db/queries/github_repos.sql` | New — 4 queries |
+| 20 | `backend/internal/db/github_repos.sql.go` | Regenerated — sqlc |
+| 21 | `backend/internal/db/models.go` | Regenerated — GithubRepo model |
+| 22 | `frontend/src/types/github.ts` | New — GitHubRepo interface |
+| 23 | `frontend/src/api/github.ts` | New — getGitHubInstallURL, listGitHubRepos, updateGitHubRepos |
+| 24 | `frontend/src/components/connections/GitHubRepoSelector.vue` | New — repo toggle list with save/cancel |
+| 25 | `frontend/src/components/connections/ConnectionForm.vue` | GitHub type shows install button instead of config fields |
+| 26 | `frontend/src/components/connections/ConnectionCard.vue` | "Repos" button for GitHub connections |
+| 27 | `frontend/src/components/connections/ConnectionList.vue` | manage-repos event passthrough |
+| 28 | `frontend/src/pages/ConnectionsPage.vue` | GitHub installed banner, auto-open repo selector |
+| 29 | `frontend/src/composables/useWebSocket.ts` | Add appId to WebSocket options |
+| 30 | `frontend/src/composables/useAgent.ts` | Pass currentAppId to WebSocket |
 
 ---
 

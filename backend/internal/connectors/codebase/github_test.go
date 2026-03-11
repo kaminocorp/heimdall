@@ -1,10 +1,15 @@
 package codebase
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
-func TestNewGitHub(t *testing.T) {
-	g := NewGitHub()
-	if g == nil {
-		t.Fatal("expected non-nil GitHub connector")
+func TestNew(t *testing.T) {
+	// Without a GitHub client, New should return an error.
+	config := json.RawMessage(`{"installation_id": 12345}`)
+	_, err := New(config, nil, nil)
+	if err == nil {
+		t.Fatal("expected error when GitHub client is nil")
 	}
 }

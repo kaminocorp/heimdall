@@ -3,6 +3,7 @@ import { ref, onUnmounted } from 'vue'
 export interface WebSocketOptions {
   token?: string
   conversationId?: string
+  appId?: string
 }
 
 export function useWebSocket(url: string, options?: WebSocketOptions) {
@@ -17,6 +18,9 @@ export function useWebSocket(url: string, options?: WebSocketOptions) {
     }
     if (options?.conversationId) {
       u.searchParams.set('conversation_id', options.conversationId)
+    }
+    if (options?.appId) {
+      u.searchParams.set('app_id', options.appId)
     }
     return u.toString()
   }
