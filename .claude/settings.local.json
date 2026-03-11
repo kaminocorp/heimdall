@@ -63,7 +63,8 @@
       "WebFetch(domain:spacex.com)",
       "WebFetch(domain:nousresearch.com)",
       "WebFetch(domain:teenage.engineering)",
-      "Bash(HERO_DIR=\"/Users/philippholke/Crimson Sun/heimdall/frontend/public/images/hero\" && SRC=\"$HERO_DIR/pgbouncer_httpss.mj.rungbr5AVVatjQ_httpss.mj.runTHeWvkIcrl0_Ret_08b20293-c603-45a3-b072-86d679028cb0.png\" && sips -g pixelWidth -g pixelHeight \"$SRC\" 2>&1)"
+      "Bash(HERO_DIR=\"/Users/philippholke/Crimson Sun/heimdall/frontend/public/images/hero\" && SRC=\"$HERO_DIR/pgbouncer_httpss.mj.rungbr5AVVatjQ_httpss.mj.runTHeWvkIcrl0_Ret_08b20293-c603-45a3-b072-86d679028cb0.png\" && sips -g pixelWidth -g pixelHeight \"$SRC\" 2>&1)",
+      "Bash(cd \"/Users/philippholke/Crimson Sun/heimdall\" && make build-frontend 2>&1)"
     ]
   }
 }

@@ -84,8 +84,8 @@ async function handleSubmit() {
 <style scoped>
 .bg-grid {
   background-image:
-    linear-gradient(rgba(90, 158, 106, 0.4) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(90, 158, 106, 0.4) 1px, transparent 1px);
+    linear-gradient(rgba(77, 93, 83, 0.4) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(77, 93, 83, 0.4) 1px, transparent 1px);
   background-size: 40px 40px;
 }
 </style>

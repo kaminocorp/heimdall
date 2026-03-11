@@ -140,9 +140,9 @@ onMounted(() => {
         if (scanGlow > 0.1) {
           // Green — blend toward accent color
           const g = scanGlow
-          data[idx]     = (220 * (1 - g) + 90 * g) | 0   // R
-          data[idx + 1] = (225 * (1 - g) + 158 * g) | 0  // G
-          data[idx + 2] = (220 * (1 - g) + 106 * g) | 0  // B
+          data[idx]     = (220 * (1 - g) + 77 * g) | 0   // R
+          data[idx + 1] = (225 * (1 - g) + 93 * g) | 0   // G
+          data[idx + 2] = (220 * (1 - g) + 83 * g) | 0   // B
           data[idx + 3] = Math.min(255, alpha * (1 + scanGlow * 0.5)) | 0
 
           // Glow halo: write surrounding pixels for anomaly peaks
@@ -156,9 +156,9 @@ onMounted(() => {
                 if (gx < 0 || gx >= pw || gy < 0 || gy >= ph) continue
                 const gi = (gy * pw + gx) * 4
                 // Additive blend
-                data[gi]     = Math.min(255, data[gi] + 30)
-                data[gi + 1] = Math.min(255, data[gi + 1] + 55)
-                data[gi + 2] = Math.min(255, data[gi + 2] + 35)
+                data[gi]     = Math.min(255, data[gi] + 25)
+                data[gi + 1] = Math.min(255, data[gi + 1] + 32)
+                data[gi + 2] = Math.min(255, data[gi + 2] + 28)
                 data[gi + 3] = Math.min(255, data[gi + 3] + ga)
               }
             }

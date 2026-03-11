@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.14.4 — Feldgrau Colour Theme](#0144--feldgrau-colour-theme-2026-03-11)
 - [0.14.3 — Public Layout, Heading & Mesh Refinement](#0143--public-layout-heading--mesh-refinement-2026-03-10)
 - [0.14.2 — Hero Mesh Animation](#0142--hero-mesh-animation-2026-03-10)
 - [0.14.1 — Public Site Header & Footer Redesign](#0141--public-site-header--footer-redesign-2026-03-10)
@@ -35,6 +36,41 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.14.4 — Feldgrau Colour Theme (2026-03-11)
+
+Shifted the entire colour palette from vivid sage green to feldgrau — a desaturated, military grey-green inspired by German field uniforms.
+
+### Why
+
+The original accent (`#5a9e6a`) read as "forest / nature" — too organic for a surveillance-themed monitoring tool. Feldgrau (`#4d5d53`) drops saturation from ~40% to ~12%, producing a steely grey-green that reinforces the techno-brutalist, command-terminal aesthetic.
+
+### Changes
+
+- **Design tokens** — All 15 CSS custom properties in `:root` updated: accent, accent-hover, accent-bright, accent-subtle, accent-border, border, border-hover, status-ok. Background and text tokens shifted from green undertones to neutral grey-green.
+- **Scrollbar, selection, focus ring, glow** — Hardcoded `rgba(90, 158, 106, …)` values in `main.css` replaced with `rgba(77, 93, 83, …)`.
+- **HeroMesh pixel renderer** — Scan glow RGB blend target updated from `(90, 158, 106)` to `(77, 93, 83)`. Anomaly halo additive tints rebalanced for the lower-saturation palette.
+- **LoginPage grid pattern** — Background grid lines updated to feldgrau RGBA.
+
+### Colour Mapping
+
+| Token | Before | After |
+|-------|--------|-------|
+| `--accent` | `#5a9e6a` | `#4d5d53` |
+| `--accent-hover` | `#4a8c5a` | `#5a6e62` |
+| `--accent-bright` | `#7ab889` | `#6e8578` |
+| `--bg-primary` | `#060806` | `#070808` |
+| `--text-secondary` | `#8a9a8a` | `#8a938e` |
+
+### Files Changed
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `frontend/src/assets/styles/main.css` | All design tokens + hardcoded RGBA values shifted to feldgrau |
+| 2 | `frontend/src/components/public/HeroMesh.vue` | Scan glow and halo RGB values updated |
+| 3 | `frontend/src/pages/LoginPage.vue` | Grid pattern RGBA updated |
 
 ---
 
