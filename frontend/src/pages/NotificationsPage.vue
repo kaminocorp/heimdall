@@ -48,6 +48,13 @@ const formRecipients = ref('')
 
 const testingChannelId = ref<string | null>(null)
 
+function channelConfigSummary(ch: NotificationChannel): string {
+  if (ch.type === 'email') {
+    return (ch.config as { recipients: string[] }).recipients.join(', ')
+  }
+  return (ch.config as { webhook_url: string }).webhook_url
+}
+
 const thresholdOptions = [
   { label: 'Info+', value: 'info' },
   { label: 'Warning+', value: 'warning' },
@@ -487,8 +494,7 @@ watch(() => appStore.currentAppId, () => {
                 />
               </div>
               <p class="font-mono text-[11px] text-text-muted mt-0.5 truncate">
-                <template v-if="ch.type === 'email'">{{ (ch.config as { recipients: string[] }).recipients.join(', ') }}</template>
-                <template v-else>{{ (ch.config as { webhook_url: string }).webhook_url }}</template>
+                {{ channelConfigSummary(ch) }}
               </p>
             </div>
 

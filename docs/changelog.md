@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.15.1 — Notifications Build Fix](#0151--notifications-build-fix-2026-03-11)
 - [0.15.0 — Notifications & Escalation](#0150--notifications--escalation-2026-03-11)
 - [0.14.5 — Logo & Favicon](#0145--logo--favicon-2026-03-11)
 - [0.14.4 — Feldgrau Colour Theme](#0144--feldgrau-colour-theme-2026-03-11)
@@ -38,6 +39,20 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.15.1 — Notifications Build Fix (2026-03-11)
+
+Fixed a `vue-tsc` build failure in `NotificationsPage.vue` caused by inline `as` type assertions in the template. Vue's template compiler doesn't support TypeScript cast syntax — expressions like `(ch.config as { recipients: string[] }).recipients.join(', ')` produce parse errors during `vue-tsc -b`.
+
+Extracted a `channelConfigSummary()` helper in the `<script setup>` block that performs the same type narrowing, replacing the two `<template v-if/v-else>` branches with a single `{{ channelConfigSummary(ch) }}` interpolation.
+
+### Files Changed
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `frontend/src/pages/NotificationsPage.vue` | Add `channelConfigSummary()` helper; simplify channel config display in template |
 
 ---
 
