@@ -15,14 +15,14 @@ func (s *Server) GetDashboardStats(w http.ResponseWriter, r *http.Request) {
 	}
 	queries, done, err := s.UserQueries(r.Context(), userID)
 	if err != nil {
-		jsonError(w, "internal error", http.StatusInternalServerError)
+		jsonServerError(w, "internal error", err)
 		return
 	}
 	defer done()
 
 	stats, err := queries.GetDashboardStats(r.Context(), userID)
 	if err != nil {
-		jsonError(w, "failed to fetch stats", http.StatusInternalServerError)
+		jsonServerError(w, "failed to fetch stats", err)
 		return
 	}
 

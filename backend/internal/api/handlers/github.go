@@ -67,8 +67,7 @@ func (s *Server) InstallGitHub(w http.ResponseWriter, r *http.Request) {
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	stateStr, err := token.SignedString(s.GitHub.PrivateKey())
 	if err != nil {
-		slog.Error("github: failed to sign state JWT", "err", err)
-		jsonError(w, "failed to generate install URL", http.StatusInternalServerError)
+		jsonServerError(w, "failed to generate install URL", err)
 		return
 	}
 
@@ -139,7 +138,7 @@ func (s *Server) GitHubCallback(w http.ResponseWriter, r *http.Request) {
 	// Verify app belongs to user's org (user-scoped query).
 	queries, done, err := s.UserQueries(r.Context(), userID)
 	if err != nil {
-		jsonError(w, "database error", http.StatusInternalServerError)
+		jsonServerError(w, "database error", err)
 		return
 	}
 	defer done()
@@ -175,15 +174,14 @@ func (s *Server) GitHubCallback(w http.ResponseWriter, r *http.Request) {
 		"account_type":    accountType,
 	})
 	if err != nil {
-		jsonError(w, "failed to build config", http.StatusInternalServerError)
+		jsonServerError(w, "failed to build config", err)
 		return
 	}
 
 	// Check for existing GitHub connection with same installation_id for this app.
 	existingConns, err := queries.ListConnectionsByApp(r.Context(), appID)
 	if err != nil {
-		slog.Error("github callback: failed to list connections", "err", err)
-		jsonError(w, "database error", http.StatusInternalServerError)
+		jsonServerError(w, "database error", err)
 		return
 	}
 
@@ -214,8 +212,7 @@ func (s *Server) GitHubCallback(w http.ResponseWriter, r *http.Request) {
 			UserID:    userID,
 		})
 		if err != nil {
-			slog.Error("github callback: failed to update connection", "err", err)
-			jsonError(w, "failed to update connection", http.StatusInternalServerError)
+			jsonServerError(w, "failed to update connection", err)
 			return
 		}
 		slog.Info("github callback: updated existing connection",
@@ -232,8 +229,7 @@ func (s *Server) GitHubCallback(w http.ResponseWriter, r *http.Request) {
 			Status:    "active",
 		})
 		if err != nil {
-			slog.Error("github callback: failed to create connection", "err", err)
-			jsonError(w, "failed to create connection", http.StatusInternalServerError)
+			jsonServerError(w, "failed to create connection", err)
 			return
 		}
 		slog.Info("github callback: created new connection",
@@ -268,7 +264,7 @@ func (s *Server) ListGitHubRepos(w http.ResponseWriter, r *http.Request) {
 
 	queries, done, err := s.UserQueries(r.Context(), userID)
 	if err != nil {
-		jsonError(w, "database error", http.StatusInternalServerError)
+		jsonServerError(w, "database error", err)
 		return
 	}
 	defer done()
@@ -290,7 +286,7 @@ func (s *Server) ListGitHubRepos(w http.ResponseWriter, r *http.Request) {
 	// Parse installation_id from config.
 	var cfg map[string]any
 	if err := json.Unmarshal(conn.Config, &cfg); err != nil {
-		jsonError(w, "invalid connection config", http.StatusInternalServerError)
+		jsonServerError(w, "invalid connection config", err)
 		return
 	}
 	installationID, ok := cfg["installation_id"].(float64)
@@ -348,7 +344,7 @@ func (s *Server) ListGitHubRepos(w http.ResponseWriter, r *http.Request) {
 			} `json:"repositories"`
 		}
 		if err := json.Unmarshal(body, &result); err != nil {
-			jsonError(w, "failed to parse GitHub response", http.StatusInternalServerError)
+			jsonServerError(w, "failed to parse GitHub response", err)
 			return
 		}
 
@@ -374,8 +370,7 @@ func (s *Server) ListGitHubRepos(w http.ResponseWriter, r *http.Request) {
 	// Merge with DB state.
 	dbRepos, err := queries.ListGitHubReposByConnection(r.Context(), connID)
 	if err != nil {
-		slog.Error("github: failed to list db repos", "err", err)
-		jsonError(w, "failed to load repo state", http.StatusInternalServerError)
+		jsonServerError(w, "failed to load repo state", err)
 		return
 	}
 	enabledMap := make(map[int64]bool, len(dbRepos))
@@ -412,7 +407,7 @@ func (s *Server) UpdateGitHubRepos(w http.ResponseWriter, r *http.Request) {
 
 	queries, done, err := s.UserQueries(r.Context(), userID)
 	if err != nil {
-		jsonError(w, "database error", http.StatusInternalServerError)
+		jsonServerError(w, "database error", err)
 		return
 	}
 	defer done()
@@ -451,8 +446,7 @@ func (s *Server) UpdateGitHubRepos(w http.ResponseWriter, r *http.Request) {
 			Enabled:       repo.Enabled,
 		})
 		if err != nil {
-			slog.Error("github: failed to upsert repo", "err", err, "repo", repo.RepoFullName)
-			jsonError(w, "failed to update repos", http.StatusInternalServerError)
+			jsonServerError(w, "failed to update repos", err)
 			return
 		}
 	}

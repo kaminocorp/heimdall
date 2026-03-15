@@ -75,7 +75,7 @@ func (s *Server) UpdateNotificationPreferences(w http.ResponseWriter, r *http.Re
 		CooldownMinutes:   req.CooldownMinutes,
 	})
 	if err != nil {
-		jsonError(w, "failed to update notification preferences", http.StatusInternalServerError)
+		jsonServerError(w, "failed to update notification preferences", err)
 		return
 	}
 
@@ -93,7 +93,7 @@ func (s *Server) ListNotificationChannels(w http.ResponseWriter, r *http.Request
 
 	channels, err := s.Queries.ListNotificationChannelsByApp(r.Context(), app.ID)
 	if err != nil {
-		jsonError(w, "failed to list notification channels", http.StatusInternalServerError)
+		jsonServerError(w, "failed to list notification channels", err)
 		return
 	}
 	if channels == nil {
@@ -149,7 +149,7 @@ func (s *Server) CreateNotificationChannel(w http.ResponseWriter, r *http.Reques
 		Enabled: enabled,
 	})
 	if err != nil {
-		jsonError(w, "failed to create notification channel", http.StatusInternalServerError)
+		jsonServerError(w, "failed to create notification channel", err)
 		return
 	}
 
@@ -209,7 +209,7 @@ func (s *Server) UpdateNotificationChannel(w http.ResponseWriter, r *http.Reques
 		Enabled: req.Enabled,
 	})
 	if err != nil {
-		jsonError(w, "failed to update notification channel", http.StatusInternalServerError)
+		jsonServerError(w, "failed to update notification channel", err)
 		return
 	}
 
@@ -240,7 +240,7 @@ func (s *Server) DeleteNotificationChannel(w http.ResponseWriter, r *http.Reques
 	}
 
 	if err := s.Queries.DeleteNotificationChannel(r.Context(), channelID); err != nil {
-		jsonError(w, "failed to delete notification channel", http.StatusInternalServerError)
+		jsonServerError(w, "failed to delete notification channel", err)
 		return
 	}
 
@@ -319,7 +319,7 @@ func (s *Server) ListNotificationHistory(w http.ResponseWriter, r *http.Request)
 		Offset: offset,
 	})
 	if err != nil {
-		jsonError(w, "failed to list notification history", http.StatusInternalServerError)
+		jsonServerError(w, "failed to list notification history", err)
 		return
 	}
 	if history == nil {

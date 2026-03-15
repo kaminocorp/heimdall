@@ -27,7 +27,7 @@ func (s *Server) ListConversations(w http.ResponseWriter, r *http.Request) {
 
 	queries, done, err := s.UserQueries(r.Context(), userID)
 	if err != nil {
-		jsonError(w, "database error", http.StatusInternalServerError)
+		jsonServerError(w, "database error", err)
 		return
 	}
 	defer done()
@@ -38,7 +38,7 @@ func (s *Server) ListConversations(w http.ResponseWriter, r *http.Request) {
 		Offset: 0,
 	})
 	if err != nil {
-		jsonError(w, "failed to list conversations", http.StatusInternalServerError)
+		jsonServerError(w, "failed to list conversations", err)
 		return
 	}
 
@@ -70,7 +70,7 @@ func (s *Server) GetConversation(w http.ResponseWriter, r *http.Request) {
 
 	queries, done, err := s.UserQueries(r.Context(), userID)
 	if err != nil {
-		jsonError(w, "database error", http.StatusInternalServerError)
+		jsonServerError(w, "database error", err)
 		return
 	}
 	defer done()

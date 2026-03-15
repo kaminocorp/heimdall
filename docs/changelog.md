@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.16.1 — Server-Side Error Logging](#0161--server-side-error-logging-2026-03-15)
 - [0.16.0 — GitHub App Integration](#0160--github-app-integration-2026-03-11)
 - [0.15.1 — Notifications Build Fix](#0151--notifications-build-fix-2026-03-11)
 - [0.15.0 — Notifications & Escalation](#0150--notifications--escalation-2026-03-11)
@@ -40,6 +41,59 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.16.1 — Server-Side Error Logging (2026-03-15)
+
+A `GET /api/logs` 500 surfaced in production with no server-side trace — the `jsonError` helper was sending generic messages to clients but silently discarding the actual Go `err`. This patch closes that observability gap across all handlers.
+
+### Why
+
+Every `jsonError(w, "failed to ...", 500)` call swallowed the real error. The logging middleware only captured method, path, status, and duration — no error details, no query params. When the `/api/logs` endpoint returned 500 after a fresh onboarding, the Fly.io logs showed `status=500` but nothing about *why*. Diagnosing required reading source code and guessing.
+
+### Changes
+
+**New helper — `jsonServerError(w, message, err)`** (`helpers.go`)
+
+Logs the actual error via `slog.Error` before sending the generic JSON response to the client. Separates the two concerns: safe client messages vs. full internal diagnostics for operators.
+
+**44 replacements across 9 handler files**
+
+Every `jsonError(w, "...", http.StatusInternalServerError)` call that had an `err` in scope was replaced with `jsonServerError(w, "...", err)`. Non-500 errors (400, 401, 404, 409) are unchanged.
+
+| File | Replacements |
+|------|-------------|
+| `logs.go` | 5 |
+| `connections.go` | 8 |
+| `github.go` | 11 |
+| `applications.go` | 7 |
+| `organizations.go` | 6 |
+| `notifications.go` | 7 |
+| `conversations.go` | 2 |
+| `stats.go` | 2 |
+| `auth.go` | 1 |
+
+**Logging middleware upgrade** (`middleware/logging.go`)
+
+- 500+ responses now log at `ERROR` level (was `INFO` for all statuses)
+- Query parameters are included for any 4xx/5xx response
+
+### Files Changed
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `backend/internal/api/handlers/helpers.go` | Added `jsonServerError` helper |
+| 2 | `backend/internal/api/handlers/logs.go` | 5 error paths → `jsonServerError` |
+| 3 | `backend/internal/api/handlers/connections.go` | 8 error paths → `jsonServerError` |
+| 4 | `backend/internal/api/handlers/github.go` | 11 error paths → `jsonServerError` |
+| 5 | `backend/internal/api/handlers/applications.go` | 7 error paths → `jsonServerError` |
+| 6 | `backend/internal/api/handlers/organizations.go` | 6 error paths → `jsonServerError` |
+| 7 | `backend/internal/api/handlers/notifications.go` | 7 error paths → `jsonServerError` |
+| 8 | `backend/internal/api/handlers/conversations.go` | 2 error paths → `jsonServerError` |
+| 9 | `backend/internal/api/handlers/stats.go` | 2 error paths → `jsonServerError` |
+| 10 | `backend/internal/api/handlers/auth.go` | 1 error path → `jsonServerError` |
+| 11 | `backend/internal/api/middleware/logging.go` | 500s → `slog.Error`; query params on 4xx/5xx |
 
 ---
 

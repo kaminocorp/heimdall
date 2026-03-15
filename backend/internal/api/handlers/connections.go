@@ -26,14 +26,14 @@ func (s *Server) ListConnections(w http.ResponseWriter, r *http.Request) {
 
 	queries, done, err := s.UserQueries(r.Context(), userID)
 	if err != nil {
-		jsonError(w, "database error", http.StatusInternalServerError)
+		jsonServerError(w, "database error", err)
 		return
 	}
 	defer done()
 
 	connections, err := queries.ListConnectionsByUser(r.Context(), userID)
 	if err != nil {
-		jsonError(w, "failed to list connections", http.StatusInternalServerError)
+		jsonServerError(w, "failed to list connections", err)
 		return
 	}
 
@@ -50,7 +50,7 @@ func (s *Server) GetConnection(w http.ResponseWriter, r *http.Request) {
 
 	queries, done, err := s.UserQueries(r.Context(), userID)
 	if err != nil {
-		jsonError(w, "database error", http.StatusInternalServerError)
+		jsonServerError(w, "database error", err)
 		return
 	}
 	defer done()
@@ -138,14 +138,14 @@ func (s *Server) CreateConnection(w http.ResponseWriter, r *http.Request) {
 		if _, ok := cfgMap["webhook_token"]; !ok {
 			b := make([]byte, 32)
 			if _, err := rand.Read(b); err != nil {
-				jsonError(w, "failed to generate webhook token", http.StatusInternalServerError)
+				jsonServerError(w, "failed to generate webhook token", err)
 				return
 			}
 			cfgMap["webhook_token"] = hex.EncodeToString(b)
 			var err error
 			config, err = json.Marshal(cfgMap)
 			if err != nil {
-				jsonError(w, "failed to encode config", http.StatusInternalServerError)
+				jsonServerError(w, "failed to encode config", err)
 				return
 			}
 		}
@@ -153,7 +153,7 @@ func (s *Server) CreateConnection(w http.ResponseWriter, r *http.Request) {
 
 	queries, done, err := s.UserQueries(r.Context(), userID)
 	if err != nil {
-		jsonError(w, "database error", http.StatusInternalServerError)
+		jsonServerError(w, "database error", err)
 		return
 	}
 	defer done()
@@ -168,7 +168,7 @@ func (s *Server) CreateConnection(w http.ResponseWriter, r *http.Request) {
 		Status:    "inactive",
 	})
 	if err != nil {
-		jsonError(w, "failed to create connection", http.StatusInternalServerError)
+		jsonServerError(w, "failed to create connection", err)
 		return
 	}
 
@@ -224,7 +224,7 @@ func (s *Server) UpdateConnection(w http.ResponseWriter, r *http.Request) {
 
 	queries, done, err := s.UserQueries(r.Context(), userID)
 	if err != nil {
-		jsonError(w, "database error", http.StatusInternalServerError)
+		jsonServerError(w, "database error", err)
 		return
 	}
 	defer done()
@@ -256,7 +256,7 @@ func (s *Server) TestConnection(w http.ResponseWriter, r *http.Request) {
 
 	queries, done, err := s.UserQueries(r.Context(), userID)
 	if err != nil {
-		jsonError(w, "database error", http.StatusInternalServerError)
+		jsonServerError(w, "database error", err)
 		return
 	}
 	defer done()
@@ -336,7 +336,7 @@ func (s *Server) DeleteConnection(w http.ResponseWriter, r *http.Request) {
 
 	queries, done, err := s.UserQueries(r.Context(), userID)
 	if err != nil {
-		jsonError(w, "database error", http.StatusInternalServerError)
+		jsonServerError(w, "database error", err)
 		return
 	}
 	defer done()
@@ -352,7 +352,7 @@ func (s *Server) DeleteConnection(w http.ResponseWriter, r *http.Request) {
 		UserID: userID,
 	})
 	if err != nil {
-		jsonError(w, "failed to delete connection", http.StatusInternalServerError)
+		jsonServerError(w, "failed to delete connection", err)
 		return
 	}
 

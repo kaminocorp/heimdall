@@ -57,7 +57,7 @@ func (s *Server) Onboard(w http.ResponseWriter, r *http.Request) {
 	// Idempotency guard: if user already has an org, return conflict.
 	user, err := s.Queries.GetUser(r.Context(), userID)
 	if err != nil {
-		jsonError(w, "failed to look up user", http.StatusInternalServerError)
+		jsonServerError(w, "failed to look up user", err)
 		return
 	}
 	if user.OrgID.Valid {
@@ -67,7 +67,7 @@ func (s *Server) Onboard(w http.ResponseWriter, r *http.Request) {
 
 	tx, err := s.Pool.Begin(r.Context())
 	if err != nil {
-		jsonError(w, "database error", http.StatusInternalServerError)
+		jsonServerError(w, "database error", err)
 		return
 	}
 	defer tx.Rollback(r.Context())
@@ -89,7 +89,7 @@ func (s *Server) Onboard(w http.ResponseWriter, r *http.Request) {
 		OrgID: pgtype.UUID{Bytes: org.ID, Valid: true},
 		ID:    userID,
 	}); err != nil {
-		jsonError(w, "failed to link user to organization", http.StatusInternalServerError)
+		jsonServerError(w, "failed to link user to organization", err)
 		return
 	}
 
@@ -100,7 +100,7 @@ func (s *Server) Onboard(w http.ResponseWriter, r *http.Request) {
 		Status: "active",
 	})
 	if err != nil {
-		jsonError(w, "failed to create application", http.StatusInternalServerError)
+		jsonServerError(w, "failed to create application", err)
 		return
 	}
 
@@ -112,12 +112,12 @@ func (s *Server) Onboard(w http.ResponseWriter, r *http.Request) {
 		ScheduleIntervalSecs: 60,
 	})
 	if err != nil {
-		jsonError(w, "failed to create agent config", http.StatusInternalServerError)
+		jsonServerError(w, "failed to create agent config", err)
 		return
 	}
 
 	if err := tx.Commit(r.Context()); err != nil {
-		jsonError(w, "failed to complete onboarding", http.StatusInternalServerError)
+		jsonServerError(w, "failed to complete onboarding", err)
 		return
 	}
 

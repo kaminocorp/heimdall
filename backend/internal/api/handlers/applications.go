@@ -27,7 +27,7 @@ func (s *Server) ListApplications(w http.ResponseWriter, r *http.Request) {
 
 	apps, err := s.Queries.ListApplicationsByOrg(r.Context(), org.ID)
 	if err != nil {
-		jsonError(w, "failed to list applications", http.StatusInternalServerError)
+		jsonServerError(w, "failed to list applications", err)
 		return
 	}
 
@@ -69,7 +69,7 @@ func (s *Server) CreateApplication(w http.ResponseWriter, r *http.Request) {
 		Status: "active",
 	})
 	if err != nil {
-		jsonError(w, "failed to create application", http.StatusInternalServerError)
+		jsonServerError(w, "failed to create application", err)
 		return
 	}
 
@@ -81,7 +81,7 @@ func (s *Server) CreateApplication(w http.ResponseWriter, r *http.Request) {
 		ScheduleIntervalSecs: 60,
 	})
 	if err != nil {
-		jsonError(w, "failed to create agent config", http.StatusInternalServerError)
+		jsonServerError(w, "failed to create agent config", err)
 		return
 	}
 
@@ -197,7 +197,7 @@ func (s *Server) UpdateAppAgentConfig(w http.ResponseWriter, r *http.Request) {
 		},
 	})
 	if err != nil {
-		jsonError(w, "failed to update agent config", http.StatusInternalServerError)
+		jsonServerError(w, "failed to update agent config", err)
 		return
 	}
 
@@ -247,7 +247,7 @@ func (s *Server) GetAppDashboardStats(w http.ResponseWriter, r *http.Request) {
 
 	stats, err := s.Queries.GetAppDashboardStats(r.Context(), app.ID)
 	if err != nil {
-		jsonError(w, "failed to get stats", http.StatusInternalServerError)
+		jsonServerError(w, "failed to get stats", err)
 		return
 	}
 
@@ -263,7 +263,7 @@ func (s *Server) ListConnectionsByApp(w http.ResponseWriter, r *http.Request) {
 
 	connections, err := s.Queries.ListConnectionsByApp(r.Context(), app.ID)
 	if err != nil {
-		jsonError(w, "failed to list connections", http.StatusInternalServerError)
+		jsonServerError(w, "failed to list connections", err)
 		return
 	}
 

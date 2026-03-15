@@ -68,7 +68,10 @@
       "Bash(cd \"/Users/philippholke/Crimson Sun/heimdall/frontend\" && npm run lint 2>&1 | tail -20)",
       "Bash(cd \"/Users/philippholke/Crimson Sun/heimdall/frontend\" && npm run lint 2>&1 | grep -i \"notification\")",
       "Bash(cd \"/Users/philippholke/Crimson Sun/heimdall/frontend\" && npm run lint 2>&1 | grep -A3 \"NotificationsPage\")",
-      "Bash(cd \"/Users/philippholke/Crimson Sun/heimdall/backend\" && go build ./... && go vet ./... 2>&1; echo \"exit: $?\")"
+      "Bash(cd \"/Users/philippholke/Crimson Sun/heimdall/backend\" && go build ./... && go vet ./... 2>&1; echo \"exit: $?\")",
+      "Bash(fly auth:*)",
+      "Bash(fly apps:*)",
+      "Bash(kill:*)"
     ]
   }
 }

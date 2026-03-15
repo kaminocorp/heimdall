@@ -16,7 +16,7 @@ func (s *Server) Me(w http.ResponseWriter, r *http.Request) {
 
 	queries, done, err := s.UserQueries(r.Context(), userID)
 	if err != nil {
-		jsonError(w, "database error", http.StatusInternalServerError)
+		jsonServerError(w, "database error", err)
 		return
 	}
 	defer done()

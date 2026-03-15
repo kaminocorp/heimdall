@@ -28,11 +28,21 @@ func Logging(next http.Handler) http.Handler {
 		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
 		start := time.Now()
 		next.ServeHTTP(sw, r)
-		slog.Info("request",
+
+		attrs := []any{
 			"method", r.Method,
 			"path", r.URL.Path,
 			"status", sw.status,
 			"duration", time.Since(start),
-		)
+		}
+		if qs := r.URL.RawQuery; qs != "" && sw.status >= 400 {
+			attrs = append(attrs, "query", qs)
+		}
+
+		if sw.status >= 500 {
+			slog.Error("request", attrs...)
+		} else {
+			slog.Info("request", attrs...)
+		}
 	})
 }

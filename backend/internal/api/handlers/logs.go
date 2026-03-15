@@ -41,7 +41,7 @@ func (s *Server) ListLogs(w http.ResponseWriter, r *http.Request) {
 
 	queries, done, err := s.UserQueries(r.Context(), userID)
 	if err != nil {
-		jsonError(w, "database error", http.StatusInternalServerError)
+		jsonServerError(w, "database error", err)
 		return
 	}
 	defer done()
@@ -115,13 +115,13 @@ func (s *Server) ListLogs(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 		if err != nil {
-			jsonError(w, "failed to list logs", http.StatusInternalServerError)
+			jsonServerError(w, "failed to list logs", err)
 			return
 		}
 
 		rawCount, err := queries.CountLogsByUser(r.Context(), userID)
 		if err != nil {
-			jsonError(w, "failed to count logs", http.StatusInternalServerError)
+			jsonServerError(w, "failed to count logs", err)
 			return
 		}
 		total += rawCount
@@ -139,13 +139,13 @@ func (s *Server) ListLogs(w http.ResponseWriter, r *http.Request) {
 			Offset: offset,
 		})
 		if err != nil {
-			jsonError(w, "failed to list agent logs", http.StatusInternalServerError)
+			jsonServerError(w, "failed to list agent logs", err)
 			return
 		}
 
 		agentCount, err := queries.CountAgentLogByUser(r.Context(), userID)
 		if err != nil {
-			jsonError(w, "failed to count agent logs", http.StatusInternalServerError)
+			jsonServerError(w, "failed to count agent logs", err)
 			return
 		}
 		total += agentCount
