@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.17.0 — RLS Session Variable Fix](#0170--rls-session-variable-fix-2026-03-15)
 - [0.16.1 — Server-Side Error Logging](#0161--server-side-error-logging-2026-03-15)
 - [0.16.0 — GitHub App Integration](#0160--github-app-integration-2026-03-11)
 - [0.15.1 — Notifications Build Fix](#0151--notifications-build-fix-2026-03-11)
@@ -41,6 +42,61 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.17.0 — RLS Session Variable Fix (2026-03-15)
+
+The persistent `GET /api/logs` 500 that v0.16.1 made diagnosable is now fixed. The root cause was a PostgreSQL protocol incompatibility in `UserQueries` — the `SET LOCAL` statement doesn't support parameterised values (`$1`) under the extended query protocol that pgx uses by default.
+
+### Symptom
+
+After logging in, the dashboard showed "Server error — please try again" with a 500 on `GET /api/logs?source=all&limit=50&offset=0`. The v0.16.1 error logging surfaced the actual error in Fly.io logs:
+
+```
+ERROR database error error="ERROR: syntax error at or near \"$1\" (SQLSTATE 42601)"
+```
+
+Every endpoint that called `UserQueries()` was broken — `/api/logs`, `/api/conversations`, `/api/connections` CRUD, `/api/auth/me`, and `/ws/chat`. The app-scoped endpoints (`/api/apps/{id}/connections`, `/agent/config`, `/stats`, `/monitoring/status`) were unaffected because they use `s.Queries` directly with `authorizeApp()`, bypassing `UserQueries()` entirely.
+
+### Root Cause
+
+`UserQueries` (`userqueries.go`) opens a transaction and sets a PostgreSQL session variable for RLS policy evaluation:
+
+```go
+// Before (broken)
+tx.Exec(ctx, "SET LOCAL app.current_user_id = $1", userID.String())
+```
+
+PostgreSQL's `SET` is a **utility statement**, not a DML statement. It doesn't go through the parser's parameter-binding stage. When pgx sends this via the **extended query protocol** (its default), PostgreSQL receives the literal text `SET LOCAL app.current_user_id = $1` with a separate parameter value — but the `SET` parser doesn't know how to bind `$1`, so it throws `SQLSTATE 42601` (syntax error).
+
+This likely started failing when the `DATABASE_URL` began routing through **Supavisor** (Supabase's connection pooler). Direct PostgreSQL connections can fall back to the simple query protocol for utility statements, but Supavisor enforces the extended protocol consistently.
+
+### Fix
+
+Replaced `SET LOCAL` with PostgreSQL's `set_config()` function — a regular SQL function that fully supports parameter binding in the extended protocol:
+
+```go
+// After (fixed)
+tx.Exec(ctx, "SELECT set_config('app.current_user_id', $1, true)", userID.String())
+```
+
+`set_config(name, value, is_local)` is the function-based equivalent of `SET LOCAL`. The third argument `true` scopes the setting to the current transaction, identical to `SET LOCAL` semantics. Because it's a standard function call (not a utility statement), pgx can bind `$1` normally.
+
+### Why `set_config` over `SET LOCAL`
+
+| | `SET LOCAL ... = $1` | `set_config($1, $2, true)` |
+|---|---|---|
+| Protocol | Utility statement — no param binding | Regular function — full param binding |
+| pgx compatibility | Fails under extended protocol | Works under all protocols |
+| Connection pooler safety | Breaks through Supavisor | Works through any pooler |
+| Injection risk | Forces string interpolation as workaround | Native parameterisation, no interpolation needed |
+
+### Files Changed
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `backend/internal/api/handlers/userqueries.go` | `SET LOCAL` → `set_config()` with parameterised binding |
 
 ---
 

@@ -18,7 +18,7 @@ func (s *Server) UserQueries(ctx context.Context, userID uuid.UUID) (queries *db
 		return nil, nil, err
 	}
 
-	if _, err := tx.Exec(ctx, "SET LOCAL app.current_user_id = $1", userID.String()); err != nil {
+	if _, err := tx.Exec(ctx, "SELECT set_config('app.current_user_id', $1, true)", userID.String()); err != nil {
 		tx.Rollback(ctx)
 		return nil, nil, err
 	}
