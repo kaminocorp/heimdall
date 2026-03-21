@@ -52,7 +52,7 @@ const agentStatus = computed(() => {
 
 const activeCount = computed(() => connections.value.filter(c => c.status === 'active').length)
 const inactiveCount = computed(() => connections.value.filter(c => c.status !== 'active').length)
-const recentEntries = computed(() => logsStore.entries.slice(0, 8))
+const recentEntries = computed(() => logsStore.entries?.slice(0, 8) ?? [])
 
 function formatInterval(secs: number): string {
   if (secs < 60) return `${secs}s`

@@ -7,6 +7,7 @@ import { listConnectionsByApp } from '@/api/applications'
 import type { Connection, CreateConnectionPayload } from '@/types/connection'
 import ConnectionList from '@/components/connections/ConnectionList.vue'
 import ConnectionForm from '@/components/connections/ConnectionForm.vue'
+import ConnectionTestModal from '@/components/connections/ConnectionTestModal.vue'
 import GitHubRepoSelector from '@/components/connections/GitHubRepoSelector.vue'
 import SkeletonBlock from '@/components/common/SkeletonBlock.vue'
 
@@ -19,6 +20,7 @@ const editingConnection = ref<Connection | null>(null)
 const actionError = ref<string | null>(null)
 const repoSelectorConnectionId = ref<string | null>(null)
 const githubInstalledMessage = ref<string | null>(null)
+const testModalConnection = ref<Connection | null>(null)
 
 async function fetchAppConnections() {
   const appId = appStore.currentAppId
@@ -69,43 +71,36 @@ function closeForm() {
 
 async function handleSubmit(payload: Omit<CreateConnectionPayload, 'app_id'>) {
   actionError.value = null
-  const isEdit = !!editingConnection.value
   try {
-    let connId: string
+    let conn: Connection
     if (editingConnection.value) {
-      const updated = await store.updateConnection(editingConnection.value.id, {
+      conn = await store.updateConnection(editingConnection.value.id, {
         ...payload,
         status: 'inactive',
       })
-      connId = updated.id
     } else {
-      const created = await store.createConnection({
+      conn = await store.createConnection({
         ...payload,
         app_id: appStore.currentAppId!,
       })
-      connId = created.id
     }
     closeForm()
-    const result = await store.testConnection(connId)
-    if (!result.success) {
-      actionError.value = `${isEdit ? 'Connection updated' : 'Connection created'} but test failed: ${result.message}`
-    }
-    await fetchAppConnections()
+    testModalConnection.value = conn
   } catch (e: any) {
+    const isEdit = !!editingConnection.value
     actionError.value = e.response?.data?.error ?? `Failed to ${isEdit ? 'update' : 'create'} connection`
   }
 }
 
-async function handleTest(id: string) {
+function handleTest(id: string) {
   actionError.value = null
-  try {
-    const result = await store.testConnection(id)
-    if (!result.success) {
-      actionError.value = `Connection test failed: ${result.message}`
-    }
-  } catch (e: any) {
-    actionError.value = e.response?.data?.error ?? 'Failed to test connection'
-  }
+  const conn = store.connections.find(c => c.id === id)
+  if (conn) testModalConnection.value = conn
+}
+
+function closeTestModal() {
+  testModalConnection.value = null
+  fetchAppConnections()
 }
 
 async function handleDelete(id: string) {
@@ -180,5 +175,12 @@ function closeRepoSelector() {
     </div>
     <div v-else-if="store.error" class="text-status-critical text-sm font-mono">{{ store.error }}</div>
     <ConnectionList v-else :connections="store.connections" :testing-id="store.testingId" @delete="handleDelete" @edit="openEdit" @test="handleTest" @manage-repos="openRepoSelector" />
+
+    <!-- Connection test modal -->
+    <ConnectionTestModal
+      v-if="testModalConnection"
+      :connection="testModalConnection"
+      @close="closeTestModal"
+    />
   </div>
 </template>

@@ -22,7 +22,7 @@ export const useLogsStore = defineStore('logs', () => {
         limit: limit.value,
         offset: offset.value,
       })
-      entries.value = data.data
+      entries.value = data.data ?? []
       total.value = data.total
     } catch (e: any) {
       error.value = e.response?.data?.error ?? 'Failed to load logs'

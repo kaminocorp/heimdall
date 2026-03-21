@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.17.1 — Connection Test Modal & Dashboard Fix](#0171--connection-test-modal--dashboard-fix-2026-03-21)
 - [0.17.0 — RLS Session Variable Fix](#0170--rls-session-variable-fix-2026-03-15)
 - [0.16.1 — Server-Side Error Logging](#0161--server-side-error-logging-2026-03-15)
 - [0.16.0 — GitHub App Integration](#0160--github-app-integration-2026-03-11)
@@ -42,6 +43,39 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.17.1 — Connection Test Modal & Dashboard Fix (2026-03-21)
+
+Connection testing was a black box — the UI showed a brief banner with a generic message and no detail on *why* a test failed. This patch adds a modal that shows the test in real time and surfaces the actual error, plus fixes a dashboard crash for new apps with no logs.
+
+### Connection Test Modal
+
+After creating, editing, or pinging a connection, a modal now overlays the page showing:
+
+- **Connection metadata** — name, type, host, port, database, user, SSL mode — so you can immediately verify what's being tested
+- **Live test status** — pulsing indicator with elapsed timer while the test runs
+- **Result** — green success or red failure with the **full error message** from the backend
+
+Previously, a failed Postgres connection test returned a generic `"Failed to connect to database"`. The backend now includes the underlying error (e.g., `hostname resolving error: lookup https on [fdaa::3]:53: no such host`), making misconfigurations immediately diagnosable without tailing server logs.
+
+### Dashboard Null Guard
+
+The dashboard crashed with `Cannot read properties of null (reading 'slice')` when the logs API returned `null` instead of an empty array (happens for newly onboarded apps with zero logs). Fixed at both layers:
+
+- **Store** (`logs.ts`): `entries.value = data.data ?? []` — prevents null from entering the store
+- **Consumer** (`DashboardPage.vue`): `logsStore.entries?.slice(0, 8) ?? []` — defensive guard in the computed property
+
+### Files Changed
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `backend/internal/api/handlers/connections.go` | Include actual error in test failure response via `fmt.Sprintf` |
+| 2 | `frontend/src/components/connections/ConnectionTestModal.vue` | New modal component — test phases, connection metadata, elapsed timer |
+| 3 | `frontend/src/pages/ConnectionsPage.vue` | Wire modal into create/edit/ping flows |
+| 4 | `frontend/src/pages/DashboardPage.vue` | Null guard on `recentEntries` computed |
+| 5 | `frontend/src/stores/logs.ts` | Null coalesce on API response `data.data` |
 
 ---
 

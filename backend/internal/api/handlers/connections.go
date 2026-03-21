@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"time"
@@ -288,14 +289,14 @@ func (s *Server) TestConnection(w http.ResponseWriter, r *http.Request) {
 		pg, err := database.New(conn.Config)
 		if err != nil {
 			log.Printf("connection test failed for %s: %v", connID, err)
-			result = testResult{Success: false, Message: "Failed to initialize database connector"}
+			result = testResult{Success: false, Message: fmt.Sprintf("Failed to initialize database connector: %v", err)}
 			break
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		defer cancel()
 		if err := pg.Connect(ctx); err != nil {
 			log.Printf("connection test failed for %s: %v", connID, err)
-			result = testResult{Success: false, Message: "Failed to connect to database"}
+			result = testResult{Success: false, Message: fmt.Sprintf("Failed to connect to database: %v", err)}
 		} else {
 			defer pg.Close(ctx)
 			result = testResult{Success: true, Message: "Connection established"}
