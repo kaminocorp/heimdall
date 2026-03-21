@@ -3,6 +3,7 @@ import { ref, computed, watch } from 'vue'
 import type { Connection, CreateConnectionPayload } from '@/types/connection'
 import { useAppStore } from '@/stores/app'
 import { getGitHubInstallURL } from '@/api/github'
+import BaseSelect from '@/components/common/BaseSelect.vue'
 
 const appStore = useAppStore()
 
@@ -141,19 +142,28 @@ function handleSubmit() {
     </div>
     <div>
       <label class="block font-mono text-xs font-medium uppercase tracking-wider text-text-secondary mb-1.5">Type</label>
-      <select v-model="type" :disabled="isEditing" class="block w-full bg-bg-elevated/80 border border-border rounded px-3 py-2 text-text-primary font-mono text-sm focus:border-accent/50 focus:ring-1 focus:ring-accent/20 focus:outline-none transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
-        <option value="postgres">PostgreSQL</option>
-        <option value="webhook_logs">Webhook Logs</option>
-        <option value="syslog">Syslog</option>
-        <option value="github">GitHub</option>
-      </select>
+      <BaseSelect
+        :modelValue="type"
+        @update:modelValue="type = String($event)"
+        :options="[
+          { value: 'postgres', label: 'PostgreSQL' },
+          { value: 'webhook_logs', label: 'Webhook Logs' },
+          { value: 'syslog', label: 'Syslog' },
+          { value: 'github', label: 'GitHub' },
+        ]"
+        :disabled="isEditing"
+      />
     </div>
     <div>
       <label class="block font-mono text-xs font-medium uppercase tracking-wider text-text-secondary mb-1.5">Direction</label>
-      <select v-model="direction" class="block w-full bg-bg-elevated/80 border border-border rounded px-3 py-2 text-text-primary font-mono text-sm focus:border-accent/50 focus:ring-1 focus:ring-accent/20 focus:outline-none transition-colors">
-        <option value="one_way">One-way (ingest only)</option>
-        <option value="two_way">Two-way (ingest + query)</option>
-      </select>
+      <BaseSelect
+        :modelValue="direction"
+        @update:modelValue="direction = $event as 'one_way' | 'two_way'"
+        :options="[
+          { value: 'one_way', label: 'One-way (ingest only)' },
+          { value: 'two_way', label: 'Two-way (ingest + query)' },
+        ]"
+      />
     </div>
     <!-- Config fields -->
     <template v-if="type === 'github' && !isEditing">
@@ -184,10 +194,12 @@ function handleSubmit() {
         <p class="font-mono text-[10px] font-medium uppercase tracking-widest text-text-muted">Configuration</p>
         <div v-for="field in activeFields" :key="field.key">
           <label class="block font-mono text-xs font-medium uppercase tracking-wider text-text-secondary mb-1.5">{{ field.label }}</label>
-          <select v-if="field.type === 'select'" :value="getFieldValue(field)" @change="setFieldValue(field, ($event.target as HTMLSelectElement).value)"
-            class="block w-full bg-bg-elevated/80 border border-border rounded px-3 py-2 text-text-primary font-mono text-sm focus:border-accent/50 focus:ring-1 focus:ring-accent/20 focus:outline-none transition-colors">
-            <option v-for="opt in field.options" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
-          </select>
+          <BaseSelect
+            v-if="field.type === 'select'"
+            :modelValue="getFieldValue(field)"
+            @update:modelValue="setFieldValue(field, String($event))"
+            :options="field.options ?? []"
+          />
           <input v-else :type="field.type === 'number' ? 'text' : field.type" :value="getFieldValue(field)" @input="setFieldValue(field, ($event.target as HTMLInputElement).value)"
             :required="field.required" :placeholder="field.placeholder"
             :inputmode="field.type === 'number' ? 'numeric' : undefined"

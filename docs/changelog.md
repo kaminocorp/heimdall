@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.17.3 — Custom Dropdown Component](#0173--custom-dropdown-component-2026-03-21)
 - [0.17.2 — SPA Routing Fix](#0172--spa-routing-fix-2026-03-21)
 - [0.17.1 — Connection Test Modal & Dashboard Fix](#0171--connection-test-modal--dashboard-fix-2026-03-21)
 - [0.17.0 — RLS Session Variable Fix](#0170--rls-session-variable-fix-2026-03-15)
@@ -44,6 +45,46 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.17.3 — Custom Dropdown Component (2026-03-21)
+
+Every dropdown in the app used native HTML `<select>` elements. While the trigger could be styled with Tailwind, the dropdown panel itself is rendered by the operating system — meaning a jarring white menu appeared over the near-black techno-brutalist UI. This patch replaces all 10 native selects with a single reusable `BaseSelect` component that matches the design system end-to-end.
+
+### BaseSelect Component
+
+New component at `components/common/BaseSelect.vue` providing a fully custom dropdown:
+
+- **Visual design** — dark `bg-bg-elevated` background, `border-border` borders, `font-mono` text, accent highlight on the selected option (`text-accent-bright bg-accent-subtle`), hover state (`bg-bg-surface-hover`), and a chevron indicator that rotates on open
+- **Keyboard navigation** — Arrow Up/Down to move focus, Enter/Space to select, Escape to close
+- **Click outside to close** — document-level click listener, cleaned up on unmount
+- **Smooth transitions** — fade + slide animation on open/close via Vue `<Transition>`
+- **Two sizes** — `default` for form fields (matching `px-3 py-2 text-sm`) and `sm` for compact contexts like filters and the sidebar (matching `px-3 py-1.5 text-xs`)
+- **Disabled state** — reduces opacity and blocks interaction, matching existing input disabled styling
+
+### Replacements
+
+All 10 native `<select>` elements across 5 files were replaced:
+
+| File | Selects | Context |
+|------|---------|---------|
+| `AppSidebar.vue` | 1 | Application switcher in the sidebar |
+| `ConnectionForm.vue` | 3 | Connection type, direction, and dynamic config fields (SSL mode, protocol) |
+| `LogFilters.vue` | 3 | Source, severity, and connection filter dropdowns |
+| `NotificationsPage.vue` | 2 | Severity threshold and notification channel type |
+| `AgentConfigPage.vue` | 1 | Monitoring mode selector (continuous/periodic/off) |
+
+### Files Changed
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `frontend/src/components/common/BaseSelect.vue` | New reusable dropdown component |
+| 2 | `frontend/src/components/common/AppSidebar.vue` | Native select → `BaseSelect` for app switcher |
+| 3 | `frontend/src/components/connections/ConnectionForm.vue` | 3 native selects → `BaseSelect` (type, direction, config fields) |
+| 4 | `frontend/src/components/log/LogFilters.vue` | 3 native selects → `BaseSelect` (source, severity, connection) |
+| 5 | `frontend/src/pages/NotificationsPage.vue` | 2 native selects → `BaseSelect` (threshold, channel type) |
+| 6 | `frontend/src/pages/AgentConfigPage.vue` | 1 native select → `BaseSelect` (monitoring mode) |
 
 ---
 

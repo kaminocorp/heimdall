@@ -5,6 +5,7 @@ import { useToast } from '@/composables/useToast'
 import { getAppAgentConfig, updateAppAgentConfig } from '@/api/applications'
 import type { AppAgentConfig } from '@/types/organization'
 import SkeletonBlock from '@/components/common/SkeletonBlock.vue'
+import BaseSelect from '@/components/common/BaseSelect.vue'
 
 const appStore = useAppStore()
 const toast = useToast()
@@ -139,14 +140,14 @@ watch(() => appStore.currentAppId, () => {
 
       <div>
         <label class="block font-mono text-xs font-medium uppercase tracking-wider text-text-secondary mb-1.5">Monitoring Mode</label>
-        <select
+        <BaseSelect
           v-model="formMode"
-          class="block w-full bg-bg-elevated/80 border border-border rounded px-3 py-2 text-text-primary font-mono text-sm focus:border-accent/50 focus:ring-1 focus:ring-accent/20 focus:outline-none transition-colors"
-        >
-          <option value="continuous">Continuous</option>
-          <option value="periodic">Periodic</option>
-          <option value="off">Off</option>
-        </select>
+          :options="[
+            { value: 'continuous', label: 'Continuous' },
+            { value: 'periodic', label: 'Periodic' },
+            { value: 'off', label: 'Off' },
+          ]"
+        />
       </div>
 
       <div v-if="formMode === 'periodic'">

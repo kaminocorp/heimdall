@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useAppStore } from '@/stores/app'
+import BaseSelect from '@/components/common/BaseSelect.vue'
 
 const auth = useAuthStore()
 const app = useAppStore()
@@ -53,10 +54,13 @@ function isActive(routeName: string): boolean {
   return currentRoute.value === routeName
 }
 
-function handleSelectApp(event: Event) {
-  const target = event.target as HTMLSelectElement
-  app.selectApp(target.value)
+function handleSelectApp(value: string | number) {
+  app.selectApp(String(value))
 }
+
+const appOptions = computed(() =>
+  app.applications.map(a => ({ value: a.id, label: a.name }))
+)
 
 async function handleLogout() {
   app.reset()
@@ -92,19 +96,12 @@ function handleNav() {
       <label class="block font-mono text-[10px] uppercase tracking-widest text-text-muted mb-1.5 px-2">
         Application
       </label>
-      <select
-        :value="app.currentAppId"
-        @change="handleSelectApp"
-        class="w-full px-2 py-1.5 bg-bg-surface border border-border rounded text-xs text-text-primary font-mono focus:outline-none focus:border-accent cursor-pointer appearance-none"
-      >
-        <option
-          v-for="a in app.applications"
-          :key="a.id"
-          :value="a.id"
-        >
-          {{ a.name }}
-        </option>
-      </select>
+      <BaseSelect
+        :modelValue="app.currentAppId ?? ''"
+        @update:modelValue="handleSelectApp"
+        :options="appOptions"
+        size="sm"
+      />
     </div>
 
     <!-- Navigation sections -->

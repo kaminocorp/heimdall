@@ -71,7 +71,8 @@
       "Bash(cd \"/Users/philippholke/Crimson Sun/heimdall/backend\" && go build ./... && go vet ./... 2>&1; echo \"exit: $?\")",
       "Bash(fly auth:*)",
       "Bash(fly apps:*)",
-      "Bash(kill:*)"
+      "Bash(kill:*)",
+      "Bash(npm run:*)"
     ]
   }
 }

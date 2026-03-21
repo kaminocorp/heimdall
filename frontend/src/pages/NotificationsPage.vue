@@ -19,6 +19,7 @@ import type {
   NotificationLogEntry,
 } from '@/types/notification'
 import SkeletonBlock from '@/components/common/SkeletonBlock.vue'
+import BaseSelect from '@/components/common/BaseSelect.vue'
 
 const appStore = useAppStore()
 const toast = useToast()
@@ -316,12 +317,7 @@ watch(() => appStore.currentAppId, () => {
 
           <div>
             <label class="block font-mono text-xs font-medium uppercase tracking-wider text-text-secondary mb-1.5">Severity Threshold</label>
-            <select
-              v-model="formThreshold"
-              class="block w-full bg-bg-elevated/80 border border-border rounded px-3 py-2 text-text-primary font-mono text-sm focus:border-accent/50 focus:ring-1 focus:ring-accent/20 focus:outline-none transition-colors"
-            >
-              <option v-for="opt in thresholdOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
-            </select>
+            <BaseSelect v-model="formThreshold" :options="thresholdOptions" />
           </div>
 
           <div>
@@ -393,12 +389,7 @@ watch(() => appStore.currentAppId, () => {
         <form v-if="showChannelForm" @submit.prevent="saveChannel" class="border border-border rounded-lg bg-bg-surface p-5 space-y-5 mb-4">
           <div v-if="!editingChannelId">
             <label class="block font-mono text-xs font-medium uppercase tracking-wider text-text-secondary mb-1.5">Type</label>
-            <select
-              v-model="formChannelType"
-              class="block w-full bg-bg-elevated/80 border border-border rounded px-3 py-2 text-text-primary font-mono text-sm focus:border-accent/50 focus:ring-1 focus:ring-accent/20 focus:outline-none transition-colors"
-            >
-              <option v-for="opt in channelTypeOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
-            </select>
+            <BaseSelect v-model="formChannelType" :options="channelTypeOptions" />
           </div>
 
           <div>
