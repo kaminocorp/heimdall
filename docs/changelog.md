@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.17.2 — SPA Routing Fix](#0172--spa-routing-fix-2026-03-21)
 - [0.17.1 — Connection Test Modal & Dashboard Fix](#0171--connection-test-modal--dashboard-fix-2026-03-21)
 - [0.17.0 — RLS Session Variable Fix](#0170--rls-session-variable-fix-2026-03-15)
 - [0.16.1 — Server-Side Error Logging](#0161--server-side-error-logging-2026-03-15)
@@ -43,6 +44,45 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.17.2 — SPA Routing Fix (2026-03-21)
+
+Refreshing the browser on any sub-route (e.g. `/dashboard`, `/connections`, `/chat`) returned a Vercel 404 page. Navigating to root or opening a fresh tab worked because Vercel serves `index.html` for `/` automatically — but it had no instruction to do the same for deeper paths.
+
+### Symptom
+
+A page refresh on any route other than `/` produced:
+
+```
+404: NOT_FOUND
+Code: NOT_FOUND
+```
+
+Closing the tab and reopening the app from root worked normally, because Vue Router handled all subsequent navigation client-side.
+
+### Root Cause
+
+The `vercel.json` configuration had rewrites for `/api/*` and `/ws/*` (proxying to the Fly.dev backend), but no **SPA fallback** for all other paths. When Vercel received a request for `/dashboard`, it looked for a matching file or directory, found nothing, and returned 404.
+
+This is the standard SPA hosting problem: client-side routing relies on the History API to change the URL without a server round-trip, but a hard refresh or direct navigation sends a real HTTP request that the server must resolve to `index.html`.
+
+### Fix
+
+Added a catch-all rewrite as the **last rule** in `vercel.json`:
+
+```json
+{ "source": "/(.*)", "destination": "/index.html" }
+```
+
+Order is critical — Vercel evaluates rewrites top-to-bottom. The `/api/*` and `/ws/*` rules match first and proxy to the backend. Static assets (JS, CSS, images) are served from the build output before rewrites are consulted. Only truly unmatched paths (i.e. frontend routes) fall through to the catch-all, which serves `index.html` and lets Vue Router resolve the route client-side.
+
+### Files Changed
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `frontend/vercel.json` | Added SPA catch-all rewrite `/(.*) → /index.html` |
 
 ---
 
