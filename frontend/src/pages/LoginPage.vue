@@ -71,7 +71,7 @@ async function handleSubmit() {
         <button
           type="submit"
           :disabled="loading"
-          class="w-full px-4 py-2.5 bg-accent text-bg-primary font-mono text-sm font-medium uppercase tracking-widest rounded hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer"
+          class="w-full px-4 py-2.5 bg-action text-bg-primary font-mono text-sm font-medium uppercase tracking-widest rounded hover:bg-action-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer"
         >
           {{ loading ? 'Authenticating…' : 'Authenticate' }}
         </button>

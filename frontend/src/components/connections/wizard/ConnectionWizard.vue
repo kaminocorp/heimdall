@@ -208,8 +208,8 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown))
             :disabled="!stepValid && isTestStep"
             class="px-4 py-1.5 font-mono text-xs font-medium uppercase tracking-wider rounded transition-colors cursor-pointer"
             :class="(!stepValid && isTestStep)
-              ? 'bg-accent/30 text-bg-primary cursor-not-allowed'
-              : 'bg-accent text-bg-primary hover:bg-accent-hover'"
+              ? 'bg-action/30 text-bg-primary cursor-not-allowed'
+              : 'bg-action text-bg-primary hover:bg-action-hover'"
           >
             Done
           </button>
@@ -220,8 +220,8 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown))
             :disabled="!stepValid || creating"
             class="px-4 py-1.5 font-mono text-xs font-medium uppercase tracking-wider rounded transition-colors cursor-pointer"
             :class="(!stepValid || creating)
-              ? 'bg-accent/30 text-bg-primary cursor-not-allowed'
-              : 'bg-accent text-bg-primary hover:bg-accent-hover'"
+              ? 'bg-action/30 text-bg-primary cursor-not-allowed'
+              : 'bg-action text-bg-primary hover:bg-action-hover'"
           >
             {{ creating ? 'Creating...' : 'Continue' }}
           </button>

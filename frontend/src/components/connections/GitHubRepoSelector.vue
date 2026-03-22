@@ -91,7 +91,7 @@ async function save() {
       <button
         :disabled="saving"
         @click="save"
-        class="px-4 py-2 bg-accent text-bg-primary font-mono text-sm font-medium uppercase tracking-wider rounded hover:bg-accent-hover transition-colors cursor-pointer disabled:opacity-50"
+        class="px-4 py-2 bg-action text-bg-primary font-mono text-sm font-medium uppercase tracking-wider rounded hover:bg-action-hover transition-colors cursor-pointer disabled:opacity-50"
       >
         {{ saving ? 'Saving...' : 'Save Selection' }}
       </button>

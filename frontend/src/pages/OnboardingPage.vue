@@ -96,7 +96,7 @@ async function handleSubmit() {
         <button
           type="submit"
           :disabled="submitting || !orgName || !orgSlug"
-          class="w-full py-2.5 bg-accent text-bg-primary font-mono text-sm font-bold uppercase tracking-wider rounded hover:brightness-110 transition-all disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+          class="w-full py-2.5 bg-action text-bg-primary font-mono text-sm font-bold uppercase tracking-wider rounded hover:bg-action-hover transition-all disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
         >
           {{ submitting ? 'Creating...' : 'Get Started' }}
         </button>

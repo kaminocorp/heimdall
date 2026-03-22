@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.20.1 — Action Button Color](#0201--action-button-color-2026-03-22)
 - [0.20.0 — Security & Production Hardening](#0200--security--production-hardening-2026-03-22)
 - [0.19.0 — Connection Wizard](#0190--connection-wizard-2026-03-22)
 - [0.18.0 — Supabase Connector](#0180--supabase-connector-2026-03-22)
@@ -48,6 +49,37 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.20.1 — Action Button Color (2026-03-22)
+
+Primary action buttons (+ New Connection, Authenticate, Save, Send, Continue, etc.) used the same muted feldgrau accent (`#4d5d53`) as ambient UI elements, making them blend in rather than stand out as calls to action.
+
+Added a new `--action` design token (`#3b8a5a`) — same green hue family but ~3× the saturation — and applied it to all 14 CTA buttons across 11 files. The existing `accent` palette is unchanged and continues to serve borders, badges, focus rings, and surface tints.
+
+### Design Tokens
+
+| Token | Value | Purpose |
+|-------|-------|---------|
+| `--action` | `#3b8a5a` | Primary CTA background |
+| `--action-hover` | `#449e66` | CTA hover state |
+
+### Files Changed
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `frontend/src/assets/styles/main.css` | New `--action` / `--action-hover` tokens + Tailwind `@theme` registration |
+| 2 | `frontend/src/pages/ConnectionsPage.vue` | + New Connection button |
+| 3 | `frontend/src/pages/LoginPage.vue` | Authenticate button |
+| 4 | `frontend/src/pages/OnboardingPage.vue` | Get Started button |
+| 5 | `frontend/src/pages/AgentConfigPage.vue` | Save Configuration button |
+| 6 | `frontend/src/pages/NotificationsPage.vue` | Save + Add/Update Channel buttons |
+| 7 | `frontend/src/components/agent/ChatInput.vue` | Send button |
+| 8 | `frontend/src/components/connections/ConnectionForm.vue` | Add Connection + Install GitHub App buttons |
+| 9 | `frontend/src/components/connections/GitHubRepoSelector.vue` | Save Selection button |
+| 10 | `frontend/src/components/connections/wizard/ConnectionWizard.vue` | Done + Continue buttons |
+| 11 | `frontend/src/components/connections/wizard/steps/StepGitHubInstall.vue` | Install GitHub App button |
 
 ---
 

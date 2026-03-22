@@ -140,7 +140,7 @@ function closeRepoSelector() {
       <button
         v-if="!showForm"
         @click="openCreate"
-        class="px-4 py-2 bg-accent text-bg-primary font-mono text-sm font-medium uppercase tracking-wider rounded hover:bg-accent-hover transition-colors cursor-pointer"
+        class="px-4 py-2 bg-action text-bg-primary font-mono text-sm font-medium uppercase tracking-wider rounded hover:bg-action-hover transition-colors cursor-pointer"
       >
         + New Connection
       </button>

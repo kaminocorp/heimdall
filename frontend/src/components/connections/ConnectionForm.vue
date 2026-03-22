@@ -211,7 +211,7 @@ function handleSubmit() {
           type="button"
           :disabled="githubInstalling"
           @click="installGitHubApp"
-          class="px-4 py-2 bg-accent text-bg-primary font-mono text-sm font-medium uppercase tracking-wider rounded hover:bg-accent-hover transition-colors cursor-pointer disabled:opacity-50"
+          class="px-4 py-2 bg-action text-bg-primary font-mono text-sm font-medium uppercase tracking-wider rounded hover:bg-action-hover transition-colors cursor-pointer disabled:opacity-50"
         >
           {{ githubInstalling ? 'Redirecting...' : 'Install GitHub App' }}
         </button>
@@ -284,7 +284,7 @@ function handleSubmit() {
     </template>
 
     <div v-if="!(type === 'github' && !isEditing)" class="flex gap-2 pt-2">
-      <button type="submit" class="px-4 py-2 bg-accent text-bg-primary font-mono text-sm font-medium uppercase tracking-wider rounded hover:bg-accent-hover transition-colors cursor-pointer">
+      <button type="submit" class="px-4 py-2 bg-action text-bg-primary font-mono text-sm font-medium uppercase tracking-wider rounded hover:bg-action-hover transition-colors cursor-pointer">
         {{ isEditing ? 'Save Changes' : 'Add Connection' }}
       </button>
       <button type="button" @click="emit('cancel')" class="px-4 py-2 border border-accent-border/50 text-text-secondary font-mono text-sm uppercase tracking-wider rounded hover:border-accent/50 hover:text-text-primary transition-colors cursor-pointer">
