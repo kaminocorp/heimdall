@@ -4,12 +4,21 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/hejijunhao/heimdall/backend/internal/db"
 )
+
+// escapeLike escapes LIKE metacharacters (%, _, \) so they are matched literally.
+func escapeLike(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `%`, `\%`)
+	s = strings.ReplaceAll(s, `_`, `\_`)
+	return s
+}
 
 func (a *Agent) toolSearchLogs(ctx context.Context, userID uuid.UUID, input map[string]any) (string, error) {
 	// Parse limit (default 20, max 200).
@@ -24,20 +33,35 @@ func (a *Agent) toolSearchLogs(ctx context.Context, userID uuid.UUID, input map[
 		limit = 20
 	}
 
-	// Parse optional severity filter.
+	// Parse optional severity and query filters.
 	severity, _ := input["severity"].(string)
+	query, _ := input["query"].(string)
 
 	var logs []db.LogBuffer
 	var err error
 
-	if severity != "" {
+	switch {
+	case query != "" && severity != "":
+		logs, err = a.queries.SearchLogsByUserAndSeverity(ctx, db.SearchLogsByUserAndSeverityParams{
+			UserID:   userID,
+			Query:    escapeLike(query),
+			Severity: pgtype.Text{String: severity, Valid: true},
+			RowLimit: limit,
+		})
+	case query != "":
+		logs, err = a.queries.SearchLogsByUser(ctx, db.SearchLogsByUserParams{
+			UserID:   userID,
+			Query:    escapeLike(query),
+			RowLimit: limit,
+		})
+	case severity != "":
 		logs, err = a.queries.ListLogsByUserAndSeverity(ctx, db.ListLogsByUserAndSeverityParams{
 			UserID:   userID,
 			Severity: pgtype.Text{String: severity, Valid: true},
 			Limit:    limit,
 			Offset:   0,
 		})
-	} else {
+	default:
 		logs, err = a.queries.ListLogsByUser(ctx, db.ListLogsByUserParams{
 			UserID: userID,
 			Limit:  limit,

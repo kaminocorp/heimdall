@@ -25,9 +25,29 @@ LIMIT $3 OFFSET $4;
 SELECT count(*) FROM log_buffer
 WHERE user_id = $1;
 
+-- name: CountLogsByUserAndSeverity :one
+SELECT count(*) FROM log_buffer
+WHERE user_id = $1 AND severity = $2;
+
+-- name: CountLogsByUserAndConnection :one
+SELECT count(*) FROM log_buffer
+WHERE user_id = $1 AND connection_id = $2;
+
 -- name: GetConnectionByWebhookToken :one
 SELECT * FROM connections
 WHERE config->>'webhook_token' = @webhook_token::text AND type = 'webhook_logs' AND status = 'active';
+
+-- name: SearchLogsByUser :many
+SELECT * FROM log_buffer
+WHERE user_id = @user_id AND payload::text ILIKE '%' || @query::text || '%' ESCAPE '\'
+ORDER BY ingested_at DESC
+LIMIT @row_limit OFFSET @row_offset;
+
+-- name: SearchLogsByUserAndSeverity :many
+SELECT * FROM log_buffer
+WHERE user_id = @user_id AND payload::text ILIKE '%' || @query::text || '%' ESCAPE '\' AND severity = @severity
+ORDER BY ingested_at DESC
+LIMIT @row_limit OFFSET @row_offset;
 
 -- name: PruneExpiredLogs :execrows
 DELETE FROM log_buffer WHERE ingested_at < now() - interval '24 hours';

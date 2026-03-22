@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"log/slog"
 
 	"github.com/google/uuid"
 
@@ -10,8 +11,13 @@ import (
 
 // UserQueries begins a transaction, sets the Postgres session variable
 // app.current_user_id for RLS policy evaluation, and returns a *db.Queries
-// scoped to that transaction. The caller must defer done() to commit the
+// scoped to that transaction. The caller must defer done() to finalize the
 // transaction and release the connection back to the pool.
+//
+// done() calls Commit. This is safe because PostgreSQL guarantees that if any
+// statement within the transaction has failed, the transaction enters an aborted
+// state and COMMIT automatically behaves as ROLLBACK. Each handler performs at
+// most one write, so partial-commit is not possible.
 func (s *Server) UserQueries(ctx context.Context, userID uuid.UUID) (queries *db.Queries, done func(), err error) {
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
@@ -23,5 +29,12 @@ func (s *Server) UserQueries(ctx context.Context, userID uuid.UUID) (queries *db
 		return nil, nil, err
 	}
 
-	return s.Queries.WithTx(tx), func() { tx.Commit(ctx) }, nil
+	// Use context.WithoutCancel so that a client disconnect does not cancel
+	// the commit — the write has already succeeded and must be persisted.
+	commitCtx := context.WithoutCancel(ctx)
+	return s.Queries.WithTx(tx), func() {
+		if err := tx.Commit(commitCtx); err != nil {
+			slog.Error("transaction commit failed", "user_id", userID, "err", err)
+		}
+	}, nil
 }

@@ -1,5 +1,8 @@
 # Changelog
 
+- [0.20.0 — Security & Production Hardening](#0200--security--production-hardening-2026-03-22)
+- [0.19.0 — Connection Wizard](#0190--connection-wizard-2026-03-22)
+- [0.18.0 — Supabase Connector](#0180--supabase-connector-2026-03-22)
 - [0.17.3 — Custom Dropdown Component](#0173--custom-dropdown-component-2026-03-21)
 - [0.17.2 — SPA Routing Fix](#0172--spa-routing-fix-2026-03-21)
 - [0.17.1 — Connection Test Modal & Dashboard Fix](#0171--connection-test-modal--dashboard-fix-2026-03-21)
@@ -45,6 +48,285 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.20.0 — Security & Production Hardening (2026-03-22)
+
+Five rounds of hardening (code assessment → polish → production hardening × 2 → final polish) bringing the codebase from "works" to "production-ready". Covers security fixes, correctness bugs, resource leak prevention, and operational robustness. No new features — every change is a fix or improvement to existing code.
+
+### Security Fixes
+
+**SQL injection in Supabase connector (critical)** — `pollTable` interpolated user-controlled table names directly into a SQL string sent to the Supabase Management API. Added an allowlist of the 6 known Supabase log tables, validated at both parse time (`NewSupabase`) and poll time (defense-in-depth).
+
+**XSS in email notifications (critical)** — `FormatEmailHTML()` interpolated LLM-generated text and user-controlled values directly into HTML. All 6 interpolated values now use `html.EscapeString()`.
+
+**`search_logs` tool ignored the query parameter (critical)** — The agent's `search_logs` tool declared a required `query` parameter but never read it. Every "search" was actually "list recent logs", making investigation fundamentally broken. Added `SearchLogsByUser` and `SearchLogsByUserAndSeverity` SQL queries with `ILIKE` matching, plus a `LIKE` wildcard escape helper (`escapeLike`) to prevent `%` and `_` from being interpreted as wildcards.
+
+**Wildcard CORS policy** — `Access-Control-Allow-Origin: *` allowed any website to make authenticated API calls. CORS is now origin-checked against an allowlist from the `CORS_ALLOWED_ORIGINS` env var (falls back to localhost in dev). All CORS headers are scoped to matching origins only.
+
+**Missing RLS on 6 tables** — `organizations`, `applications`, `monitoring_state`, `notification_channels`, `notification_preferences`, and `notification_log` had no Row Level Security policies. Migration 021 enables RLS with `app_current_user_id()` policies, idempotent `DROP POLICY IF EXISTS` guards, and optimised joins. Two missing FK indexes added (`notification_log.channel_id`, `agent_log.conversation_id`).
+
+### Correctness Fixes
+
+**Interactive chat used wrong config source** — `RunConversation` loaded the global `agent_config` singleton instead of the per-app `app_agent_configs` row. Per-app model selection and system prompt overrides configured via the UI were ignored during chat.
+
+**Log pagination broken for combined sources** — `source=all` fetched `limit` rows from each source with the same `offset`, producing inconsistent pages. Now fetches `offset + limit` from each, merges, then applies offset/limit to the merged result. Offset capped at 10,000 to prevent O(offset) memory growth.
+
+**Pagination null vs empty array** — When offset exceeded results, Go serialised a nil slice as `null` instead of `[]`, crashing the frontend. Both the handler and store now guarantee `[]`.
+
+**Pagination counts ignored filters** — `CountLogsByUser` counted all logs regardless of severity/connection filters. Added `CountLogsByUserAndSeverity` and `CountLogsByUserAndConnection` filtered count queries.
+
+**Cursor desynchronisation** — The Supabase connector advanced its cursor based on all rows from the API response, including those whose `InsertLogEntry` failed. Failed rows were permanently skipped — silent data loss. Cursor now only advances for successfully inserted rows.
+
+**Partial-create on Supabase poller failure** — If `NewSupabase()` failed after the DB insert was committed, the client received HTTP 400 but the connection persisted in the database. Config is now validated eagerly *before* the DB insert.
+
+**`UpdateConnection` didn't restart poller** — Editing a Supabase connection's config left the old polling goroutine running. The poller is now stopped and restarted on update.
+
+**`Poll()` always returned nil** — The `PollConnector` interface defines an error return, but the Supabase implementation always returned nil. Now returns the first error encountered across table polls.
+
+### Resource & Lifecycle Fixes
+
+**`os.Exit(1)` in server goroutine** — `ListenAndServe` error triggered immediate process exit, skipping all deferred cleanup (pool, classifier, poller). Replaced with an error channel; the main goroutine selects on both signal and error channels.
+
+**Transaction commit used cancellable context** — If the HTTP client disconnected before `defer done()`, `tx.Commit(ctx)` failed with `context canceled`, silently rolling back successful writes. Now uses `context.WithoutCancel(ctx)` for the commit. Commit failures are logged via `slog.Error`.
+
+**No poll timeout** — `conn.Poll()` received a context with no deadline. A hung upstream could block the goroutine forever. Each poll now runs with `context.WithTimeout(ctx, 2×interval)` (min 30s).
+
+**No graceful drain on shutdown** — `StopAll()` cancelled contexts but returned immediately. Added `sync.WaitGroup` so in-flight polls complete before shutdown proceeds.
+
+**Poller panics on zero interval** — `time.NewTicker(0)` panics. Added `minPollInterval` (5s) clamp.
+
+**Response body size limit** — `io.ReadAll(resp.Body)` on the Supabase API response had no cap. Wrapped with `io.LimitReader` at 10 MB.
+
+**Rate limit blocked goroutine** — When `X-RateLimit-Remaining: 0`, the code slept for the entire reset window (potentially hours). Replaced with log-and-continue; the poller naturally retries on its next tick.
+
+**Rate limit held HTTP connection** — Body was read *after* the backoff sleep. Reordered to read body → check status → sleep, releasing the TCP connection before waiting.
+
+**HTTP idle connections accumulated** — `Close()` was a no-op. Now calls `httpClient.CloseIdleConnections()`.
+
+**Timer leaks** — `setInterval` in `StepTest`, `ConnectionTestModal`, and `ConnectionCard` was never cleared on unmount. `setTimeout` in `CopyableField` had the same issue. All now have `onBeforeUnmount` cleanup.
+
+### Frontend Fixes
+
+**Orphaned connection on wizard abandon** — If the user reached the test step and then closed the wizard, the connection persisted in the database. `handleClose()` now deletes the connection (best-effort) before emitting `close`.
+
+**One-way prop sync in wizard steps** — `StepName`, `StepSupabaseAuth`, `StepSupabaseTables`, and `StepPostgresConfig` copied props on mount but never reacted to parent resets. Added inward watchers.
+
+**Port validation gap** — `StepPostgresConfig` reported itself as valid without checking the port range. Invalid ports silently defaulted to 5432. Now validates 1–65535 before enabling Continue.
+
+**Delete confirmation** — `ConnectionCard` delete was a single click with no confirmation. Added two-click pattern with 3-second auto-reset.
+
+**Action button visibility** — Hidden on touch/keyboard devices. Added `focus-within:opacity-100`.
+
+**Clipboard fallback** — `CopyableField` used `navigator.clipboard.writeText()` which requires HTTPS. Added `document.execCommand('copy')` fallback.
+
+**Escape key handling** — Added to `ConnectionWizard` and `ConnectionTestModal`.
+
+### Cleanup
+
+- **Structured logging** — 7 `log.Printf` calls in connections handler replaced with `slog.Error` with structured attributes.
+- **Dead code** — Removed unused `statusColor` computed in `ConnectionTestModal`.
+- **Duplicate table list** — Extracted `supabaseLogTables` to `flows.ts`, imported by both `StepSupabaseTables` and `ConnectionForm`.
+- **`splitCSV`** — Hand-rolled 12-line CSV parser in CORS middleware replaced with `strings.Split` + `TrimSpace`.
+- **Missing `sb.Close()`** — `TestConnection` handler's Supabase case never closed the connector.
+- **Input validation** — Added allowlists for connection `type`, `direction`, and `status` fields.
+
+### Deployment Notes
+
+**Environment variable required:** `CORS_ALLOWED_ORIGINS` must be set in production (comma-separated frontend origins). If unset, only localhost is allowed.
+
+**Migration required:** `make migrate-up` to apply migration 021 (RLS policies + FK indexes).
+
+### Files Changed
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `backend/internal/connectors/logs/supabase.go` | Table allowlist, body size limit, cursor desync fix, rate limit non-blocking, body read reorder, close idle connections, return firstErr |
+| 2 | `backend/internal/connectors/logs/supabase_test.go` | `TestNewSupabase_InvalidTableName` |
+| 3 | `backend/internal/connectors/poller.go` | Poll timeout, interval clamp, WaitGroup drain |
+| 4 | `backend/internal/api/handlers/connections.go` | Eager validation, poller restart on update, input allowlists, structured logging, `defer sb.Close()` |
+| 5 | `backend/internal/api/handlers/userqueries.go` | `context.WithoutCancel` for commit, commit error logging, documentation |
+| 6 | `backend/internal/api/handlers/logs.go` | Merged-source pagination, offset cap, filtered counts, null-safe response |
+| 7 | `backend/internal/api/middleware/cors.go` | Origin allowlist, scoped headers, `strings.Split` |
+| 8 | `backend/internal/agent/loop.go` | Per-app config in `RunConversation` |
+| 9 | `backend/internal/agent/tools_logs.go` | Read `query` param, `escapeLike`, dispatch to search queries |
+| 10 | `backend/internal/notifications/format.go` | `html.EscapeString` on all interpolated values |
+| 11 | `backend/internal/db/queries/log_buffer.sql` | `SearchLogsByUser`, `SearchLogsByUserAndSeverity`, filtered counts, `ESCAPE '\'` |
+| 12 | `backend/internal/db/log_buffer.sql.go` | Auto-generated by sqlc |
+| 13 | `backend/cmd/heimdall/main.go` | Error channel replaces `os.Exit(1)` |
+| 14 | `backend/migrations/021_rls_missing_tables.up.sql` | RLS policies for 6 tables, 2 FK indexes, idempotent guards |
+| 15 | `backend/migrations/021_rls_missing_tables.down.sql` | Reverse migration |
+| 16 | `frontend/src/components/connections/wizard/ConnectionWizard.vue` | Orphan cleanup, Escape key |
+| 17 | `frontend/src/components/connections/wizard/flows.ts` | Exported `supabaseLogTables` |
+| 18 | `frontend/src/components/connections/wizard/steps/StepTest.vue` | Timer cleanup |
+| 19 | `frontend/src/components/connections/wizard/steps/StepName.vue` | Inward prop sync |
+| 20 | `frontend/src/components/connections/wizard/steps/StepSupabaseAuth.vue` | Inward prop sync |
+| 21 | `frontend/src/components/connections/wizard/steps/StepSupabaseTables.vue` | Import shared table list, inward prop sync |
+| 22 | `frontend/src/components/connections/wizard/steps/StepPostgresConfig.vue` | Port validation, inward prop sync |
+| 23 | `frontend/src/components/connections/ConnectionTestModal.vue` | Timer cleanup, Escape key, remove dead code |
+| 24 | `frontend/src/components/connections/ConnectionCard.vue` | Delete confirmation, timer cleanup, focus-within visibility |
+| 25 | `frontend/src/components/connections/ConnectionForm.vue` | Import shared table list, edit-mode table selection fix |
+| 26 | `frontend/src/components/common/CopyableField.vue` | Clipboard fallback, timer cleanup |
+
+---
+
+## 0.19.0 — Connection Wizard (2026-03-22)
+
+The dropdown-based connection creation form is replaced with a guided multi-step wizard. Users now pick a platform from a visual grid, then walk through platform-specific steps (name → auth → config → test). This is a pure frontend change — the backend and API are identical.
+
+### Wizard Architecture
+
+The wizard uses a declarative flow system. Each platform defines its steps as data in `flows.ts`:
+
+| Platform | Steps | Connector Type |
+|----------|-------|----------------|
+| Supabase | Name → Auth → Tables → Test | `supabase` |
+| PostgreSQL | Name → Config → Test | `postgres` |
+| Webhook | Name → Setup | `webhook_logs` |
+| GitHub | Name → Install | `github` |
+
+Coming-soon platforms (Datadog, Syslog, MySQL) appear in the grid with `opacity-40` and a "Soon" badge. Adding a new connector type = adding a flow definition + step components, zero wizard shell changes.
+
+### Wizard Shell
+
+Full-screen modal at `wizard/ConnectionWizard.vue` orchestrating the creation flow:
+
+- **Platform selection** — `PlatformGrid` shows available connectors grouped by category (Log Sources, Databases, Generic)
+- **Step progression** — Dynamic `<component :is="...">` renders the current step. Each step emits `valid` to control the Continue button.
+- **Create-before-test** — For flows with a test step, the connection is created on the server before advancing to test. `StepTest` then calls the real `POST /connections/{id}/test` endpoint.
+- **Transitions** — Steps slide left/right with opacity fade (200ms ease-out in, 150ms ease-in out)
+- **Local state** — `WizardState` is a local `reactive()` object, not Pinia. Ephemeral, self-cleaning on modal close.
+
+### Step Components
+
+**Shared across all flows:**
+
+| Component | Purpose |
+|-----------|---------|
+| `StepName` | Connection name input, validates non-empty |
+| `StepTest` | Live connection test with elapsed timer, reuses `ConnectionTestModal` visual pattern |
+
+**Supabase-specific:**
+
+| Component | Purpose |
+|-----------|---------|
+| `StepSupabaseAuth` | Project reference + PAT inputs, info callout about Management API |
+| `StepSupabaseTables` | Checkbox group for 6 log tables (defaults: `postgres_logs`, `auth_logs`), poll interval presets |
+
+**Existing connector types:**
+
+| Component | Purpose |
+|-----------|---------|
+| `StepPostgresConfig` | Host, port, database, username, password, SSL mode (2-column grid for host/port) |
+| `StepWebhookSetup` | Endpoint URL format + payload example. Uses `CopyableField` for copy-to-clipboard. |
+| `StepGitHubInstall` | GitHub App install button redirecting to GitHub OAuth |
+
+### Supporting Components
+
+**CopyableField** (`common/CopyableField.vue`) — Monospace code display with clipboard button. Used by `StepWebhookSetup` for webhook URLs and tokens.
+
+**WizardStepIndicator** — Dot-line progress bar (`● ─── ○ ─── ○`). Active: `bg-accent`, completed: `bg-accent/60`, future: `bg-border`.
+
+**PlatformGrid + PlatformCard** — Card grid grouped by category. Each card shows a 2-letter icon badge, name, and description.
+
+### ConnectionsPage Integration
+
+- **"+ New Connection"** button opens the wizard modal
+- **`ConnectionForm`** preserved for editing existing connections (inline, not modal)
+- Step components are lazy-loaded via `defineAsyncComponent` to keep the initial bundle small
+
+### Files Changed
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `frontend/src/components/connections/wizard/flows.ts` | Flow definitions and types |
+| 2 | `frontend/src/components/connections/wizard/ConnectionWizard.vue` | Wizard shell / orchestrator |
+| 3 | `frontend/src/components/connections/wizard/WizardStepIndicator.vue` | Dot-line progress bar |
+| 4 | `frontend/src/components/connections/wizard/PlatformGrid.vue` | Categorised platform card grid |
+| 5 | `frontend/src/components/connections/wizard/PlatformCard.vue` | Individual platform card |
+| 6 | `frontend/src/components/connections/wizard/steps/StepName.vue` | Name input (shared) |
+| 7 | `frontend/src/components/connections/wizard/steps/StepTest.vue` | Live connection test (shared) |
+| 8 | `frontend/src/components/connections/wizard/steps/StepSupabaseAuth.vue` | Supabase auth fields |
+| 9 | `frontend/src/components/connections/wizard/steps/StepSupabaseTables.vue` | Supabase table selection |
+| 10 | `frontend/src/components/connections/wizard/steps/StepPostgresConfig.vue` | PostgreSQL config fields |
+| 11 | `frontend/src/components/connections/wizard/steps/StepWebhookSetup.vue` | Webhook setup info |
+| 12 | `frontend/src/components/connections/wizard/steps/StepGitHubInstall.vue` | GitHub App install |
+| 13 | `frontend/src/components/common/CopyableField.vue` | Copy-to-clipboard field |
+| 14 | `frontend/src/pages/ConnectionsPage.vue` | Wire wizard modal, preserve form for editing |
+
+---
+
+## 0.18.0 — Supabase Connector (2026-03-22)
+
+Heimdall can now ingest logs from Supabase projects. Users create a Supabase connection with a Personal Access Token and project reference, and Heimdall polls the Supabase Management API on a configurable interval (15–60 seconds), inserting logs into `log_buffer` where the existing monitoring loop classifies and escalates them. No Supabase plan restrictions — works with the free tier.
+
+### Backend — Polling Connector
+
+**`PollConnector` interface** (`connectors/connector.go`) — New interface alongside `StreamConnector` (push-based) and `QueryConnector` (on-demand). Polling is fundamentally pull-based — the connector initiates HTTP requests on a timer. `Poll(ctx, queries)` takes `*db.Queries` so it can call `InsertLogEntry` directly.
+
+**Supabase connector** (`connectors/logs/supabase.go`) — Calls `GET /v1/projects/{ref}/analytics/endpoints/logs.all` with a SQL query per table. Supports 6 log tables: `postgres_logs`, `auth_logs`, `edge_logs`, `function_logs`, `storage_logs`, `realtime_logs`.
+
+| Behaviour | Detail |
+|-----------|--------|
+| **Config** | `project_ref` (required), `access_token` (required), `poll_tables` (defaults to `["postgres_logs"]`), `poll_interval_secs` (defaults to 30, min 15) |
+| **Connect/Health** | Validates PAT by running `SELECT 1` against the analytics endpoint |
+| **Poll** | For each table: query since cursor → parse → insert into `log_buffer` → advance cursor. Continues polling other tables if one fails. |
+| **Cursors** | In-memory per-table, initialised to `now() - 5 minutes` on startup |
+| **Severity** | Derived from metadata fields (`error_severity`, `severity`, `level`) |
+
+**Polling loop manager** (`connectors/poller.go`) — Manages one goroutine per active poll-based connection. `Start()` launches a goroutine on a ticker, firing once immediately then on each interval. `Stop()` cancels a single connection. `StopAll()` cancels all (called on shutdown).
+
+### Backend — Server Wiring
+
+- `Server` struct gains a `Poller` field, passed through `NewServer()` and `NewRouter()`
+- `main.go` creates the `Poller`, calls `resumePollers()` on startup (queries `ListActiveConnectionsByType("supabase")` to restart polling for existing connections), and calls `poller.StopAll()` during shutdown
+- `CreateConnection` starts the poller for new Supabase connections
+- `DeleteConnection` stops the poller before deleting
+- New sqlc query: `ListActiveConnectionsByType`
+
+### Frontend — Connection Form & Card
+
+**ConnectionForm** — Added `supabase` type with config fields (project reference, PAT, poll interval select) and a checkbox group for poll tables. Selecting Supabase auto-locks direction to `one_way`. Helper text explains the Management API and PAT generation.
+
+**ConnectionCard** — Human-readable type labels (`supabase` → "Supabase"). Supabase cards show "Polling N tables" instead of the direction.
+
+### Tests — 24 New Tests
+
+**Backend (16 tests):**
+
+| File | Tests | Coverage |
+|------|-------|----------|
+| `connectors/logs/supabase_test.go` | 12 | Config parsing, defaults, validation, Connect success/401/404, severity derivation, cursor advancement, Close, Health, rate limit 429 |
+| `connectors/poller_test.go` | 4 | Start/stop, StopAll, replace existing, stop non-existent |
+
+Uses `httptest.NewServer` to mock the Supabase API via an injectable `apiBase` field.
+
+**Frontend (8 tests):**
+
+| File | Tests | Coverage |
+|------|-------|----------|
+| `ConnectionForm.test.ts` | 8 | Supabase type renders, config fields, 6 table checkboxes, defaults, auto direction, submit payload, helper text, edit mode |
+
+### Files Changed
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `backend/internal/connectors/connector.go` | Added `PollConnector` interface |
+| 2 | `backend/internal/connectors/logs/supabase.go` | Supabase Management API polling connector |
+| 3 | `backend/internal/connectors/logs/supabase_test.go` | 12 unit tests |
+| 4 | `backend/internal/connectors/poller.go` | Goroutine-per-connection polling loop manager |
+| 5 | `backend/internal/connectors/poller_test.go` | 4 unit tests |
+| 6 | `backend/internal/api/handlers/server.go` | Added `Poller` field, updated `NewServer()` |
+| 7 | `backend/internal/api/router.go` | Updated `NewRouter()` to accept `*connectors.Poller` |
+| 8 | `backend/internal/api/handlers/connections.go` | Supabase test/create/delete handling |
+| 9 | `backend/internal/api/handlers/testhelpers_test.go` | Added `Poller` to test Server struct |
+| 10 | `backend/cmd/heimdall/main.go` | Create poller, resume on startup, shutdown |
+| 11 | `backend/internal/db/queries/connections.sql` | Added `ListActiveConnectionsByType` query |
+| 12 | `backend/internal/db/connections.sql.go` | Auto-generated by sqlc |
+| 13 | `frontend/src/components/connections/ConnectionForm.vue` | Supabase type, config fields, poll_tables checkbox group, helper text, direction lock |
+| 14 | `frontend/src/components/connections/ConnectionCard.vue` | Type labels, Supabase subtitle |
+| 15 | `frontend/src/components/connections/__tests__/ConnectionForm.test.ts` | 8 component tests |
 
 ---
 

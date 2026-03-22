@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
 import type { Connection } from '@/types/connection'
 import { useConnectionsStore } from '@/stores/connections'
 
@@ -36,7 +36,12 @@ const connectionMeta = computed(() => {
   return details
 })
 
+function onKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape' && phase.value !== 'testing') emit('close')
+}
+
 onMounted(async () => {
+  document.addEventListener('keydown', onKeydown)
   timer = setInterval(() => { elapsed.value += 100 }, 100)
 
   try {
@@ -56,15 +61,16 @@ onMounted(async () => {
   }
 })
 
-const elapsedDisplay = computed(() => (elapsed.value / 1000).toFixed(1) + 's')
-
-const statusColor = computed(() => {
-  switch (phase.value) {
-    case 'testing': return 'accent'
-    case 'success': return 'status-ok'
-    case 'error': return 'status-critical'
+onBeforeUnmount(() => {
+  document.removeEventListener('keydown', onKeydown)
+  if (timer) {
+    clearInterval(timer)
+    timer = null
   }
 })
+
+const elapsedDisplay = computed(() => (elapsed.value / 1000).toFixed(1) + 's')
+
 </script>
 
 <template>

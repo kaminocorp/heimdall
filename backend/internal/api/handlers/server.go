@@ -6,6 +6,7 @@ import (
 	"github.com/hejijunhao/heimdall/backend/internal/agent"
 	"github.com/hejijunhao/heimdall/backend/internal/api/middleware"
 	"github.com/hejijunhao/heimdall/backend/internal/config"
+	"github.com/hejijunhao/heimdall/backend/internal/connectors"
 	"github.com/hejijunhao/heimdall/backend/internal/db"
 	"github.com/hejijunhao/heimdall/backend/internal/github"
 )
@@ -18,9 +19,10 @@ type Server struct {
 	Agent   *agent.Agent
 	JWKS    *middleware.JWKSClient
 	GitHub  *github.Client
+	Poller  *connectors.Poller
 }
 
-func NewServer(cfg *config.Config, pool *pgxpool.Pool, ag *agent.Agent, jwks *middleware.JWKSClient, gh *github.Client) *Server {
+func NewServer(cfg *config.Config, pool *pgxpool.Pool, ag *agent.Agent, jwks *middleware.JWKSClient, gh *github.Client, poller *connectors.Poller) *Server {
 	return &Server{
 		Config:  cfg,
 		Pool:    pool,
@@ -28,5 +30,6 @@ func NewServer(cfg *config.Config, pool *pgxpool.Pool, ag *agent.Agent, jwks *mi
 		Agent:   ag,
 		JWKS:    jwks,
 		GitHub:  gh,
+		Poller:  poller,
 	}
 }

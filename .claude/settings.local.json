@@ -72,7 +72,12 @@
       "Bash(fly auth:*)",
       "Bash(fly apps:*)",
       "Bash(kill:*)",
-      "Bash(npm run:*)"
+      "Bash(npm run:*)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:api.supabase.com)",
+      "Bash(make sqlc-generate:*)",
+      "Bash(echo \"EXIT: $?\")",
+      "Bash(echo \"EXIT_CODE: $?\")"
     ]
   }
 }

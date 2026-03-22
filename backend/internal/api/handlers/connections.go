@@ -6,7 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -15,6 +15,7 @@ import (
 
 	"github.com/hejijunhao/heimdall/backend/internal/api/middleware"
 	"github.com/hejijunhao/heimdall/backend/internal/connectors/database"
+	"github.com/hejijunhao/heimdall/backend/internal/connectors/logs"
 	"github.com/hejijunhao/heimdall/backend/internal/db"
 )
 
@@ -100,6 +101,14 @@ func (s *Server) CreateConnection(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "app_id, name and type are required", http.StatusBadRequest)
 		return
 	}
+	if !isValidConnectionType(req.Type) {
+		jsonError(w, "invalid connection type", http.StatusBadRequest)
+		return
+	}
+	if req.Direction != "" && !isValidDirection(req.Direction) {
+		jsonError(w, "invalid direction", http.StatusBadRequest)
+		return
+	}
 
 	appID, err := uuid.Parse(req.AppID)
 	if err != nil {
@@ -124,6 +133,15 @@ func (s *Server) CreateConnection(w http.ResponseWriter, r *http.Request) {
 	config := req.Config
 	if config == nil {
 		config = json.RawMessage(`{}`)
+	}
+
+	// Validate Supabase config eagerly — before DB insert — to prevent
+	// creating orphaned connections that can't start polling.
+	if req.Type == "supabase" {
+		if _, err := logs.NewSupabase(config, uuid.Nil, uuid.Nil); err != nil {
+			jsonError(w, fmt.Sprintf("Invalid Supabase config: %v", err), http.StatusBadRequest)
+			return
+		}
 	}
 
 	// Auto-generate a webhook token for webhook_logs connections.
@@ -173,6 +191,19 @@ func (s *Server) CreateConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Start polling goroutine for Supabase connections.
+	// Config was already validated above, so NewSupabase should not fail here.
+	if req.Type == "supabase" {
+		sb, err := logs.NewSupabase(config, conn.ID, userID)
+		if err != nil {
+			slog.Error("supabase poller init failed (unexpected)", "connection_id", conn.ID, "err", err)
+		} else {
+			cfg := sb.ParsedConfig()
+			interval := time.Duration(cfg.PollIntervalSecs) * time.Second
+			s.Poller.Start(sb, conn.ID, interval)
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(conn)
@@ -209,6 +240,18 @@ func (s *Server) UpdateConnection(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "name and type are required", http.StatusBadRequest)
 		return
 	}
+	if !isValidConnectionType(req.Type) {
+		jsonError(w, "invalid connection type", http.StatusBadRequest)
+		return
+	}
+	if req.Direction != "" && !isValidDirection(req.Direction) {
+		jsonError(w, "invalid direction", http.StatusBadRequest)
+		return
+	}
+	if req.Status != "" && !isValidConnectionStatus(req.Status) {
+		jsonError(w, "invalid status", http.StatusBadRequest)
+		return
+	}
 
 	direction := req.Direction
 	if direction == "" {
@@ -242,6 +285,20 @@ func (s *Server) UpdateConnection(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		jsonError(w, "connection not found", http.StatusNotFound)
 		return
+	}
+
+	// Restart poller if this is a Supabase connection so it picks up config changes.
+	// Stop first (handles the case where type changed away from supabase too).
+	s.Poller.Stop(connID)
+	if req.Type == "supabase" {
+		sb, err := logs.NewSupabase(config, conn.ID, userID)
+		if err != nil {
+			slog.Error("supabase poller init failed", "connection_id", conn.ID, "err", err)
+		} else {
+			cfg := sb.ParsedConfig()
+			interval := time.Duration(cfg.PollIntervalSecs) * time.Second
+			s.Poller.Start(sb, conn.ID, interval)
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -288,18 +345,34 @@ func (s *Server) TestConnection(w http.ResponseWriter, r *http.Request) {
 	case "postgres":
 		pg, err := database.New(conn.Config)
 		if err != nil {
-			log.Printf("connection test failed for %s: %v", connID, err)
+			slog.Error("connection test failed", "connection_id", connID, "err", err)
 			result = testResult{Success: false, Message: fmt.Sprintf("Failed to initialize database connector: %v", err)}
 			break
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		defer cancel()
 		if err := pg.Connect(ctx); err != nil {
-			log.Printf("connection test failed for %s: %v", connID, err)
+			slog.Error("connection test failed", "connection_id", connID, "err", err)
 			result = testResult{Success: false, Message: fmt.Sprintf("Failed to connect to database: %v", err)}
 		} else {
 			defer pg.Close(ctx)
 			result = testResult{Success: true, Message: "Connection established"}
+		}
+	case "supabase":
+		sb, err := logs.NewSupabase(conn.Config, conn.ID, userID)
+		if err != nil {
+			slog.Error("connection test failed", "connection_id", connID, "err", err)
+			result = testResult{Success: false, Message: fmt.Sprintf("Invalid config: %v", err)}
+			break
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		defer cancel()
+		if err := sb.Connect(ctx); err != nil {
+			slog.Error("connection test failed", "connection_id", connID, "err", err)
+			result = testResult{Success: false, Message: fmt.Sprintf("Failed to connect to Supabase API: %v", err)}
+		} else {
+			defer sb.Close()
+			result = testResult{Success: true, Message: "Connected to Supabase Management API"}
 		}
 	case "github":
 		if s.GitHub != nil {
@@ -321,12 +394,26 @@ func (s *Server) TestConnection(w http.ResponseWriter, r *http.Request) {
 		ID:     connID,
 		Status: newStatus,
 	}); err != nil {
-		log.Printf("failed to update connection status for %s: %v", connID, err)
+		slog.Error("failed to update connection status", "connection_id", connID, "err", err)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(result)
 }
+
+// --- Input validation helpers ---
+
+var validConnectionTypes = map[string]bool{
+	"webhook_logs": true,
+	"postgres":     true,
+	"supabase":     true,
+	"github":       true,
+	"syslog":       true,
+}
+
+func isValidConnectionType(t string) bool  { return validConnectionTypes[t] }
+func isValidDirection(d string) bool        { return d == "one_way" || d == "two_way" }
+func isValidConnectionStatus(s string) bool { return s == "active" || s == "inactive" || s == "error" }
 
 func (s *Server) DeleteConnection(w http.ResponseWriter, r *http.Request) {
 	userID, ok := middleware.UserIDFromContext(r.Context())
@@ -347,6 +434,9 @@ func (s *Server) DeleteConnection(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "invalid connection id", http.StatusBadRequest)
 		return
 	}
+
+	// Stop any active poller before deleting.
+	s.Poller.Stop(connID)
 
 	err = queries.DeleteConnectionByUser(r.Context(), db.DeleteConnectionByUserParams{
 		ID:     connID,

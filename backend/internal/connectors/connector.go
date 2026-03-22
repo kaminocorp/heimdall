@@ -1,6 +1,10 @@
 package connectors
 
-import "context"
+import (
+	"context"
+
+	"github.com/hejijunhao/heimdall/backend/internal/db"
+)
 
 // Connector is the common interface for all external integrations.
 type Connector interface {
@@ -19,4 +23,12 @@ type StreamConnector interface {
 type QueryConnector interface {
 	Connector
 	Query(ctx context.Context, query string) (any, error)
+}
+
+// PollConnector extends Connector with timer-driven polling capability.
+// Poll is called on a recurring interval; it pulls data from the external
+// source and inserts it into log_buffer via the provided Queries handle.
+type PollConnector interface {
+	Connector
+	Poll(ctx context.Context, queries *db.Queries) error
 }

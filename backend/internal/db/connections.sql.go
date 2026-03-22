@@ -97,6 +97,42 @@ func (q *Queries) GetConnectionByUser(ctx context.Context, arg GetConnectionByUs
 	return i, err
 }
 
+const listActiveConnectionsByType = `-- name: ListActiveConnectionsByType :many
+SELECT id, name, type, direction, config, status, last_seen, created_at, updated_at, user_id, app_id FROM connections WHERE type = $1 AND status = 'active'
+`
+
+func (q *Queries) ListActiveConnectionsByType(ctx context.Context, type_ string) ([]Connection, error) {
+	rows, err := q.db.Query(ctx, listActiveConnectionsByType, type_)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Connection{}
+	for rows.Next() {
+		var i Connection
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Type,
+			&i.Direction,
+			&i.Config,
+			&i.Status,
+			&i.LastSeen,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.UserID,
+			&i.AppID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listConnectionsByApp = `-- name: ListConnectionsByApp :many
 SELECT id, name, type, direction, config, status, last_seen, created_at, updated_at, user_id, app_id FROM connections WHERE app_id = $1 ORDER BY created_at DESC
 `

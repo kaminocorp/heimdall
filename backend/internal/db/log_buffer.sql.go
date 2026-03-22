@@ -25,6 +25,40 @@ func (q *Queries) CountLogsByUser(ctx context.Context, userID uuid.UUID) (int64,
 	return count, err
 }
 
+const countLogsByUserAndConnection = `-- name: CountLogsByUserAndConnection :one
+SELECT count(*) FROM log_buffer
+WHERE user_id = $1 AND connection_id = $2
+`
+
+type CountLogsByUserAndConnectionParams struct {
+	UserID       uuid.UUID `json:"user_id"`
+	ConnectionID uuid.UUID `json:"connection_id"`
+}
+
+func (q *Queries) CountLogsByUserAndConnection(ctx context.Context, arg CountLogsByUserAndConnectionParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countLogsByUserAndConnection, arg.UserID, arg.ConnectionID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countLogsByUserAndSeverity = `-- name: CountLogsByUserAndSeverity :one
+SELECT count(*) FROM log_buffer
+WHERE user_id = $1 AND severity = $2
+`
+
+type CountLogsByUserAndSeverityParams struct {
+	UserID   uuid.UUID   `json:"user_id"`
+	Severity pgtype.Text `json:"severity"`
+}
+
+func (q *Queries) CountLogsByUserAndSeverity(ctx context.Context, arg CountLogsByUserAndSeverityParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countLogsByUserAndSeverity, arg.UserID, arg.Severity)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const getConnectionByWebhookToken = `-- name: GetConnectionByWebhookToken :one
 SELECT id, name, type, direction, config, status, last_seen, created_at, updated_at, user_id, app_id FROM connections
 WHERE config->>'webhook_token' = $1::text AND type = 'webhook_logs' AND status = 'active'
@@ -229,4 +263,100 @@ func (q *Queries) PruneExpiredLogs(ctx context.Context) (int64, error) {
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const searchLogsByUser = `-- name: SearchLogsByUser :many
+SELECT id, connection_id, source_type, severity, payload, ingested_at, user_id FROM log_buffer
+WHERE user_id = $1 AND payload::text ILIKE '%' || $2::text || '%' ESCAPE '\'
+ORDER BY ingested_at DESC
+LIMIT $4 OFFSET $3
+`
+
+type SearchLogsByUserParams struct {
+	UserID    uuid.UUID `json:"user_id"`
+	Query     string    `json:"query"`
+	RowOffset int32     `json:"row_offset"`
+	RowLimit  int32     `json:"row_limit"`
+}
+
+func (q *Queries) SearchLogsByUser(ctx context.Context, arg SearchLogsByUserParams) ([]LogBuffer, error) {
+	rows, err := q.db.Query(ctx, searchLogsByUser,
+		arg.UserID,
+		arg.Query,
+		arg.RowOffset,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []LogBuffer{}
+	for rows.Next() {
+		var i LogBuffer
+		if err := rows.Scan(
+			&i.ID,
+			&i.ConnectionID,
+			&i.SourceType,
+			&i.Severity,
+			&i.Payload,
+			&i.IngestedAt,
+			&i.UserID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const searchLogsByUserAndSeverity = `-- name: SearchLogsByUserAndSeverity :many
+SELECT id, connection_id, source_type, severity, payload, ingested_at, user_id FROM log_buffer
+WHERE user_id = $1 AND payload::text ILIKE '%' || $2::text || '%' ESCAPE '\' AND severity = $3
+ORDER BY ingested_at DESC
+LIMIT $5 OFFSET $4
+`
+
+type SearchLogsByUserAndSeverityParams struct {
+	UserID    uuid.UUID   `json:"user_id"`
+	Query     string      `json:"query"`
+	Severity  pgtype.Text `json:"severity"`
+	RowOffset int32       `json:"row_offset"`
+	RowLimit  int32       `json:"row_limit"`
+}
+
+func (q *Queries) SearchLogsByUserAndSeverity(ctx context.Context, arg SearchLogsByUserAndSeverityParams) ([]LogBuffer, error) {
+	rows, err := q.db.Query(ctx, searchLogsByUserAndSeverity,
+		arg.UserID,
+		arg.Query,
+		arg.Severity,
+		arg.RowOffset,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []LogBuffer{}
+	for rows.Next() {
+		var i LogBuffer
+		if err := rows.Scan(
+			&i.ID,
+			&i.ConnectionID,
+			&i.SourceType,
+			&i.Severity,
+			&i.Payload,
+			&i.IngestedAt,
+			&i.UserID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

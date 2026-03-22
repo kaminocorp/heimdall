@@ -27,17 +27,30 @@ func (a *Agent) RunLoop(ctx context.Context, userID uuid.UUID, input string) (st
 // conversationID is optional — when provided, agent observations are emitted to agent_log.
 // appID is optional — when provided, enables app-scoped tools like search_codebase.
 func (a *Agent) RunConversation(ctx context.Context, userID uuid.UUID, appID uuid.UUID, conversationID *uuid.UUID, history []Message, input string) (string, error) {
-	// Load agent config from DB (fallback to defaults if no row).
+	// Load agent config: prefer per-app config when appID is provided,
+	// fall back to global agent_config singleton.
 	model := anthropic.ModelClaudeSonnet4_5
 	systemOverride := ""
 
-	cfg, err := a.queries.GetAgentConfig(ctx)
-	if err == nil {
-		if cfg.Model != "" {
-			model = anthropic.Model(cfg.Model)
+	if appID != uuid.Nil {
+		appCfg, err := a.queries.GetAppAgentConfig(ctx, appID)
+		if err == nil {
+			if appCfg.Model != "" {
+				model = anthropic.Model(appCfg.Model)
+			}
+			if appCfg.SystemPromptOverride.Valid {
+				systemOverride = appCfg.SystemPromptOverride.String
+			}
 		}
-		if cfg.SystemPromptOverride.Valid {
-			systemOverride = cfg.SystemPromptOverride.String
+	} else {
+		cfg, err := a.queries.GetAgentConfig(ctx)
+		if err == nil {
+			if cfg.Model != "" {
+				model = anthropic.Model(cfg.Model)
+			}
+			if cfg.SystemPromptOverride.Valid {
+				systemOverride = cfg.SystemPromptOverride.String
+			}
 		}
 	}
 

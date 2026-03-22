@@ -15,6 +15,8 @@ import (
 	"github.com/hejijunhao/heimdall/backend/internal/api"
 	"github.com/hejijunhao/heimdall/backend/internal/api/middleware"
 	"github.com/hejijunhao/heimdall/backend/internal/config"
+	"github.com/hejijunhao/heimdall/backend/internal/connectors"
+	"github.com/hejijunhao/heimdall/backend/internal/connectors/logs"
 	"github.com/hejijunhao/heimdall/backend/internal/db"
 	"github.com/hejijunhao/heimdall/backend/internal/github"
 	"github.com/hejijunhao/heimdall/backend/internal/notifications"
@@ -85,7 +87,10 @@ func main() {
 	ag := agent.New(queries, cfg, classifier, notifier, ghClient)
 	ag.Start(context.Background())
 
-	router := api.NewRouter(cfg, pool, ag, jwks, ghClient)
+	poller := connectors.NewPoller(queries)
+	resumePollers(context.Background(), queries, poller)
+
+	router := api.NewRouter(cfg, pool, ag, jwks, ghClient, poller)
 
 	srv := &http.Server{
 		Addr:         ":" + cfg.Port,
@@ -95,17 +100,23 @@ func main() {
 		IdleTimeout:  120 * time.Second,
 	}
 
+	// Use an error channel instead of os.Exit so deferred cleanup always runs.
+	serverErr := make(chan error, 1)
 	go func() {
 		slog.Info("starting server", "port", cfg.Port)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			slog.Error("server error", "err", err)
-			os.Exit(1)
+			serverErr <- err
 		}
 	}()
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
+	select {
+	case <-quit:
+		// Normal shutdown signal.
+	case err := <-serverErr:
+		slog.Error("server error, shutting down", "err", err)
+	}
 
 	slog.Info("shutting down server")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -113,8 +124,33 @@ func main() {
 	if err := srv.Shutdown(ctx); err != nil {
 		slog.Error("server shutdown error", "err", err)
 	}
+	poller.StopAll()
 	ag.Stop()
 	if err := classifier.Close(); err != nil {
 		slog.Error("classifier shutdown error", "err", err)
+	}
+}
+
+// resumePollers restarts polling goroutines for all active Supabase connections.
+func resumePollers(ctx context.Context, queries *db.Queries, poller *connectors.Poller) {
+	conns, err := queries.ListActiveConnectionsByType(ctx, "supabase")
+	if err != nil {
+		slog.Error("failed to list active supabase connections for resume", "err", err)
+		return
+	}
+
+	for _, conn := range conns {
+		sb, err := logs.NewSupabase(conn.Config, conn.ID, conn.UserID)
+		if err != nil {
+			slog.Error("failed to create supabase connector for resume", "connection_id", conn.ID, "err", err)
+			continue
+		}
+		cfg := sb.ParsedConfig()
+		interval := time.Duration(cfg.PollIntervalSecs) * time.Second
+		poller.Start(sb, conn.ID, interval)
+	}
+
+	if len(conns) > 0 {
+		slog.Info("resumed supabase pollers", "count", len(conns))
 	}
 }

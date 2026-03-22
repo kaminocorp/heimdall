@@ -8,11 +8,12 @@ import (
 	"github.com/hejijunhao/heimdall/backend/internal/api/handlers"
 	"github.com/hejijunhao/heimdall/backend/internal/api/middleware"
 	"github.com/hejijunhao/heimdall/backend/internal/config"
+	"github.com/hejijunhao/heimdall/backend/internal/connectors"
 	"github.com/hejijunhao/heimdall/backend/internal/github"
 )
 
-func NewRouter(cfg *config.Config, pool *pgxpool.Pool, ag *agent.Agent, jwks *middleware.JWKSClient, gh *github.Client) *chi.Mux {
-	s := handlers.NewServer(cfg, pool, ag, jwks, gh)
+func NewRouter(cfg *config.Config, pool *pgxpool.Pool, ag *agent.Agent, jwks *middleware.JWKSClient, gh *github.Client, poller *connectors.Poller) *chi.Mux {
+	s := handlers.NewServer(cfg, pool, ag, jwks, gh, poller)
 	r := chi.NewRouter()
 
 	r.Use(middleware.Logging)

@@ -19,6 +19,7 @@ import (
 	"github.com/hejijunhao/heimdall/backend/internal/api/handlers"
 	"github.com/hejijunhao/heimdall/backend/internal/api/middleware"
 	"github.com/hejijunhao/heimdall/backend/internal/config"
+	"github.com/hejijunhao/heimdall/backend/internal/connectors"
 	"github.com/hejijunhao/heimdall/backend/internal/db"
 )
 
@@ -121,6 +122,7 @@ func testSetup(t *testing.T) *testEnv {
 		Pool:    pool,
 		Queries: queries,
 		Agent:   nil, // Agent not needed for handler tests
+		Poller:  connectors.NewPoller(queries),
 	}
 
 	// Build a test router that mirrors the production routes from router.go

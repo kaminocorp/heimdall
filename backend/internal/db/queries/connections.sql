@@ -23,3 +23,6 @@ UPDATE connections SET status = $2, last_seen = now(), updated_at = now() WHERE 
 
 -- name: DeleteConnectionByUser :exec
 DELETE FROM connections WHERE id = $1 AND user_id = $2;
+
+-- name: ListActiveConnectionsByType :many
+SELECT * FROM connections WHERE type = $1 AND status = 'active';

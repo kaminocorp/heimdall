@@ -8,6 +8,7 @@ import type { Connection, CreateConnectionPayload } from '@/types/connection'
 import ConnectionList from '@/components/connections/ConnectionList.vue'
 import ConnectionForm from '@/components/connections/ConnectionForm.vue'
 import ConnectionTestModal from '@/components/connections/ConnectionTestModal.vue'
+import ConnectionWizard from '@/components/connections/wizard/ConnectionWizard.vue'
 import GitHubRepoSelector from '@/components/connections/GitHubRepoSelector.vue'
 import SkeletonBlock from '@/components/common/SkeletonBlock.vue'
 
@@ -16,6 +17,7 @@ const appStore = useAppStore()
 const route = useRoute()
 const router = useRouter()
 const showForm = ref(false)
+const showWizard = ref(false)
 const editingConnection = ref<Connection | null>(null)
 const actionError = ref<string | null>(null)
 const repoSelectorConnectionId = ref<string | null>(null)
@@ -55,8 +57,7 @@ onMounted(async () => {
 watch(() => appStore.currentAppId, fetchAppConnections)
 
 function openCreate() {
-  editingConnection.value = null
-  showForm.value = true
+  showWizard.value = true
 }
 
 function openEdit(connection: Connection) {
@@ -96,6 +97,11 @@ function handleTest(id: string) {
   actionError.value = null
   const conn = store.connections.find(c => c.id === id)
   if (conn) testModalConnection.value = conn
+}
+
+function closeWizard() {
+  showWizard.value = false
+  fetchAppConnections()
 }
 
 function closeTestModal() {
@@ -181,6 +187,13 @@ function closeRepoSelector() {
       v-if="testModalConnection"
       :connection="testModalConnection"
       @close="closeTestModal"
+    />
+
+    <!-- Connection wizard modal -->
+    <ConnectionWizard
+      v-if="showWizard"
+      @close="closeWizard"
+      @created="closeWizard"
     />
   </div>
 </template>

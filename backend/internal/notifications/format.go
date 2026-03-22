@@ -1,6 +1,9 @@
 package notifications
 
-import "fmt"
+import (
+	"fmt"
+	"html"
+)
 
 // SeverityEmoji returns an emoji indicator for the given severity level.
 func SeverityEmoji(severity string) string {
@@ -49,5 +52,5 @@ func FormatEmailHTML(p Payload) string {
 <div style="background: #f5f5f5; padding: 12px; border-radius: 4px; white-space: pre-wrap;">%s</div>
 <hr style="border: 1px solid #ddd;">
 <p style="color: #999; font-size: 12px;">Sent by Heimdall at %s</p>
-</div>`, SeverityEmoji(p.Severity), FormatSubject(p.Severity, p.AppName), p.AppName, p.Severity, p.Summary, p.Assessment, p.Timestamp)
+</div>`, SeverityEmoji(p.Severity), html.EscapeString(FormatSubject(p.Severity, p.AppName)), html.EscapeString(p.AppName), html.EscapeString(p.Severity), html.EscapeString(p.Summary), html.EscapeString(p.Assessment), html.EscapeString(p.Timestamp))
 }

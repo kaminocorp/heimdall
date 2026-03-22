@@ -63,6 +63,11 @@ func (s *Server) ListLogs(w http.ResponseWriter, r *http.Request) {
 			offset = int32(n)
 		}
 	}
+	// Cap offset to prevent O(offset) memory usage on source=all merges.
+	const maxOffset int32 = 10000
+	if offset > maxOffset {
+		offset = maxOffset
+	}
 
 	severity := r.URL.Query().Get("severity")
 	connectionID := r.URL.Query().Get("connection_id")
@@ -82,6 +87,16 @@ func (s *Server) ListLogs(w http.ResponseWriter, r *http.Request) {
 	fetchRaw := source == "all" || source == "raw"
 	fetchAgent := source == "all" || source == "agent"
 
+	// When fetching from both sources ("all"), we need to merge results correctly.
+	// We fetch (offset + limit) rows from each source so we have enough to merge,
+	// then sort the combined set by timestamp and apply offset/limit to the merged result.
+	fetchLimit := limit
+	fetchOffset := offset
+	if source == "all" {
+		fetchLimit = offset + limit // fetch enough rows to cover the merged window
+		fetchOffset = 0             // start from the beginning; we paginate the merged set
+	}
+
 	// Fetch raw logs.
 	if fetchRaw {
 		var rawLogs []db.LogBuffer
@@ -97,21 +112,21 @@ func (s *Server) ListLogs(w http.ResponseWriter, r *http.Request) {
 			rawLogs, err = queries.ListLogsByUserAndConnection(r.Context(), db.ListLogsByUserAndConnectionParams{
 				UserID:       userID,
 				ConnectionID: connID,
-				Limit:        limit,
-				Offset:       offset,
+				Limit:        fetchLimit,
+				Offset:       fetchOffset,
 			})
 		case severity != "":
 			rawLogs, err = queries.ListLogsByUserAndSeverity(r.Context(), db.ListLogsByUserAndSeverityParams{
 				UserID:   userID,
 				Severity: pgtype.Text{String: severity, Valid: true},
-				Limit:    limit,
-				Offset:   offset,
+				Limit:    fetchLimit,
+				Offset:   fetchOffset,
 			})
 		default:
 			rawLogs, err = queries.ListLogsByUser(r.Context(), db.ListLogsByUserParams{
 				UserID: userID,
-				Limit:  limit,
-				Offset: offset,
+				Limit:  fetchLimit,
+				Offset: fetchOffset,
 			})
 		}
 		if err != nil {
@@ -119,7 +134,23 @@ func (s *Server) ListLogs(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		rawCount, err := queries.CountLogsByUser(r.Context(), userID)
+		// Use a filtered count that matches the active query so pagination totals are accurate.
+		var rawCount int64
+		switch {
+		case connectionID != "":
+			connID, _ := uuid.Parse(connectionID) // already validated above
+			rawCount, err = queries.CountLogsByUserAndConnection(r.Context(), db.CountLogsByUserAndConnectionParams{
+				UserID:       userID,
+				ConnectionID: connID,
+			})
+		case severity != "":
+			rawCount, err = queries.CountLogsByUserAndSeverity(r.Context(), db.CountLogsByUserAndSeverityParams{
+				UserID:   userID,
+				Severity: pgtype.Text{String: severity, Valid: true},
+			})
+		default:
+			rawCount, err = queries.CountLogsByUser(r.Context(), userID)
+		}
 		if err != nil {
 			jsonServerError(w, "failed to count logs", err)
 			return
@@ -135,8 +166,8 @@ func (s *Server) ListLogs(w http.ResponseWriter, r *http.Request) {
 	if fetchAgent {
 		agentLogs, err := queries.ListAgentLogByUser(r.Context(), db.ListAgentLogByUserParams{
 			UserID: userID,
-			Limit:  limit,
-			Offset: offset,
+			Limit:  fetchLimit,
+			Offset: fetchOffset,
 		})
 		if err != nil {
 			jsonServerError(w, "failed to list agent logs", err)
@@ -155,14 +186,28 @@ func (s *Server) ListLogs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// When fetching from both sources, sort by timestamp descending and trim to limit.
+	// When fetching from both sources, sort the full merged set by timestamp
+	// descending, then apply the original offset and limit to produce the
+	// correct page from the interleaved timeline.
 	if source == "all" && len(unified) > 0 {
 		sort.Slice(unified, func(i, j int) bool {
 			return unified[i].Timestamp > unified[j].Timestamp
 		})
+		// Apply offset.
+		if int32(len(unified)) > offset {
+			unified = unified[offset:]
+		} else {
+			unified = unified[:0]
+		}
+		// Apply limit.
 		if int32(len(unified)) > limit {
 			unified = unified[:limit]
 		}
+	}
+
+	// Ensure Data is always an empty array in JSON, never null.
+	if unified == nil {
+		unified = []unifiedLogEntry{}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
