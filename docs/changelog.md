@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.20.2 — Blueprint View & Wizard Guard](#0202--blueprint-view--wizard-guard-2026-03-25)
 - [0.20.1 — Action Button Color](#0201--action-button-color-2026-03-22)
 - [0.20.0 — Security & Production Hardening](#0200--security--production-hardening-2026-03-22)
 - [0.19.0 — Connection Wizard](#0190--connection-wizard-2026-03-22)
@@ -49,6 +50,37 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.20.2 — Blueprint View & Wizard Guard (2026-03-25)
+
+The Connections page had two UX gaps: the creation wizard silently discarded in-progress data on any accidental close, and all connections were shown as identical rectangles in a flat grid with no sense of infrastructure topology.
+
+### Wizard discard confirmation
+
+Closing the connection wizard (backdrop click, Escape, or X button) now checks for unsaved progress — platform selection, name, config fields, or a partially-created connection. If dirty, an inline overlay asks "Discard changes?" before proceeding. The confirmation renders inside the wizard modal itself (absolute-positioned over the body) to avoid z-index stacking issues and keep the user's in-progress state visible behind the semi-transparent backdrop.
+
+**Changed:** `ConnectionWizard.vue` — added `isDirty` computed, `requestClose()` gatekeeper, `showDiscardConfirm` overlay.
+
+### Architectural blueprint visualization
+
+Replaced the card grid with a visual infrastructure diagram. Heimdall sits at the center as a glowing hub node, with three categorized zones radiating outward:
+
+- **Log Sources** (left) — Supabase, Webhook, Syslog, Datadog connections near a server icon
+- **Databases** (right) — PostgreSQL, MySQL connections near a database cylinder icon
+- **Integrations** (bottom-left) — GitHub and other generic connections near a code brackets icon
+
+SVG dashed bezier lines connect the hub to each zone, computed dynamically via `ResizeObserver` + `getBoundingClientRect()` and drawn in with a `stroke-dashoffset` animation on mount. Empty zones show dashed-border prompts ("+ Add a log source") that open the wizard on click.
+
+A **Blueprint / List toggle** in the page header lets users switch between the new diagram and the original card grid. Preference persists to `localStorage`.
+
+Category mapping imports directly from `flows.ts` — adding a new connector type automatically places it in the correct zone.
+
+**Responsive:** Mobile stacks vertically (hub → zones), SVG lines hidden.
+
+**New files:** `ViewToggle.vue`, `BlueprintNode.vue`, `BlueprintZone.vue`, `BlueprintView.vue`.
+**Changed:** `ConnectionsPage.vue` — view toggle, conditional rendering, `@add` event wiring.
 
 ---
 

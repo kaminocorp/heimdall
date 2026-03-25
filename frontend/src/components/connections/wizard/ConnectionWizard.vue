@@ -27,6 +27,33 @@ const state = reactive<WizardState>({
   config: {},
 })
 
+// — Discard confirmation —
+const showDiscardConfirm = ref(false)
+
+const isDirty = computed(() =>
+  !!selectedFlow.value ||
+  state.name.trim() !== '' ||
+  Object.keys(state.config).length > 0 ||
+  !!createdConnectionId.value
+)
+
+function requestClose() {
+  if (isDirty.value) {
+    showDiscardConfirm.value = true
+  } else {
+    handleClose()
+  }
+}
+
+function cancelDiscard() {
+  showDiscardConfirm.value = false
+}
+
+function confirmDiscard() {
+  showDiscardConfirm.value = false
+  handleClose()
+}
+
 // — Derived —
 const currentStep = computed(() => selectedFlow.value?.steps[currentStepIndex.value] ?? null)
 const stepLabels = computed(() => selectedFlow.value?.steps.map(s => s.label) ?? [])
@@ -125,7 +152,7 @@ async function handleClose() {
 }
 
 function onKeydown(e: KeyboardEvent) {
-  if (e.key === 'Escape') handleClose()
+  if (e.key === 'Escape') requestClose()
 }
 
 onMounted(() => document.addEventListener('keydown', onKeydown))
@@ -136,17 +163,17 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown))
   <!-- Backdrop -->
   <div
     class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
-    @click.self="handleClose"
+    @click.self="requestClose"
   >
     <!-- Modal -->
-    <div class="w-full max-w-xl mx-4 border border-border rounded-lg bg-bg-surface shadow-2xl max-h-[85vh] flex flex-col">
+    <div class="relative w-full max-w-xl mx-4 border border-border rounded-lg bg-bg-surface shadow-2xl max-h-[85vh] flex flex-col">
       <!-- Header -->
       <div class="flex items-center justify-between px-5 py-4 border-b border-border shrink-0">
         <h3 class="font-mono text-sm font-bold uppercase tracking-wider text-text-primary">
           {{ selectedFlow ? selectedFlow.name + ' Connection' : 'New Connection' }}
         </h3>
         <button
-          @click="handleClose"
+          @click="requestClose"
           class="font-mono text-xs text-text-muted hover:text-text-primary transition-colors cursor-pointer"
         >&times;</button>
       </div>
@@ -225,6 +252,31 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown))
           >
             {{ creating ? 'Creating...' : 'Continue' }}
           </button>
+        </div>
+      </div>
+
+      <!-- Discard confirmation overlay -->
+      <div
+        v-if="showDiscardConfirm"
+        class="absolute inset-0 z-10 flex items-center justify-center bg-black/50 rounded-lg"
+      >
+        <div class="border border-border rounded-lg bg-bg-elevated p-5 max-w-xs text-center shadow-xl">
+          <p class="font-mono text-sm font-medium text-text-primary mb-1">Discard changes?</p>
+          <p class="font-mono text-xs text-text-secondary mb-4">Your unsaved progress will be lost.</p>
+          <div class="flex justify-center gap-3">
+            <button
+              @click="cancelDiscard"
+              class="px-4 py-1.5 font-mono text-xs uppercase tracking-wider rounded border border-border text-text-secondary hover:border-border-hover hover:text-text-primary transition-colors cursor-pointer"
+            >
+              Cancel
+            </button>
+            <button
+              @click="confirmDiscard"
+              class="px-4 py-1.5 font-mono text-xs font-medium uppercase tracking-wider rounded bg-status-critical text-bg-primary hover:bg-status-critical/80 transition-colors cursor-pointer"
+            >
+              Discard
+            </button>
+          </div>
         </div>
       </div>
     </div>

@@ -10,6 +10,8 @@ import ConnectionForm from '@/components/connections/ConnectionForm.vue'
 import ConnectionTestModal from '@/components/connections/ConnectionTestModal.vue'
 import ConnectionWizard from '@/components/connections/wizard/ConnectionWizard.vue'
 import GitHubRepoSelector from '@/components/connections/GitHubRepoSelector.vue'
+import BlueprintView from '@/components/connections/BlueprintView.vue'
+import ViewToggle from '@/components/connections/ViewToggle.vue'
 import SkeletonBlock from '@/components/common/SkeletonBlock.vue'
 
 const store = useConnectionsStore()
@@ -23,6 +25,10 @@ const actionError = ref<string | null>(null)
 const repoSelectorConnectionId = ref<string | null>(null)
 const githubInstalledMessage = ref<string | null>(null)
 const testModalConnection = ref<Connection | null>(null)
+const viewMode = ref<'blueprint' | 'list'>(
+  (localStorage.getItem('heimdall_connections_view') as 'blueprint' | 'list') || 'blueprint'
+)
+watch(viewMode, (v) => localStorage.setItem('heimdall_connections_view', v))
 
 async function fetchAppConnections() {
   const appId = appStore.currentAppId
@@ -137,13 +143,15 @@ function closeRepoSelector() {
         <h2 class="font-mono text-2xl font-bold uppercase tracking-wider text-text-primary">Connections</h2>
         <p class="font-sans text-sm text-text-secondary mt-1">Manage your infrastructure integrations</p>
       </div>
-      <button
-        v-if="!showForm"
-        @click="openCreate"
-        class="px-4 py-2 bg-action text-bg-primary font-mono text-sm font-medium uppercase tracking-wider rounded hover:bg-action-hover transition-colors cursor-pointer"
-      >
-        + New Connection
-      </button>
+      <div v-if="!showForm" class="flex items-center gap-3">
+        <ViewToggle v-model="viewMode" />
+        <button
+          @click="openCreate"
+          class="px-4 py-2 bg-action text-bg-primary font-mono text-sm font-medium uppercase tracking-wider rounded hover:bg-action-hover transition-colors cursor-pointer"
+        >
+          + New Connection
+        </button>
+      </div>
     </div>
 
     <!-- GitHub installed success banner -->
@@ -180,7 +188,27 @@ function closeRepoSelector() {
       </div>
     </div>
     <div v-else-if="store.error" class="text-status-critical text-sm font-mono">{{ store.error }}</div>
-    <ConnectionList v-else :connections="store.connections" :testing-id="store.testingId" @delete="handleDelete" @edit="openEdit" @test="handleTest" @manage-repos="openRepoSelector" />
+    <template v-else>
+      <BlueprintView
+        v-if="viewMode === 'blueprint'"
+        :connections="store.connections"
+        :testing-id="store.testingId"
+        @delete="handleDelete"
+        @edit="openEdit"
+        @test="handleTest"
+        @manage-repos="openRepoSelector"
+        @add="openCreate"
+      />
+      <ConnectionList
+        v-else
+        :connections="store.connections"
+        :testing-id="store.testingId"
+        @delete="handleDelete"
+        @edit="openEdit"
+        @test="handleTest"
+        @manage-repos="openRepoSelector"
+      />
+    </template>
 
     <!-- Connection test modal -->
     <ConnectionTestModal
