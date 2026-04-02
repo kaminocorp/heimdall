@@ -58,7 +58,7 @@ const features = [
 </script>
 
 <template>
-  <main class="pt-20 flex-1">
+  <main class="pt-8 flex-1">
       <!-- Section 1: The Problem -->
       <section class="py-20 px-6">
         <div class="max-w-6xl mx-auto">

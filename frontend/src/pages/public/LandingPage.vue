@@ -13,7 +13,7 @@ import HeroMesh from '@/components/public/HeroMesh.vue'
       <div class="absolute inset-0 bg-gradient-to-r from-bg-primary/60 via-transparent to-bg-primary/60 pointer-events-none" />
 
       <!-- Text content -->
-      <div class="relative z-10 w-full max-w-5xl text-center px-6 sm:px-10 lg:px-16 -mt-24">
+      <div class="relative z-10 w-full max-w-5xl text-center px-6 sm:px-10 lg:px-16">
         <h1 class="font-mono text-5xl sm:text-6xl lg:text-8xl font-bold leading-[1.05] tracking-tight uppercase">
           <span class="block">Autonomous system</span>
           <span class="block text-accent">surveillance.</span>

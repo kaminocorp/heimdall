@@ -35,7 +35,7 @@ const tiers = [
 </script>
 
 <template>
-  <main class="pt-20 flex-1">
+  <main class="pt-8 flex-1">
       <section class="py-20 px-6">
         <div class="max-w-6xl mx-auto">
           <p class="text-xs font-mono text-accent tracking-widest uppercase mb-3">Pricing</p>

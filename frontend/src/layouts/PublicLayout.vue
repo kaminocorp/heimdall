@@ -6,7 +6,9 @@ import PublicFooter from '@/components/public/PublicFooter.vue'
 <template>
   <div class="min-h-screen flex flex-col bg-bg-primary">
     <PublicNav />
-    <RouterView />
+    <div class="flex flex-col flex-1 pt-[76px]">
+      <RouterView />
+    </div>
     <PublicFooter />
   </div>
 </template>

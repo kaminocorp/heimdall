@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.20.4 — Public Site Header Overlap Fix](#0204--public-site-header-overlap-fix-2026-04-02)
 - [0.20.3 — Lumber v0.9.0 Upgrade](#0203--lumber-v090-upgrade-2026-04-02)
 - [0.20.2 — Blueprint View & Wizard Guard](#0202--blueprint-view--wizard-guard-2026-03-25)
 - [0.20.1 — Action Button Color](#0201--action-button-color-2026-03-22)
@@ -51,6 +52,27 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.20.4 — Public Site Header Overlap Fix (2026-04-02)
+
+The fixed navigation bar (`position: fixed`, 76px tall) was removed from document flow but no corresponding space was reserved in the page layout. On tall viewports the hero's vertical centering masked the overlap, but on shorter screens (laptops, tablets, zoomed browsers) the top of page content was clipped behind the navbar.
+
+### Root cause
+
+`PublicLayout.vue` placed `<PublicNav />` and `<RouterView />` as flex siblings. Because the nav is `position: fixed`, it occupies no flow height — every page's content started at `top: 0`, directly under the navbar. The Features and Pricing pages partially compensated with `pt-20` (80px), leaving only 4px of clearance. The Landing page hero used `-mt-24` to nudge the heading upward for visual balance, which pulled it further behind the nav on shorter viewports.
+
+### Fix
+
+Moved the nav offset into `PublicLayout.vue` so it applies globally, then removed per-page workarounds.
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `frontend/src/layouts/PublicLayout.vue` | Wrapped `<RouterView>` in a content div with `pt-[76px]` to reserve space below the fixed nav |
+| 2 | `frontend/src/pages/public/LandingPage.vue` | Removed `-mt-24` on the hero text container — no longer needed with correct layout offset |
+| 3 | `frontend/src/pages/public/FeaturesPage.vue` | `pt-20` → `pt-8` — layout handles the nav offset, page keeps only section spacing |
+| 4 | `frontend/src/pages/public/PricingPage.vue` | `pt-20` → `pt-8` — same |
 
 ---
 

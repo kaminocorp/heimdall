@@ -77,7 +77,8 @@
       "WebFetch(domain:api.supabase.com)",
       "Bash(make sqlc-generate:*)",
       "Bash(echo \"EXIT: $?\")",
-      "Bash(echo \"EXIT_CODE: $?\")"
+      "Bash(echo \"EXIT_CODE: $?\")",
+      "Bash(cat /home/pkhelfried/crimson_sun/heimdall/frontend/tailwind.config.*)"
     ]
   }
 }
