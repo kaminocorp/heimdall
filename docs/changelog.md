@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.20.5 — Stale-Asset Reload on Deploy](#0205--stale-asset-reload-on-deploy-2026-04-02)
 - [0.20.4 — Public Site Header Overlap Fix](#0204--public-site-header-overlap-fix-2026-04-02)
 - [0.20.3 — Lumber v0.9.0 Upgrade](#0203--lumber-v090-upgrade-2026-04-02)
 - [0.20.2 — Blueprint View & Wizard Guard](#0202--blueprint-view--wizard-guard-2026-03-25)
@@ -52,6 +53,24 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.20.5 — Stale-Asset Reload on Deploy (2026-04-02)
+
+After a deployment, users who already had the site open would hit a blank page on their next navigation. The browser's cached `index.html` referenced code-split chunk filenames from the previous build (e.g. `DashboardPage-BkYIRdWl.js`). Those files no longer exist on the server, and Nginx's `try_files` SPA fallback served `index.html` (text/html) in their place, causing the browser to reject them with a MIME type error.
+
+### Root cause
+
+Vue Router lazy-loads page components via dynamic `import()`. When the target `.js` chunk has been replaced by a new build, the import fails with `Failed to fetch dynamically imported module`. No error handler existed on the router, so the failure surfaced as an unhandled promise rejection caught only by the global `window.unhandledrejection` listener in `main.ts` — which logged the error and showed a generic toast, but left the user stuck.
+
+### Fix
+
+Added a `router.onError` handler that detects dynamic import failures and performs a full page reload via `window.location.assign(to.fullPath)`. The reload fetches the current `index.html` with correct chunk references, and the user lands on the intended page seamlessly.
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `frontend/src/router/index.ts` | Added `router.onError` handler — detects `Failed to fetch dynamically imported module` and `Importing a module script failed` errors, reloads to the target route's `fullPath` |
 
 ---
 

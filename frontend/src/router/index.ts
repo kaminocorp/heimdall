@@ -107,4 +107,17 @@ router.beforeEach((to) => {
   }
 })
 
+// After a deployment, the browser may have a cached index.html referencing
+// old chunk filenames that no longer exist. Nginx serves index.html (text/html)
+// as a fallback, causing a MIME type error on the dynamic import. Reload once
+// to pick up the new index.html with correct asset references.
+router.onError((error, to) => {
+  if (
+    error.message.includes('Failed to fetch dynamically imported module') ||
+    error.message.includes('Importing a module script failed')
+  ) {
+    window.location.assign(to.fullPath)
+  }
+})
+
 export default router
