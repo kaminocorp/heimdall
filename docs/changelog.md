@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.20.3 — Lumber v0.9.0 Upgrade](#0203--lumber-v090-upgrade-2026-04-02)
 - [0.20.2 — Blueprint View & Wizard Guard](#0202--blueprint-view--wizard-guard-2026-03-25)
 - [0.20.1 — Action Button Color](#0201--action-button-color-2026-03-22)
 - [0.20.0 — Security & Production Hardening](#0200--security--production-hardening-2026-03-22)
@@ -50,6 +51,23 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.20.3 — Lumber v0.9.0 Upgrade (2026-04-02)
+
+Upgraded the Lumber log classifier dependency from a pinned commit pseudo-version (`v0.0.0-20260304033652-4f6b6e878057`) to the first tagged release (`v0.9.0`).
+
+The previous version pulled a raw commit hash from `github.com/kaminocorp/lumber` with no semver tag, making builds dependent on an unreleased snapshot. Lumber v0.9.0 is a proper GitHub release with a stable API surface.
+
+### Changed
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `backend/go.mod` | `github.com/kaminocorp/lumber` upgraded to `v0.9.0` |
+| 2 | `backend/go.sum` | Updated checksums for new version |
+
+No code changes required — Lumber's public API (`lumber.New`, `ClassifyBatch`, `Close`) is unchanged.
 
 ---
 

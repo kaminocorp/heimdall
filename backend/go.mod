@@ -9,7 +9,7 @@ require (
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.8.0
-	github.com/kaminocorp/lumber v0.0.0-20260304033652-4f6b6e878057
+	github.com/kaminocorp/lumber v0.9.0
 	github.com/stretchr/testify v1.11.1
 )
 
