@@ -79,7 +79,7 @@ const elapsedDisplay = computed(() => (elapsed.value / 1000).toFixed(1) + 's')
     <!-- Modal -->
     <div class="w-full max-w-lg mx-4 border border-border rounded-lg bg-bg-surface shadow-2xl">
       <!-- Header -->
-      <div class="flex items-center justify-between px-5 py-4 border-b border-border">
+      <div class="flex items-center justify-between px-6 py-4 border-b border-border">
         <h3 class="font-mono text-sm font-bold uppercase tracking-wider text-text-primary">Connection Test</h3>
         <button
           v-if="phase !== 'testing'"
@@ -89,15 +89,15 @@ const elapsedDisplay = computed(() => (elapsed.value / 1000).toFixed(1) + 's')
       </div>
 
       <!-- Connection details -->
-      <div class="px-5 py-4 border-b border-border space-y-1.5">
+      <div class="px-6 py-4 border-b border-border space-y-1.5">
         <div v-for="detail in connectionMeta" :key="detail.label" class="flex items-baseline justify-between">
-          <span class="font-mono text-[10px] uppercase tracking-wider text-text-muted">{{ detail.label }}</span>
+          <span class="font-mono text-xs uppercase tracking-wider text-text-muted">{{ detail.label }}</span>
           <span class="font-mono text-xs text-text-secondary truncate ml-4 max-w-[70%] text-right">{{ detail.value }}</span>
         </div>
       </div>
 
       <!-- Test status -->
-      <div class="px-5 py-5">
+      <div class="px-6 py-6">
         <!-- Testing phase -->
         <div v-if="phase === 'testing'" class="space-y-3">
           <div class="flex items-center gap-3">
@@ -139,11 +139,11 @@ const elapsedDisplay = computed(() => (elapsed.value / 1000).toFixed(1) + 's')
       </div>
 
       <!-- Footer -->
-      <div class="flex justify-end px-5 py-3 border-t border-border">
+      <div class="flex justify-end px-6 py-3 border-t border-border">
         <button
           @click="emit('close')"
           :disabled="phase === 'testing'"
-          class="px-4 py-1.5 font-mono text-xs uppercase tracking-wider rounded transition-colors cursor-pointer"
+          class="px-5 py-2 font-mono text-xs uppercase tracking-wider rounded transition-colors cursor-pointer"
           :class="phase === 'testing'
             ? 'text-text-muted border border-border cursor-not-allowed'
             : 'text-text-primary border border-border hover:border-border-hover'"

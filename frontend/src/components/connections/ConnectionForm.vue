@@ -168,11 +168,11 @@ function handleSubmit() {
 </script>
 
 <template>
-  <form @submit.prevent="handleSubmit" class="space-y-4 border border-border rounded-lg p-5 bg-bg-surface">
+  <form @submit.prevent="handleSubmit" class="space-y-4 border border-border rounded-lg p-6 bg-bg-surface">
     <div>
       <label class="block font-mono text-xs font-medium uppercase tracking-wider text-text-secondary mb-1.5">Name</label>
       <input v-model="name" type="text" required placeholder="e.g. Production DB"
-        class="block w-full bg-bg-elevated/80 border border-border rounded px-3 py-2 text-text-primary font-mono text-sm placeholder:text-text-muted focus:border-accent/50 focus:ring-1 focus:ring-accent/20 focus:outline-none transition-colors" />
+        class="block w-full bg-bg-elevated/80 border border-border rounded px-3 py-2 text-text-primary font-mono text-sm placeholder:text-text-muted focus:border-accent focus:ring-1 focus:ring-accent/30 focus:outline-none transition-colors" />
     </div>
     <div>
       <label class="block font-mono text-xs font-medium uppercase tracking-wider text-text-secondary mb-1.5">Type</label>
@@ -211,7 +211,7 @@ function handleSubmit() {
           type="button"
           :disabled="githubInstalling"
           @click="installGitHubApp"
-          class="px-4 py-2 bg-action text-bg-primary font-mono text-sm font-medium uppercase tracking-wider rounded hover:bg-action-hover transition-colors cursor-pointer disabled:opacity-50"
+          class="px-5 py-2.5 bg-action text-bg-primary font-mono text-sm font-medium uppercase tracking-wider rounded hover:bg-action-hover transition-colors cursor-pointer disabled:opacity-50"
         >
           {{ githubInstalling ? 'Redirecting...' : 'Install GitHub App' }}
         </button>
@@ -226,7 +226,7 @@ function handleSubmit() {
     </template>
     <template v-else-if="type === 'supabase'">
       <div class="border-t border-border pt-4 mt-2 space-y-4">
-        <p class="font-mono text-[10px] font-medium uppercase tracking-widest text-text-muted">Configuration</p>
+        <p class="font-mono text-xs font-medium uppercase tracking-widest text-text-muted">Configuration</p>
         <div v-for="field in activeFields" :key="field.key">
           <label class="block font-mono text-xs font-medium uppercase tracking-wider text-text-secondary mb-1.5">{{ field.label }}</label>
           <BaseSelect
@@ -238,7 +238,7 @@ function handleSubmit() {
           <input v-else :type="field.type === 'number' ? 'text' : field.type" :value="getFieldValue(field)" @input="setFieldValue(field, ($event.target as HTMLInputElement).value)"
             :required="field.required" :placeholder="field.placeholder"
             :inputmode="field.type === 'number' ? 'numeric' : undefined"
-            class="block w-full bg-bg-elevated/80 border border-border rounded px-3 py-2 text-text-primary font-mono text-sm placeholder:text-text-muted focus:border-accent/50 focus:ring-1 focus:ring-accent/20 focus:outline-none transition-colors" />
+            class="block w-full bg-bg-elevated/80 border border-border rounded px-3 py-2 text-text-primary font-mono text-sm placeholder:text-text-muted focus:border-accent focus:ring-1 focus:ring-accent/30 focus:outline-none transition-colors" />
         </div>
         <!-- Helper text -->
         <p class="font-mono text-xs text-text-tertiary leading-relaxed">
@@ -266,7 +266,7 @@ function handleSubmit() {
     </template>
     <template v-else-if="activeFields.length > 0">
       <div class="border-t border-border pt-4 mt-2 space-y-4">
-        <p class="font-mono text-[10px] font-medium uppercase tracking-widest text-text-muted">Configuration</p>
+        <p class="font-mono text-xs font-medium uppercase tracking-widest text-text-muted">Configuration</p>
         <div v-for="field in activeFields" :key="field.key">
           <label class="block font-mono text-xs font-medium uppercase tracking-wider text-text-secondary mb-1.5">{{ field.label }}</label>
           <BaseSelect
@@ -278,21 +278,21 @@ function handleSubmit() {
           <input v-else :type="field.type === 'number' ? 'text' : field.type" :value="getFieldValue(field)" @input="setFieldValue(field, ($event.target as HTMLInputElement).value)"
             :required="field.required" :placeholder="field.placeholder"
             :inputmode="field.type === 'number' ? 'numeric' : undefined"
-            class="block w-full bg-bg-elevated/80 border border-border rounded px-3 py-2 text-text-primary font-mono text-sm placeholder:text-text-muted focus:border-accent/50 focus:ring-1 focus:ring-accent/20 focus:outline-none transition-colors" />
+            class="block w-full bg-bg-elevated/80 border border-border rounded px-3 py-2 text-text-primary font-mono text-sm placeholder:text-text-muted focus:border-accent focus:ring-1 focus:ring-accent/30 focus:outline-none transition-colors" />
         </div>
       </div>
     </template>
 
     <div v-if="!(type === 'github' && !isEditing)" class="flex gap-2 pt-2">
-      <button type="submit" class="px-4 py-2 bg-action text-bg-primary font-mono text-sm font-medium uppercase tracking-wider rounded hover:bg-action-hover transition-colors cursor-pointer">
+      <button type="submit" class="px-5 py-2.5 bg-action text-bg-primary font-mono text-sm font-medium uppercase tracking-wider rounded hover:bg-action-hover transition-colors cursor-pointer">
         {{ isEditing ? 'Save Changes' : 'Add Connection' }}
       </button>
-      <button type="button" @click="emit('cancel')" class="px-4 py-2 border border-accent-border/50 text-text-secondary font-mono text-sm uppercase tracking-wider rounded hover:border-accent/50 hover:text-text-primary transition-colors cursor-pointer">
+      <button type="button" @click="emit('cancel')" class="px-5 py-2.5 border border-accent-border/50 text-text-secondary font-mono text-sm uppercase tracking-wider rounded hover:border-accent/50 hover:text-text-primary transition-colors cursor-pointer">
         Cancel
       </button>
     </div>
     <div v-else class="flex gap-2 pt-2">
-      <button type="button" @click="emit('cancel')" class="px-4 py-2 border border-accent-border/50 text-text-secondary font-mono text-sm uppercase tracking-wider rounded hover:border-accent/50 hover:text-text-primary transition-colors cursor-pointer">
+      <button type="button" @click="emit('cancel')" class="px-5 py-2.5 border border-accent-border/50 text-text-secondary font-mono text-sm uppercase tracking-wider rounded hover:border-accent/50 hover:text-text-primary transition-colors cursor-pointer">
         Cancel
       </button>
     </div>

@@ -21,7 +21,7 @@ onMounted(() => {
 
     <!-- Skeleton loader -->
     <div v-if="store.loading" class="space-y-3">
-      <div v-for="n in 3" :key="n" class="border border-border rounded-lg bg-bg-surface p-5 space-y-3">
+      <div v-for="n in 3" :key="n" class="border border-border rounded-lg bg-bg-surface p-6 space-y-3">
         <SkeletonBlock width="70%" height="1rem" />
         <SkeletonBlock width="40%" height="0.75rem" />
       </div>

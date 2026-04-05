@@ -11,7 +11,7 @@ defineProps<{
     <div class="max-w-2xl w-full">
       <!-- Role label -->
       <div
-        class="font-mono text-[10px] font-medium uppercase tracking-widest mb-1"
+        class="font-mono text-xs font-medium uppercase tracking-widest mb-1"
         :class="message.role === 'user' ? 'text-right text-accent' : 'text-text-muted'"
       >
         {{ message.role === 'user' ? 'Operator' : 'Heimdall' }}

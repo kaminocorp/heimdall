@@ -107,14 +107,14 @@ watch(() => appStore.currentAppId, () => {
       <button
         v-if="config && !editing"
         @click="startEdit"
-        class="px-4 py-2 border border-accent-border/50 text-text-secondary font-mono text-sm uppercase tracking-wider rounded hover:border-accent/50 hover:text-text-primary transition-colors cursor-pointer"
+        class="px-5 py-2.5 border border-accent-border/50 text-text-secondary font-mono text-sm uppercase tracking-wider rounded hover:border-accent/50 hover:text-text-primary transition-colors cursor-pointer"
       >
         Edit Configuration
       </button>
     </div>
 
     <!-- Skeleton loader -->
-    <div v-if="loading" class="border border-border rounded-lg bg-bg-surface p-5 space-y-4">
+    <div v-if="loading" class="border border-border rounded-lg bg-bg-surface p-6 space-y-4">
       <div v-for="n in 4" :key="n" class="flex items-baseline justify-between py-2">
         <SkeletonBlock width="5rem" height="0.75rem" />
         <SkeletonBlock width="10rem" height="0.75rem" />
@@ -122,7 +122,7 @@ watch(() => appStore.currentAppId, () => {
     </div>
 
     <!-- Edit mode -->
-    <form v-else-if="editing" @submit.prevent="saveConfig" class="border border-border rounded-lg bg-bg-surface p-5 space-y-5">
+    <form v-else-if="editing" @submit.prevent="saveConfig" class="border border-border rounded-lg bg-bg-surface p-6 space-y-6">
       <div>
         <label class="block font-mono text-xs font-medium uppercase tracking-wider text-text-secondary mb-1.5">Model</label>
         <input
@@ -131,7 +131,7 @@ watch(() => appStore.currentAppId, () => {
           list="known-models"
           required
           placeholder="claude-sonnet-4-6"
-          class="block w-full bg-bg-elevated/80 border border-border rounded px-3 py-2 text-text-primary font-mono text-sm placeholder:text-text-muted focus:border-accent/50 focus:ring-1 focus:ring-accent/20 focus:outline-none transition-colors"
+          class="block w-full bg-bg-elevated/80 border border-border rounded px-3 py-2 text-text-primary font-mono text-sm placeholder:text-text-muted focus:border-accent focus:ring-1 focus:ring-accent/30 focus:outline-none transition-colors"
         />
         <datalist id="known-models">
           <option v-for="m in knownModels" :key="m" :value="m" />
@@ -172,9 +172,9 @@ watch(() => appStore.currentAppId, () => {
           type="number"
           min="10"
           max="86400"
-          class="block w-full bg-bg-elevated/80 border border-border rounded px-3 py-2 text-text-primary font-mono text-sm focus:border-accent/50 focus:ring-1 focus:ring-accent/20 focus:outline-none transition-colors"
+          class="block w-full bg-bg-elevated/80 border border-border rounded px-3 py-2 text-text-primary font-mono text-sm focus:border-accent focus:ring-1 focus:ring-accent/30 focus:outline-none transition-colors"
         />
-        <p class="mt-1 font-mono text-[10px] text-text-muted">Interval in seconds (min 10, max 86400)</p>
+        <p class="mt-1 font-mono text-xs text-text-muted">Interval in seconds (min 10, max 86400)</p>
       </div>
 
       <div>
@@ -183,7 +183,7 @@ watch(() => appStore.currentAppId, () => {
           v-model="formPrompt"
           rows="6"
           placeholder="Custom system prompt for the agent (leave empty for default)"
-          class="block w-full bg-bg-elevated/80 border border-border rounded px-3 py-2 text-text-primary font-mono text-sm placeholder:text-text-muted focus:border-accent/50 focus:ring-1 focus:ring-accent/20 focus:outline-none transition-colors resize-y"
+          class="block w-full bg-bg-elevated/80 border border-border rounded px-3 py-2 text-text-primary font-mono text-sm placeholder:text-text-muted focus:border-accent focus:ring-1 focus:ring-accent/30 focus:outline-none transition-colors resize-y"
         />
       </div>
 
@@ -191,7 +191,7 @@ watch(() => appStore.currentAppId, () => {
         <button
           type="submit"
           :disabled="saving"
-          class="px-4 py-2 bg-action text-bg-primary font-mono text-sm font-medium uppercase tracking-wider rounded hover:bg-action-hover transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+          class="px-5 py-2.5 bg-action text-bg-primary font-mono text-sm font-medium uppercase tracking-wider rounded hover:bg-action-hover transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {{ saving ? 'Saving...' : 'Save Configuration' }}
         </button>
@@ -199,7 +199,7 @@ watch(() => appStore.currentAppId, () => {
           type="button"
           @click="cancelEdit"
           :disabled="saving"
-          class="px-4 py-2 border border-accent-border/50 text-text-secondary font-mono text-sm uppercase tracking-wider rounded hover:border-accent/50 hover:text-text-primary transition-colors cursor-pointer"
+          class="px-5 py-2.5 border border-accent-border/50 text-text-secondary font-mono text-sm uppercase tracking-wider rounded hover:border-accent/50 hover:text-text-primary transition-colors cursor-pointer"
         >
           Cancel
         </button>
@@ -207,7 +207,7 @@ watch(() => appStore.currentAppId, () => {
     </form>
 
     <!-- Display mode -->
-    <div v-else-if="config" class="border border-border rounded-lg bg-bg-surface p-5">
+    <div v-else-if="config" class="border border-border rounded-lg bg-bg-surface p-6">
       <div class="space-y-4">
         <div class="flex items-baseline justify-between py-2 border-b border-border">
           <span class="font-mono text-xs font-medium uppercase tracking-wider text-text-muted">Model</span>

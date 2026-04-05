@@ -45,7 +45,7 @@ async function save() {
 </script>
 
 <template>
-  <div class="border border-border rounded-lg p-5 bg-bg-surface space-y-4">
+  <div class="border border-border rounded-lg p-6 bg-bg-surface space-y-4">
     <div class="flex items-center justify-between">
       <h3 class="font-mono text-sm font-bold uppercase tracking-wider text-text-primary">Manage Repositories</h3>
       <button @click="emit('close')" class="text-text-muted hover:text-text-primary transition-colors text-sm font-mono cursor-pointer">Close</button>
@@ -83,7 +83,7 @@ async function save() {
           </div>
           <span class="font-mono text-sm text-text-primary truncate">{{ repo.repo_full_name }}</span>
         </div>
-        <span class="font-mono text-[10px] text-text-muted flex-shrink-0 ml-2">{{ repo.default_branch }}</span>
+        <span class="font-mono text-xs text-text-muted flex-shrink-0 ml-2">{{ repo.default_branch }}</span>
       </div>
     </div>
 
@@ -91,13 +91,13 @@ async function save() {
       <button
         :disabled="saving"
         @click="save"
-        class="px-4 py-2 bg-action text-bg-primary font-mono text-sm font-medium uppercase tracking-wider rounded hover:bg-action-hover transition-colors cursor-pointer disabled:opacity-50"
+        class="px-5 py-2.5 bg-action text-bg-primary font-mono text-sm font-medium uppercase tracking-wider rounded hover:bg-action-hover transition-colors cursor-pointer disabled:opacity-50"
       >
         {{ saving ? 'Saving...' : 'Save Selection' }}
       </button>
       <button
         @click="emit('close')"
-        class="px-4 py-2 border border-accent-border/50 text-text-secondary font-mono text-sm uppercase tracking-wider rounded hover:border-accent/50 hover:text-text-primary transition-colors cursor-pointer"
+        class="px-5 py-2.5 border border-accent-border/50 text-text-secondary font-mono text-sm uppercase tracking-wider rounded hover:border-accent/50 hover:text-text-primary transition-colors cursor-pointer"
       >
         Cancel
       </button>

@@ -24,12 +24,12 @@ onMounted(() => {
     </p>
 
     <div class="border border-border rounded px-4 py-3 bg-bg-elevated/40 space-y-3">
-      <p class="font-mono text-[10px] font-medium uppercase tracking-widest text-text-muted">Endpoint Format</p>
+      <p class="font-mono text-xs font-medium uppercase tracking-widest text-text-muted">Endpoint Format</p>
       <CopyableField value="POST /api/webhooks/logs" />
     </div>
 
     <div class="border border-border rounded px-4 py-3 bg-bg-elevated/40 space-y-3">
-      <p class="font-mono text-[10px] font-medium uppercase tracking-widest text-text-muted">Payload Format</p>
+      <p class="font-mono text-xs font-medium uppercase tracking-widest text-text-muted">Payload Format</p>
       <pre class="font-mono text-xs text-text-secondary leading-relaxed overflow-x-auto">{{ payloadExample }}</pre>
     </div>
 

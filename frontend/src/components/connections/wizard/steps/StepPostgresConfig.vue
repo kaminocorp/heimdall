@@ -62,28 +62,28 @@ onMounted(sync)
       <div class="col-span-2 sm:col-span-1">
         <label class="block font-mono text-xs font-medium uppercase tracking-wider text-text-secondary mb-1.5">Host</label>
         <input v-model="host" type="text" placeholder="db.example.com" autofocus
-          class="block w-full bg-bg-elevated/80 border border-border rounded px-3 py-2 text-text-primary font-mono text-sm placeholder:text-text-muted focus:border-accent/50 focus:ring-1 focus:ring-accent/20 focus:outline-none transition-colors" />
+          class="block w-full bg-bg-elevated/80 border border-border rounded px-3 py-2 text-text-primary font-mono text-sm placeholder:text-text-muted focus:border-accent focus:ring-1 focus:ring-accent/30 focus:outline-none transition-colors" />
       </div>
       <div class="col-span-2 sm:col-span-1">
         <label class="block font-mono text-xs font-medium uppercase tracking-wider text-text-secondary mb-1.5">Port</label>
         <input v-model="port" type="text" inputmode="numeric" placeholder="5432"
-          class="block w-full bg-bg-elevated/80 border border-border rounded px-3 py-2 text-text-primary font-mono text-sm placeholder:text-text-muted focus:border-accent/50 focus:ring-1 focus:ring-accent/20 focus:outline-none transition-colors" />
+          class="block w-full bg-bg-elevated/80 border border-border rounded px-3 py-2 text-text-primary font-mono text-sm placeholder:text-text-muted focus:border-accent focus:ring-1 focus:ring-accent/30 focus:outline-none transition-colors" />
       </div>
     </div>
     <div>
       <label class="block font-mono text-xs font-medium uppercase tracking-wider text-text-secondary mb-1.5">Database</label>
       <input v-model="database" type="text" placeholder="mydb"
-        class="block w-full bg-bg-elevated/80 border border-border rounded px-3 py-2 text-text-primary font-mono text-sm placeholder:text-text-muted focus:border-accent/50 focus:ring-1 focus:ring-accent/20 focus:outline-none transition-colors" />
+        class="block w-full bg-bg-elevated/80 border border-border rounded px-3 py-2 text-text-primary font-mono text-sm placeholder:text-text-muted focus:border-accent focus:ring-1 focus:ring-accent/30 focus:outline-none transition-colors" />
     </div>
     <div>
       <label class="block font-mono text-xs font-medium uppercase tracking-wider text-text-secondary mb-1.5">Username</label>
       <input v-model="user" type="text" placeholder="postgres"
-        class="block w-full bg-bg-elevated/80 border border-border rounded px-3 py-2 text-text-primary font-mono text-sm placeholder:text-text-muted focus:border-accent/50 focus:ring-1 focus:ring-accent/20 focus:outline-none transition-colors" />
+        class="block w-full bg-bg-elevated/80 border border-border rounded px-3 py-2 text-text-primary font-mono text-sm placeholder:text-text-muted focus:border-accent focus:ring-1 focus:ring-accent/30 focus:outline-none transition-colors" />
     </div>
     <div>
       <label class="block font-mono text-xs font-medium uppercase tracking-wider text-text-secondary mb-1.5">Password</label>
       <input v-model="password" type="password" placeholder="••••••••"
-        class="block w-full bg-bg-elevated/80 border border-border rounded px-3 py-2 text-text-primary font-mono text-sm placeholder:text-text-muted focus:border-accent/50 focus:ring-1 focus:ring-accent/20 focus:outline-none transition-colors" />
+        class="block w-full bg-bg-elevated/80 border border-border rounded px-3 py-2 text-text-primary font-mono text-sm placeholder:text-text-muted focus:border-accent focus:ring-1 focus:ring-accent/30 focus:outline-none transition-colors" />
     </div>
     <div>
       <label class="block font-mono text-xs font-medium uppercase tracking-wider text-text-secondary mb-1.5">SSL Mode</label>

@@ -79,21 +79,21 @@ function handleNav() {
     :class="mobile ? 'h-full' : 'min-h-screen'"
   >
     <!-- Brand header -->
-    <div class="px-5 py-5 border-b border-border">
+    <div class="px-6 py-6 border-b border-border">
       <div class="flex items-center gap-2.5">
         <div class="w-2 h-2 rounded-full bg-accent animate-pulse" />
         <span class="font-mono text-sm font-bold uppercase tracking-wider text-text-primary">
           Heimdall
         </span>
       </div>
-      <div class="mt-1.5 pl-[18px] font-mono text-[10px] uppercase tracking-wider text-text-muted">
+      <div class="mt-1.5 pl-[18px] font-mono text-xs uppercase tracking-wider text-text-muted">
         Status: Active
       </div>
     </div>
 
     <!-- App selector -->
     <div v-if="app.applications.length > 0" class="px-3 py-3 border-b border-border">
-      <label class="block font-mono text-[10px] uppercase tracking-widest text-text-muted mb-1.5 px-2">
+      <label class="block font-mono text-xs uppercase tracking-widest text-text-muted mb-1.5 px-2">
         Application
       </label>
       <BaseSelect
@@ -108,7 +108,7 @@ function handleNav() {
     <div class="flex-1 overflow-y-auto py-4 px-3">
       <div v-for="section in sections" :key="section.label" class="mb-5">
         <!-- Section label -->
-        <div class="px-2 mb-2 font-mono text-[10px] font-medium uppercase tracking-widest text-text-muted">
+        <div class="px-2 mb-2 font-mono text-xs font-medium uppercase tracking-widest text-text-muted">
           {{ section.label }}
         </div>
 
@@ -117,7 +117,7 @@ function handleNav() {
           v-for="item in section.items"
           :key="item.routeName"
           :to="item.to"
-          class="group flex items-center gap-2.5 px-2 py-1.5 rounded text-sm font-mono transition-colors relative"
+          class="group flex items-center gap-2.5 px-3 py-2 rounded text-sm font-mono transition-colors relative"
           :class="
             isActive(item.routeName)
               ? 'bg-accent-subtle text-text-primary'
@@ -136,11 +136,11 @@ function handleNav() {
     </div>
 
     <!-- User footer -->
-    <div class="mt-auto border-t border-border px-5 py-4">
-      <div v-if="app.organization" class="font-mono text-[10px] uppercase tracking-wider text-text-muted mb-1.5">
+    <div class="mt-auto border-t border-border px-6 py-5">
+      <div v-if="app.organization" class="font-mono text-xs uppercase tracking-wider text-text-muted mb-1.5">
         {{ app.organization.name }}
       </div>
-      <div v-if="auth.user" class="font-mono text-[11px] text-text-muted truncate mb-2">
+      <div v-if="auth.user" class="font-mono text-xs text-text-muted truncate mb-2">
         {{ auth.user.email }}
       </div>
       <button

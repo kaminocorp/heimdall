@@ -36,7 +36,7 @@ onMounted(() => {
         type="text"
         placeholder="e.g. Production Supabase"
         autofocus
-        class="block w-full bg-bg-elevated/80 border border-border rounded px-3 py-2 text-text-primary font-mono text-sm placeholder:text-text-muted focus:border-accent/50 focus:ring-1 focus:ring-accent/20 focus:outline-none transition-colors"
+        class="block w-full bg-bg-elevated/80 border border-border rounded px-3 py-2 text-text-primary font-mono text-sm placeholder:text-text-muted focus:border-accent focus:ring-1 focus:ring-accent/30 focus:outline-none transition-colors"
       />
     </div>
     <p class="font-mono text-xs text-text-tertiary">

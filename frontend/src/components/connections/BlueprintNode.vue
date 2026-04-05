@@ -52,7 +52,7 @@ const displayType = computed(() => typeLabels[props.connection.type] ?? props.co
   >
     <!-- Icon badge -->
     <div
-      class="shrink-0 w-7 h-7 rounded flex items-center justify-center font-mono text-[10px] font-bold uppercase tracking-wider bg-accent/10 text-accent border border-accent/20"
+      class="shrink-0 w-7 h-7 rounded flex items-center justify-center font-mono text-xs font-bold uppercase tracking-wider bg-accent/10 text-accent border border-accent/20"
     >
       {{ icon }}
     </div>
@@ -62,7 +62,7 @@ const displayType = computed(() => typeLabels[props.connection.type] ?? props.co
       <p class="font-mono text-xs font-medium uppercase tracking-wider text-text-primary truncate">
         {{ connection.name }}
       </p>
-      <p class="font-mono text-[10px] text-text-muted truncate">{{ displayType }}</p>
+      <p class="font-mono text-xs text-text-muted truncate">{{ displayType }}</p>
     </div>
 
     <!-- Status -->
@@ -77,25 +77,25 @@ const displayType = computed(() => typeLabels[props.connection.type] ?? props.co
       <button
         v-if="connection.type === 'github'"
         @click.stop="emit('manage-repos', connection.id)"
-        class="font-mono text-[10px] uppercase tracking-wider text-text-muted hover:text-accent focus:text-accent focus:outline-none transition-colors cursor-pointer"
+        class="font-mono text-xs uppercase tracking-wider text-text-muted hover:text-accent focus:text-accent focus:outline-none transition-colors cursor-pointer"
       >
         Repos
       </button>
       <button
         @click.stop="emit('test', connection.id)"
-        class="font-mono text-[10px] uppercase tracking-wider text-text-muted hover:text-accent focus:text-accent focus:outline-none transition-colors cursor-pointer"
+        class="font-mono text-xs uppercase tracking-wider text-text-muted hover:text-accent focus:text-accent focus:outline-none transition-colors cursor-pointer"
       >
         Ping
       </button>
       <button
         @click.stop="emit('edit', connection)"
-        class="font-mono text-[10px] uppercase tracking-wider text-text-muted hover:text-accent focus:text-accent focus:outline-none transition-colors cursor-pointer"
+        class="font-mono text-xs uppercase tracking-wider text-text-muted hover:text-accent focus:text-accent focus:outline-none transition-colors cursor-pointer"
       >
         Edit
       </button>
       <button
         @click.stop="handleDelete"
-        class="font-mono text-[10px] uppercase tracking-wider transition-colors cursor-pointer focus:outline-none"
+        class="font-mono text-xs uppercase tracking-wider transition-colors cursor-pointer focus:outline-none"
         :class="confirmingDelete
           ? 'text-status-critical font-medium'
           : 'text-text-muted hover:text-status-critical focus:text-status-critical'"

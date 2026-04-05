@@ -55,7 +55,7 @@ const tiers = [
             >
               <!-- Badge -->
               <div v-if="tier.badge" class="absolute -top-3 left-6">
-                <span class="px-2.5 py-0.5 text-[10px] font-mono font-medium bg-accent text-bg-primary rounded tracking-wider uppercase">
+                <span class="px-2.5 py-0.5 text-xs font-mono font-medium bg-accent text-bg-primary rounded tracking-wider uppercase">
                   {{ tier.badge }}
                 </span>
               </div>

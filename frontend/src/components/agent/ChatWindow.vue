@@ -36,7 +36,7 @@ watch(() => props.isThinking, scrollToBottom)
       <!-- Thinking indicator -->
       <div v-if="isThinking" class="flex justify-start">
         <div class="max-w-2xl w-full">
-          <div class="font-mono text-[10px] font-medium uppercase tracking-widest mb-1 text-text-muted">
+          <div class="font-mono text-xs font-medium uppercase tracking-widest mb-1 text-text-muted">
             Heimdall
           </div>
           <div class="border border-border rounded-lg px-4 py-3 bg-bg-surface overflow-hidden relative">

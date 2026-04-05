@@ -78,10 +78,10 @@ function formatInterval(secs: number): string {
     </div>
 
     <!-- Status cards row -->
-    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5 mb-10">
       <!-- Monitoring Status -->
-      <div class="border border-border rounded-lg bg-bg-surface p-5 animate-fade-in" :style="{ '--stagger-index': 0 }">
-        <div class="font-mono text-[10px] font-medium uppercase tracking-widest text-text-muted mb-4">Monitoring</div>
+      <div class="border border-border rounded-lg bg-bg-surface p-6 animate-fade-in" :style="{ '--stagger-index': 0 }">
+        <div class="font-mono text-xs font-medium uppercase tracking-widest text-text-muted mb-4">Monitoring</div>
         <div class="space-y-3">
           <div class="flex items-center justify-between">
             <span class="font-mono text-xs uppercase tracking-wider text-text-secondary">Mode</span>
@@ -102,8 +102,8 @@ function formatInterval(secs: number): string {
       </div>
 
       <!-- System Status -->
-      <div class="border border-border rounded-lg bg-bg-surface p-5 animate-fade-in" :style="{ '--stagger-index': 1 }">
-        <div class="font-mono text-[10px] font-medium uppercase tracking-widest text-text-muted mb-4">Agent</div>
+      <div class="border border-border rounded-lg bg-bg-surface p-6 animate-fade-in" :style="{ '--stagger-index': 1 }">
+        <div class="font-mono text-xs font-medium uppercase tracking-widest text-text-muted mb-4">Agent</div>
         <div class="space-y-3">
           <div v-if="agentConfig" class="flex items-center justify-between">
             <span class="font-mono text-xs uppercase tracking-wider text-text-secondary">Model</span>
@@ -113,8 +113,8 @@ function formatInterval(secs: number): string {
       </div>
 
       <!-- Connections -->
-      <div class="border border-border rounded-lg bg-bg-surface p-5 animate-fade-in" :style="{ '--stagger-index': 2 }">
-        <div class="font-mono text-[10px] font-medium uppercase tracking-widest text-text-muted mb-4">Connections</div>
+      <div class="border border-border rounded-lg bg-bg-surface p-6 animate-fade-in" :style="{ '--stagger-index': 2 }">
+        <div class="font-mono text-xs font-medium uppercase tracking-widest text-text-muted mb-4">Connections</div>
         <div class="font-mono text-xs text-text-secondary mb-3">
           {{ activeCount }} active<span v-if="inactiveCount"> · {{ inactiveCount }} inactive</span>
         </div>
@@ -134,8 +134,8 @@ function formatInterval(secs: number): string {
       </div>
 
       <!-- Log Ingestion -->
-      <div class="border border-border rounded-lg bg-bg-surface p-5 animate-fade-in" :style="{ '--stagger-index': 3 }">
-        <div class="font-mono text-[10px] font-medium uppercase tracking-widest text-text-muted mb-4">Log Ingestion</div>
+      <div class="border border-border rounded-lg bg-bg-surface p-6 animate-fade-in" :style="{ '--stagger-index': 3 }">
+        <div class="font-mono text-xs font-medium uppercase tracking-widest text-text-muted mb-4">Log Ingestion</div>
         <div v-if="statsError" class="font-mono text-xs text-status-critical">{{ statsError }}</div>
         <div v-else-if="stats" class="space-y-3">
           <div class="flex items-center justify-between">
@@ -152,8 +152,8 @@ function formatInterval(secs: number): string {
     </div>
 
     <!-- Recent Activity -->
-    <div class="border border-border rounded-lg bg-bg-surface p-5 animate-fade-in" :style="{ '--stagger-index': 4 }">
-      <div class="font-mono text-[10px] font-medium uppercase tracking-widest text-text-muted mb-4">Recent Activity</div>
+    <div class="border border-border rounded-lg bg-bg-surface p-6 animate-fade-in" :style="{ '--stagger-index': 4 }">
+      <div class="font-mono text-xs font-medium uppercase tracking-widest text-text-muted mb-4">Recent Activity</div>
       <div v-if="logsStore.loading" class="font-mono text-xs text-text-muted">Loading...</div>
       <div v-else-if="recentEntries.length === 0" class="font-mono text-xs text-text-muted">
         No recent activity.
@@ -165,11 +165,11 @@ function formatInterval(secs: number): string {
           class="flex items-baseline gap-3 py-1.5 border-b border-border last:border-b-0 animate-fade-in"
           :style="{ '--stagger-index': i }"
         >
-          <span class="font-mono text-[10px] text-text-muted shrink-0 tabular-nums">
+          <span class="font-mono text-xs text-text-muted shrink-0 tabular-nums">
             {{ new Date(entry.timestamp).toLocaleTimeString() }}
           </span>
           <span
-            class="font-mono text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
+            class="font-mono text-xs font-bold uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
             :class="{
               'text-accent': entry.source === 'agent',
               'text-status-critical': entry.severity === 'critical',

@@ -6,7 +6,7 @@ defineProps<{
 
 <template>
   <span
-    class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full font-mono text-[10px] font-medium uppercase tracking-wider border"
+    class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full font-mono text-xs font-medium uppercase tracking-wider border"
     :class="{
       'border-status-ok/30 bg-status-ok/10 text-status-ok': status === 'active',
       'border-white/10 bg-white/5 text-text-muted': status === 'inactive',

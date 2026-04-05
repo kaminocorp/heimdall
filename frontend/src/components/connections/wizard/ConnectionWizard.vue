@@ -168,7 +168,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown))
     <!-- Modal -->
     <div class="relative w-full max-w-xl mx-4 border border-border rounded-lg bg-bg-surface shadow-2xl max-h-[85vh] flex flex-col">
       <!-- Header -->
-      <div class="flex items-center justify-between px-5 py-4 border-b border-border shrink-0">
+      <div class="flex items-center justify-between px-6 py-4 border-b border-border shrink-0">
         <h3 class="font-mono text-sm font-bold uppercase tracking-wider text-text-primary">
           {{ selectedFlow ? selectedFlow.name + ' Connection' : 'New Connection' }}
         </h3>
@@ -179,12 +179,12 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown))
       </div>
 
       <!-- Step indicator -->
-      <div v-if="selectedFlow" class="px-5 py-3 border-b border-border shrink-0">
+      <div v-if="selectedFlow" class="px-6 py-3 border-b border-border shrink-0">
         <WizardStepIndicator :steps="stepLabels" :currentIndex="currentStepIndex" />
       </div>
 
       <!-- Body -->
-      <div class="px-5 py-5 overflow-y-auto flex-1">
+      <div class="px-6 py-6 overflow-y-auto flex-1">
         <!-- Error banner -->
         <div v-if="error" class="mb-4 rounded border border-status-critical/30 bg-status-critical/10 px-4 py-2">
           <p class="text-sm font-mono text-status-critical">{{ error }}</p>
@@ -219,10 +219,10 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown))
       </div>
 
       <!-- Footer -->
-      <div v-if="selectedFlow" class="flex items-center justify-between px-5 py-3 border-t border-border shrink-0">
+      <div v-if="selectedFlow" class="flex items-center justify-between px-6 py-3 border-t border-border shrink-0">
         <button
           @click="goBack"
-          class="px-4 py-1.5 font-mono text-xs uppercase tracking-wider rounded border border-border text-text-secondary hover:border-border-hover hover:text-text-primary transition-colors cursor-pointer"
+          class="px-5 py-2 font-mono text-xs uppercase tracking-wider rounded border border-border text-text-secondary hover:border-border-hover hover:text-text-primary transition-colors cursor-pointer"
         >
           Back
         </button>
@@ -233,7 +233,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown))
             v-if="isLastStep"
             @click="finish"
             :disabled="!stepValid && isTestStep"
-            class="px-4 py-1.5 font-mono text-xs font-medium uppercase tracking-wider rounded transition-colors cursor-pointer"
+            class="px-5 py-2 font-mono text-xs font-medium uppercase tracking-wider rounded transition-colors cursor-pointer"
             :class="(!stepValid && isTestStep)
               ? 'bg-action/30 text-bg-primary cursor-not-allowed'
               : 'bg-action text-bg-primary hover:bg-action-hover'"
@@ -245,7 +245,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown))
             v-else
             @click="goNext"
             :disabled="!stepValid || creating"
-            class="px-4 py-1.5 font-mono text-xs font-medium uppercase tracking-wider rounded transition-colors cursor-pointer"
+            class="px-5 py-2 font-mono text-xs font-medium uppercase tracking-wider rounded transition-colors cursor-pointer"
             :class="(!stepValid || creating)
               ? 'bg-action/30 text-bg-primary cursor-not-allowed'
               : 'bg-action text-bg-primary hover:bg-action-hover'"
@@ -260,19 +260,19 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown))
         v-if="showDiscardConfirm"
         class="absolute inset-0 z-10 flex items-center justify-center bg-black/50 rounded-lg"
       >
-        <div class="border border-border rounded-lg bg-bg-elevated p-5 max-w-xs text-center shadow-xl">
+        <div class="border border-border rounded-lg bg-bg-elevated p-6 max-w-xs text-center shadow-xl">
           <p class="font-mono text-sm font-medium text-text-primary mb-1">Discard changes?</p>
           <p class="font-mono text-xs text-text-secondary mb-4">Your unsaved progress will be lost.</p>
           <div class="flex justify-center gap-3">
             <button
               @click="cancelDiscard"
-              class="px-4 py-1.5 font-mono text-xs uppercase tracking-wider rounded border border-border text-text-secondary hover:border-border-hover hover:text-text-primary transition-colors cursor-pointer"
+              class="px-5 py-2 font-mono text-xs uppercase tracking-wider rounded border border-border text-text-secondary hover:border-border-hover hover:text-text-primary transition-colors cursor-pointer"
             >
               Cancel
             </button>
             <button
               @click="confirmDiscard"
-              class="px-4 py-1.5 font-mono text-xs font-medium uppercase tracking-wider rounded bg-status-critical text-bg-primary hover:bg-status-critical/80 transition-colors cursor-pointer"
+              class="px-5 py-2 font-mono text-xs font-medium uppercase tracking-wider rounded bg-status-critical text-bg-primary hover:bg-status-critical/80 transition-colors cursor-pointer"
             >
               Discard
             </button>

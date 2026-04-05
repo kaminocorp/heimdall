@@ -24,12 +24,12 @@ function handleSend() {
       type="text"
       :placeholder="disabled ? 'Agent is processing...' : 'Type your message...'"
       :disabled="disabled"
-      class="flex-1 bg-bg-elevated/80 border border-border rounded px-3 py-2 text-text-primary font-mono text-sm placeholder:text-text-muted focus:border-accent/50 focus:ring-1 focus:ring-accent/20 focus:outline-none disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+      class="flex-1 bg-bg-elevated/80 border border-border rounded px-3 py-2 text-text-primary font-mono text-sm placeholder:text-text-muted focus:border-accent focus:ring-1 focus:ring-accent/30 focus:outline-none disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
     />
     <button
       type="submit"
       :disabled="disabled || !input.trim()"
-      class="px-4 py-2 bg-action text-bg-primary font-mono text-sm font-medium uppercase tracking-wider rounded hover:bg-action-hover disabled:opacity-30 disabled:cursor-not-allowed transition-colors cursor-pointer"
+      class="px-5 py-2.5 bg-action text-bg-primary font-mono text-sm font-medium uppercase tracking-wider rounded hover:bg-action-hover disabled:opacity-30 disabled:cursor-not-allowed transition-colors cursor-pointer"
     >
       Send
     </button>

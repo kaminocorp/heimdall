@@ -44,7 +44,7 @@ const emit = defineEmits<{
         <line x1="14" y1="4" x2="10" y2="20" />
       </svg>
 
-      <p class="font-mono text-[10px] font-medium uppercase tracking-widest text-text-muted">
+      <p class="font-mono text-xs font-medium uppercase tracking-widest text-text-muted">
         {{ label }}
       </p>
     </div>

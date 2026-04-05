@@ -8,7 +8,7 @@ defineProps<{
 
 <template>
   <div
-    class="border border-border rounded-lg p-5 bg-bg-surface hover:border-border-hover transition-colors border-l-2 glow-active"
+    class="border border-border rounded-lg p-6 bg-bg-surface hover:border-border-hover transition-colors border-l-2 glow-active"
     :class="{
       'border-l-status-critical': report.severity === 'critical',
       'border-l-status-warn': report.severity === 'warning',
@@ -18,7 +18,7 @@ defineProps<{
     <div class="flex items-start justify-between gap-3">
       <h3 class="text-sm text-text-primary font-medium">{{ report.summary }}</h3>
       <span
-        class="shrink-0 font-mono text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded border"
+        class="shrink-0 font-mono text-xs font-bold uppercase tracking-wider px-2 py-0.5 rounded border"
         :class="{
           'border-status-critical/30 bg-status-critical/10 text-status-critical': report.severity === 'critical',
           'border-status-warn/30 bg-status-warn/10 text-status-warn': report.severity === 'warning',

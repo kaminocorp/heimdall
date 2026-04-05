@@ -35,7 +35,7 @@ onBeforeUnmount(() => {
     <button
       type="button"
       @click="copy"
-      class="shrink-0 font-mono text-[10px] uppercase tracking-wider px-2 py-0.5 rounded border transition-colors cursor-pointer"
+      class="shrink-0 font-mono text-xs uppercase tracking-wider px-2 py-0.5 rounded border transition-colors cursor-pointer"
       :class="copied
         ? 'border-status-ok/30 text-status-ok bg-status-ok/10'
         : 'border-border text-text-muted hover:text-text-primary hover:border-border-hover'"

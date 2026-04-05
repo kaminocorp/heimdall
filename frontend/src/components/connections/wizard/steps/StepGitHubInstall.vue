@@ -50,7 +50,7 @@ async function install() {
       type="button"
       :disabled="installing"
       @click="install"
-      class="px-4 py-2 bg-action text-bg-primary font-mono text-sm font-medium uppercase tracking-wider rounded hover:bg-action-hover transition-colors cursor-pointer disabled:opacity-50"
+      class="px-5 py-2.5 bg-action text-bg-primary font-mono text-sm font-medium uppercase tracking-wider rounded hover:bg-action-hover transition-colors cursor-pointer disabled:opacity-50"
     >
       {{ installing ? 'Redirecting...' : 'Install GitHub App' }}
     </button>

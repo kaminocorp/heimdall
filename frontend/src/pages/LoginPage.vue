@@ -41,7 +41,7 @@ async function handleSubmit() {
       </div>
 
       <!-- Login card -->
-      <form @submit.prevent="handleSubmit" class="border border-border bg-bg-surface backdrop-blur-sm rounded-lg p-6 space-y-5">
+      <form @submit.prevent="handleSubmit" class="border border-border bg-bg-surface backdrop-blur-sm rounded-lg p-6 space-y-6">
         <div v-if="error" class="px-3 py-2 text-sm font-mono border border-status-critical/30 bg-status-critical/10 text-status-critical rounded">
           {{ error }}
         </div>
@@ -53,7 +53,7 @@ async function handleSubmit() {
             type="email"
             required
             placeholder="operator@corp.io"
-            class="block w-full bg-bg-elevated/80 border border-border rounded px-3 py-2 text-text-primary font-mono text-sm placeholder:text-text-muted focus:border-accent/50 focus:ring-1 focus:ring-accent/20 focus:outline-none transition-colors"
+            class="block w-full bg-bg-elevated/80 border border-border rounded px-3 py-2 text-text-primary font-mono text-sm placeholder:text-text-muted focus:border-accent focus:ring-1 focus:ring-accent/30 focus:outline-none transition-colors"
           />
         </div>
         <div>
@@ -64,7 +64,7 @@ async function handleSubmit() {
             required
             minlength="6"
             placeholder="••••••••••"
-            class="block w-full bg-bg-elevated/80 border border-border rounded px-3 py-2 text-text-primary font-mono text-sm placeholder:text-text-muted focus:border-accent/50 focus:ring-1 focus:ring-accent/20 focus:outline-none transition-colors"
+            class="block w-full bg-bg-elevated/80 border border-border rounded px-3 py-2 text-text-primary font-mono text-sm placeholder:text-text-muted focus:border-accent focus:ring-1 focus:ring-accent/30 focus:outline-none transition-colors"
           />
         </div>
 

@@ -182,7 +182,7 @@ onBeforeUnmount(() => {
           </div>
 
           <!-- Label -->
-          <p class="mt-2 font-mono text-[10px] font-bold uppercase tracking-[0.2em] text-text-muted">
+          <p class="mt-2 font-mono text-xs font-bold uppercase tracking-[0.2em] text-text-muted">
             Heimdall
           </p>
         </div>

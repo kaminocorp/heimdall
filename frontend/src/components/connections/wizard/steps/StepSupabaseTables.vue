@@ -47,7 +47,7 @@ onMounted(sync)
 </script>
 
 <template>
-  <div class="space-y-5">
+  <div class="space-y-6">
     <div>
       <label class="block font-mono text-xs font-medium uppercase tracking-wider text-text-secondary mb-2">
         Log Tables

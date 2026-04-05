@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.21.0 — Kamino Design System Alignment](#0210--kamino-design-system-alignment-2026-04-05)
 - [0.20.5 — Stale-Asset Reload on Deploy](#0205--stale-asset-reload-on-deploy-2026-04-02)
 - [0.20.4 — Public Site Header Overlap Fix](#0204--public-site-header-overlap-fix-2026-04-02)
 - [0.20.3 — Lumber v0.9.0 Upgrade](#0203--lumber-v090-upgrade-2026-04-02)
@@ -53,6 +54,99 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.21.0 — Kamino Design System Alignment (2026-04-05)
+
+Systematic sizing and spacing uplift across the entire frontend, aligning Heimdall with the Kamino product family design system (Elephantasm). The UI previously felt undersized and structurally faint — buttons were thin, card borders nearly invisible, text dipped to 10px, and spacing was uniformly tight. No new features; every change is a design token update or Tailwind class adjustment.
+
+### Motivation
+
+A gap analysis against the Elephantasm design system revealed Heimdall was consistently one notch smaller across every dimension: font sizes, button padding, card padding, section spacing, modal padding, nav click targets, and — most critically — border visibility. The compound effect made the interface feel flimsy despite the strong brutalist aesthetic underneath. This release closes those gaps while preserving Heimdall's feldgrau identity, monochrome palette, and typographic character.
+
+### Design token changes
+
+| Token | Before | After | Effect |
+|-------|--------|-------|--------|
+| `--border` | `rgba(77, 93, 83, 0.06)` | `rgba(77, 93, 83, 0.14)` | Card/panel/input borders now visible at rest — the single highest-impact change |
+| `--border-hover` | `rgba(77, 93, 83, 0.14)` | `rgba(77, 93, 83, 0.25)` | Stronger hover feedback on interactive edges |
+| Global `:focus-visible` outline | `1px solid var(--accent)` | `2px solid var(--accent)` | More prominent keyboard focus indicator |
+
+### Typography — 12px floor
+
+Eliminated all `text-[10px]` (10px) and `text-[11px]` (11px) usage across 30 files. The minimum font size is now `text-xs` (12px / 0.75rem). Affected elements: sidebar section labels, card headers, status badges, log entry timestamps and severity tags, blueprint node labels, wizard step indicators, form helper text, notification history metadata, pricing badges, and the public footer.
+
+### Spacing & sizing changes
+
+| Element | Before | After |
+|---------|--------|-------|
+| **Page content padding** | `p-6 lg:p-8` | `px-6 py-8 lg:px-8 lg:py-12` — more vertical breathing room on desktop |
+| **Card/panel padding** | `p-5` (20px) | `p-6` (24px) — across all dashboard cards, config panels, forms, report cards, connection cards |
+| **Primary button padding** | `px-4 py-2` | `px-5 py-2.5` — taller, more confident CTAs (~40px effective height) |
+| **Secondary button padding** | `px-4 py-2` | `px-5 py-2.5` — consistent with primary |
+| **Wizard/modal button padding** | `px-4 py-1.5` | `px-5 py-2` — no more undersized dialog buttons |
+| **Modal header padding** | `px-5 py-4` | `px-6 py-4` |
+| **Modal body padding** | `px-5 py-5` | `px-6 py-6` |
+| **Modal footer padding** | `px-5 py-3` | `px-6 py-3` |
+| **Sidebar brand header** | `px-5 py-5` | `px-6 py-6` |
+| **Sidebar user footer** | `px-5 py-4` | `px-6 py-5` |
+| **Sidebar nav items** | `px-2 py-1.5` | `px-3 py-2` — better click targets |
+| **Form field spacing** | `space-y-5` | `space-y-6` — all major forms |
+| **Dashboard card grid** | `gap-4 mb-8` | `gap-5 mb-10` |
+
+### Input focus states
+
+Strengthened focus treatment on all text inputs, selects, and textareas across 8 files:
+
+| Property | Before | After |
+|----------|--------|-------|
+| Border on focus | `focus:border-accent/50` (50% opacity) | `focus:border-accent` (full accent colour) |
+| Focus ring | `focus:ring-accent/20` (20% opacity) | `focus:ring-accent/30` (30% opacity) |
+
+### Files changed
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `frontend/src/assets/styles/main.css` | `--border`, `--border-hover` opacity bump; `:focus-visible` outline width 1px → 2px |
+| 2 | `frontend/src/layouts/DefaultLayout.vue` | Page content padding uplift |
+| 3 | `frontend/src/components/common/AppSidebar.vue` | Nav item padding, brand header, user footer, `text-[10px]`/`text-[11px]` → `text-xs` |
+| 4 | `frontend/src/pages/DashboardPage.vue` | Card `p-5` → `p-6`, grid gap, `text-[10px]` → `text-xs` |
+| 5 | `frontend/src/pages/AgentConfigPage.vue` | Card/form padding, button padding, focus states, form spacing, helper text |
+| 6 | `frontend/src/pages/NotificationsPage.vue` | Card/form padding, button padding, focus states, form spacing, metadata text sizes |
+| 7 | `frontend/src/pages/ConnectionsPage.vue` | Card padding, button padding |
+| 8 | `frontend/src/pages/AgentLogPage.vue` | Skeleton card padding |
+| 9 | `frontend/src/pages/AgentChatPage.vue` | (inherits token changes) |
+| 10 | `frontend/src/pages/ReportsPage.vue` | Skeleton card padding |
+| 11 | `frontend/src/pages/LoginPage.vue` | Focus states, form spacing |
+| 12 | `frontend/src/pages/OnboardingPage.vue` | Helper text, form spacing |
+| 13 | `frontend/src/pages/NotFoundPage.vue` | Button padding |
+| 14 | `frontend/src/pages/public/PricingPage.vue` | Badge text size |
+| 15 | `frontend/src/components/agent/ChatInput.vue` | Button padding, focus state |
+| 16 | `frontend/src/components/agent/ChatMessage.vue` | Role label text size |
+| 17 | `frontend/src/components/agent/ChatWindow.vue` | Thinking indicator text size |
+| 18 | `frontend/src/components/common/StatusBadge.vue` | Badge text size |
+| 19 | `frontend/src/components/common/CopyableField.vue` | Copy button text size |
+| 20 | `frontend/src/components/reports/ReportCard.vue` | Card padding, severity badge text size |
+| 21 | `frontend/src/components/log/LogEntry.vue` | Severity/source badge text sizes |
+| 22 | `frontend/src/components/connections/ConnectionCard.vue` | Card padding, testing badge text size |
+| 23 | `frontend/src/components/connections/ConnectionForm.vue` | Card/form padding, button padding, focus states, section header text |
+| 24 | `frontend/src/components/connections/ConnectionTestModal.vue` | Modal padding, button padding, detail label text size |
+| 25 | `frontend/src/components/connections/GitHubRepoSelector.vue` | Card padding, button padding, branch label text size |
+| 26 | `frontend/src/components/connections/BlueprintView.vue` | Hub label text size |
+| 27 | `frontend/src/components/connections/BlueprintZone.vue` | Zone header text size |
+| 28 | `frontend/src/components/connections/BlueprintNode.vue` | Icon badge, type label, action button text sizes |
+| 29 | `frontend/src/components/connections/wizard/ConnectionWizard.vue` | Modal padding, button padding, discard dialog padding |
+| 30 | `frontend/src/components/connections/wizard/WizardStepIndicator.vue` | Step label text size |
+| 31 | `frontend/src/components/connections/wizard/PlatformGrid.vue` | Category label text size, group spacing |
+| 32 | `frontend/src/components/connections/wizard/steps/StepName.vue` | Focus state |
+| 33 | `frontend/src/components/connections/wizard/steps/StepPostgresConfig.vue` | Focus states |
+| 34 | `frontend/src/components/connections/wizard/steps/StepSupabaseAuth.vue` | Focus states |
+| 35 | `frontend/src/components/connections/wizard/steps/StepSupabaseTables.vue` | Form spacing |
+| 36 | `frontend/src/components/connections/wizard/steps/StepWebhookSetup.vue` | Section header text size |
+| 37 | `frontend/src/components/connections/wizard/steps/StepGitHubInstall.vue` | Button padding |
+| 38 | `frontend/src/components/public/PublicFooter.vue` | Footer text `text-[11px]` → `text-xs` |
+| 39 | `docs/brand-guidelines.md` | Updated border token values, sizing/spacing specifications, design principles |
 
 ---
 

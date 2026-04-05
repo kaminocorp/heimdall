@@ -21,7 +21,7 @@ defineProps<{
           "
         />
         <span
-          class="font-mono text-[10px] uppercase tracking-wider transition-colors duration-200"
+          class="font-mono text-xs uppercase tracking-wider transition-colors duration-200"
           :class="
             i === currentIndex
               ? 'text-text-primary'

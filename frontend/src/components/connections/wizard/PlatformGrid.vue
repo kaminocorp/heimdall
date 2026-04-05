@@ -24,9 +24,9 @@ const grouped = computed(() =>
 </script>
 
 <template>
-  <div class="space-y-5">
+  <div class="space-y-6">
     <div v-for="group in grouped" :key="group.key">
-      <p class="font-mono text-[10px] font-medium uppercase tracking-widest text-text-muted mb-2">
+      <p class="font-mono text-xs font-medium uppercase tracking-widest text-text-muted mb-2">
         {{ group.label }}
       </p>
       <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">

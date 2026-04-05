@@ -50,7 +50,7 @@ async function handleSubmit() {
         </p>
       </div>
 
-      <form @submit.prevent="handleSubmit" class="space-y-5">
+      <form @submit.prevent="handleSubmit" class="space-y-6">
         <div>
           <label class="block font-mono text-xs uppercase tracking-wider text-text-muted mb-1.5">
             Organization Name
@@ -77,7 +77,7 @@ async function handleSubmit() {
             pattern="[a-z0-9\-]+"
             class="w-full px-3 py-2 bg-bg-surface border border-border rounded text-sm text-text-primary placeholder-text-muted focus:outline-none focus:border-accent font-mono"
           />
-          <p class="mt-1 text-[10px] text-text-muted font-mono">Lowercase letters, numbers, and hyphens only</p>
+          <p class="mt-1 text-xs text-text-muted font-mono">Lowercase letters, numbers, and hyphens only</p>
         </div>
 
         <div>
@@ -90,7 +90,7 @@ async function handleSubmit() {
             placeholder="My Application"
             class="w-full px-3 py-2 bg-bg-surface border border-border rounded text-sm text-text-primary placeholder-text-muted focus:outline-none focus:border-accent font-mono"
           />
-          <p class="mt-1 text-[10px] text-text-muted font-mono">The production system you want to monitor</p>
+          <p class="mt-1 text-xs text-text-muted font-mono">The production system you want to monitor</p>
         </div>
 
         <button

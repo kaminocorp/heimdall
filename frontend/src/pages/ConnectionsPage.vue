@@ -147,7 +147,7 @@ function closeRepoSelector() {
         <ViewToggle v-model="viewMode" />
         <button
           @click="openCreate"
-          class="px-4 py-2 bg-action text-bg-primary font-mono text-sm font-medium uppercase tracking-wider rounded hover:bg-action-hover transition-colors cursor-pointer"
+          class="px-5 py-2.5 bg-action text-bg-primary font-mono text-sm font-medium uppercase tracking-wider rounded hover:bg-action-hover transition-colors cursor-pointer"
         >
           + New Connection
         </button>
@@ -181,7 +181,7 @@ function closeRepoSelector() {
 
     <!-- Skeleton loader -->
     <div v-if="store.loading" class="grid grid-cols-1 md:grid-cols-2 gap-4">
-      <div v-for="n in 3" :key="n" class="border border-border rounded-lg bg-bg-surface p-5 space-y-3">
+      <div v-for="n in 3" :key="n" class="border border-border rounded-lg bg-bg-surface p-6 space-y-3">
         <SkeletonBlock width="60%" height="1rem" />
         <SkeletonBlock width="40%" height="0.75rem" />
         <SkeletonBlock width="30%" height="0.75rem" />

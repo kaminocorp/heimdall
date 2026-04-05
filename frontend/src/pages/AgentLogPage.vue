@@ -40,7 +40,7 @@ function handleFilter(filters: { severity?: string; connection_id?: string; sour
     </div>
 
     <!-- Skeleton loader -->
-    <div v-if="logsStore.loading && logsStore.entries.length === 0" class="border border-border rounded-lg bg-bg-surface p-5 space-y-3">
+    <div v-if="logsStore.loading && logsStore.entries.length === 0" class="border border-border rounded-lg bg-bg-surface p-6 space-y-3">
       <div v-for="n in 8" :key="n" class="flex items-center gap-3 py-1.5">
         <SkeletonBlock width="4rem" height="0.75rem" />
         <SkeletonBlock width="3rem" height="0.75rem" />

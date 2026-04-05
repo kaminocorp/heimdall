@@ -1,6 +1,6 @@
 <template>
   <footer class="border-t border-border">
-    <div class="w-full px-6 py-3 flex items-center justify-between text-[11px] font-mono text-text-muted tracking-wide">
+    <div class="w-full px-6 py-3 flex items-center justify-between text-xs font-mono text-text-muted tracking-wide">
       <!-- Left: attribution -->
       <span class="opacity-50 hidden sm:inline">A Kamino Corporation product.</span>
 

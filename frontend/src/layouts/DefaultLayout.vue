@@ -52,7 +52,7 @@ const mobileMenuOpen = ref(false)
       </Teleport>
 
       <!-- Main content -->
-      <main class="flex-1 min-w-0 p-6 lg:p-8">
+      <main class="flex-1 min-w-0 px-6 py-8 lg:px-8 lg:py-12">
         <slot />
       </main>
     </div>

@@ -276,7 +276,7 @@ watch(() => appStore.currentAppId, () => {
 
     <!-- Skeleton loader -->
     <div v-if="loading" class="space-y-6">
-      <div class="border border-border rounded-lg bg-bg-surface p-5 space-y-4">
+      <div class="border border-border rounded-lg bg-bg-surface p-6 space-y-4">
         <div v-for="n in 3" :key="n" class="flex items-baseline justify-between py-2">
           <SkeletonBlock width="5rem" height="0.75rem" />
           <SkeletonBlock width="10rem" height="0.75rem" />
@@ -299,7 +299,7 @@ watch(() => appStore.currentAppId, () => {
         </div>
 
         <!-- Edit mode -->
-        <form v-if="editingPrefs" @submit.prevent="savePrefs" class="border border-border rounded-lg bg-bg-surface p-5 space-y-5">
+        <form v-if="editingPrefs" @submit.prevent="savePrefs" class="border border-border rounded-lg bg-bg-surface p-6 space-y-6">
           <div class="flex items-center gap-3">
             <label class="font-mono text-xs font-medium uppercase tracking-wider text-text-secondary">Enabled</label>
             <button
@@ -327,16 +327,16 @@ watch(() => appStore.currentAppId, () => {
               type="number"
               min="1"
               max="1440"
-              class="block w-full bg-bg-elevated/80 border border-border rounded px-3 py-2 text-text-primary font-mono text-sm focus:border-accent/50 focus:ring-1 focus:ring-accent/20 focus:outline-none transition-colors"
+              class="block w-full bg-bg-elevated/80 border border-border rounded px-3 py-2 text-text-primary font-mono text-sm focus:border-accent focus:ring-1 focus:ring-accent/30 focus:outline-none transition-colors"
             />
-            <p class="mt-1 font-mono text-[10px] text-text-muted">Suppress duplicate notifications for this many minutes (1–1440)</p>
+            <p class="mt-1 font-mono text-xs text-text-muted">Suppress duplicate notifications for this many minutes (1–1440)</p>
           </div>
 
           <div class="flex gap-2 pt-2">
             <button
               type="submit"
               :disabled="savingPrefs"
-              class="px-4 py-2 bg-action text-bg-primary font-mono text-sm font-medium uppercase tracking-wider rounded hover:bg-action-hover transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              class="px-5 py-2.5 bg-action text-bg-primary font-mono text-sm font-medium uppercase tracking-wider rounded hover:bg-action-hover transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {{ savingPrefs ? 'Saving...' : 'Save' }}
             </button>
@@ -344,7 +344,7 @@ watch(() => appStore.currentAppId, () => {
               type="button"
               @click="editingPrefs = false"
               :disabled="savingPrefs"
-              class="px-4 py-2 border border-accent-border/50 text-text-secondary font-mono text-sm uppercase tracking-wider rounded hover:border-accent/50 hover:text-text-primary transition-colors cursor-pointer"
+              class="px-5 py-2.5 border border-accent-border/50 text-text-secondary font-mono text-sm uppercase tracking-wider rounded hover:border-accent/50 hover:text-text-primary transition-colors cursor-pointer"
             >
               Cancel
             </button>
@@ -352,7 +352,7 @@ watch(() => appStore.currentAppId, () => {
         </form>
 
         <!-- Display mode -->
-        <div v-else-if="prefs" class="border border-border rounded-lg bg-bg-surface p-5">
+        <div v-else-if="prefs" class="border border-border rounded-lg bg-bg-surface p-6">
           <div class="space-y-3">
             <div class="flex items-baseline justify-between py-1.5 border-b border-border">
               <span class="font-mono text-xs font-medium uppercase tracking-wider text-text-muted">Status</span>
@@ -386,7 +386,7 @@ watch(() => appStore.currentAppId, () => {
         </div>
 
         <!-- Channel form -->
-        <form v-if="showChannelForm" @submit.prevent="saveChannel" class="border border-border rounded-lg bg-bg-surface p-5 space-y-5 mb-4">
+        <form v-if="showChannelForm" @submit.prevent="saveChannel" class="border border-border rounded-lg bg-bg-surface p-6 space-y-6 mb-4">
           <div v-if="!editingChannelId">
             <label class="block font-mono text-xs font-medium uppercase tracking-wider text-text-secondary mb-1.5">Type</label>
             <BaseSelect v-model="formChannelType" :options="channelTypeOptions" />
@@ -399,7 +399,7 @@ watch(() => appStore.currentAppId, () => {
               type="text"
               required
               placeholder="e.g. Ops Slack"
-              class="block w-full bg-bg-elevated/80 border border-border rounded px-3 py-2 text-text-primary font-mono text-sm placeholder:text-text-muted focus:border-accent/50 focus:ring-1 focus:ring-accent/20 focus:outline-none transition-colors"
+              class="block w-full bg-bg-elevated/80 border border-border rounded px-3 py-2 text-text-primary font-mono text-sm placeholder:text-text-muted focus:border-accent focus:ring-1 focus:ring-accent/30 focus:outline-none transition-colors"
             />
           </div>
 
@@ -411,7 +411,7 @@ watch(() => appStore.currentAppId, () => {
               type="url"
               required
               :placeholder="formChannelType === 'slack' ? 'https://hooks.slack.com/services/...' : 'https://discord.com/api/webhooks/...'"
-              class="block w-full bg-bg-elevated/80 border border-border rounded px-3 py-2 text-text-primary font-mono text-sm placeholder:text-text-muted focus:border-accent/50 focus:ring-1 focus:ring-accent/20 focus:outline-none transition-colors"
+              class="block w-full bg-bg-elevated/80 border border-border rounded px-3 py-2 text-text-primary font-mono text-sm placeholder:text-text-muted focus:border-accent focus:ring-1 focus:ring-accent/30 focus:outline-none transition-colors"
             />
           </div>
 
@@ -423,9 +423,9 @@ watch(() => appStore.currentAppId, () => {
               type="text"
               required
               placeholder="ops@company.com, dev@company.com"
-              class="block w-full bg-bg-elevated/80 border border-border rounded px-3 py-2 text-text-primary font-mono text-sm placeholder:text-text-muted focus:border-accent/50 focus:ring-1 focus:ring-accent/20 focus:outline-none transition-colors"
+              class="block w-full bg-bg-elevated/80 border border-border rounded px-3 py-2 text-text-primary font-mono text-sm placeholder:text-text-muted focus:border-accent focus:ring-1 focus:ring-accent/30 focus:outline-none transition-colors"
             />
-            <p class="mt-1 font-mono text-[10px] text-text-muted">Comma-separated email addresses</p>
+            <p class="mt-1 font-mono text-xs text-text-muted">Comma-separated email addresses</p>
           </div>
 
           <div class="flex items-center gap-3">
@@ -447,7 +447,7 @@ watch(() => appStore.currentAppId, () => {
             <button
               type="submit"
               :disabled="savingChannel"
-              class="px-4 py-2 bg-action text-bg-primary font-mono text-sm font-medium uppercase tracking-wider rounded hover:bg-action-hover transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              class="px-5 py-2.5 bg-action text-bg-primary font-mono text-sm font-medium uppercase tracking-wider rounded hover:bg-action-hover transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {{ savingChannel ? 'Saving...' : (editingChannelId ? 'Update Channel' : 'Add Channel') }}
             </button>
@@ -455,7 +455,7 @@ watch(() => appStore.currentAppId, () => {
               type="button"
               @click="cancelChannelForm"
               :disabled="savingChannel"
-              class="px-4 py-2 border border-accent-border/50 text-text-secondary font-mono text-sm uppercase tracking-wider rounded hover:border-accent/50 hover:text-text-primary transition-colors cursor-pointer"
+              class="px-5 py-2.5 border border-accent-border/50 text-text-secondary font-mono text-sm uppercase tracking-wider rounded hover:border-accent/50 hover:text-text-primary transition-colors cursor-pointer"
             >
               Cancel
             </button>
@@ -476,7 +476,7 @@ watch(() => appStore.currentAppId, () => {
             <div class="min-w-0 flex-1">
               <div class="flex items-center gap-2">
                 <span class="font-mono text-sm font-medium text-text-primary">{{ ch.name }}</span>
-                <span class="font-mono text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded border border-border text-text-muted">
+                <span class="font-mono text-xs uppercase tracking-wider px-1.5 py-0.5 rounded border border-border text-text-muted">
                   {{ channelTypeLabel(ch.type) }}
                 </span>
                 <span
@@ -484,7 +484,7 @@ watch(() => appStore.currentAppId, () => {
                   :class="ch.enabled ? 'bg-accent' : 'bg-text-muted'"
                 />
               </div>
-              <p class="font-mono text-[11px] text-text-muted mt-0.5 truncate">
+              <p class="font-mono text-xs text-text-muted mt-0.5 truncate">
                 {{ channelConfigSummary(ch) }}
               </p>
             </div>
@@ -493,19 +493,19 @@ watch(() => appStore.currentAppId, () => {
               <button
                 @click="testChannel(ch)"
                 :disabled="testingChannelId === ch.id"
-                class="px-2.5 py-1 border border-border text-text-secondary font-mono text-[10px] uppercase tracking-wider rounded hover:border-accent/50 hover:text-text-primary transition-colors cursor-pointer disabled:opacity-50"
+                class="px-2.5 py-1 border border-border text-text-secondary font-mono text-xs uppercase tracking-wider rounded hover:border-accent/50 hover:text-text-primary transition-colors cursor-pointer disabled:opacity-50"
               >
                 {{ testingChannelId === ch.id ? 'Sending...' : 'Test' }}
               </button>
               <button
                 @click="openEditChannel(ch)"
-                class="px-2.5 py-1 border border-border text-text-secondary font-mono text-[10px] uppercase tracking-wider rounded hover:border-accent/50 hover:text-text-primary transition-colors cursor-pointer"
+                class="px-2.5 py-1 border border-border text-text-secondary font-mono text-xs uppercase tracking-wider rounded hover:border-accent/50 hover:text-text-primary transition-colors cursor-pointer"
               >
                 Edit
               </button>
               <button
                 @click="removeChannel(ch)"
-                class="px-2.5 py-1 border border-border text-text-secondary font-mono text-[10px] uppercase tracking-wider rounded hover:border-status-critical/50 hover:text-status-critical transition-colors cursor-pointer"
+                class="px-2.5 py-1 border border-border text-text-secondary font-mono text-xs uppercase tracking-wider rounded hover:border-status-critical/50 hover:text-status-critical transition-colors cursor-pointer"
               >
                 Del
               </button>
@@ -530,9 +530,9 @@ watch(() => appStore.currentAppId, () => {
           >
             <span class="w-2 h-2 rounded-full flex-shrink-0" :class="severityIndicator(entry.severity)" />
             <span class="font-mono text-xs text-text-primary flex-1 min-w-0 truncate">{{ entry.summary }}</span>
-            <span class="font-mono text-[10px] uppercase tracking-wider text-text-muted flex-shrink-0">{{ entry.channel_name }}</span>
-            <span class="font-mono text-[10px] uppercase tracking-wider flex-shrink-0" :class="statusLabel(entry.status)">{{ entry.status }}</span>
-            <span class="font-mono text-[10px] text-text-muted flex-shrink-0 w-16 text-right">{{ timeAgo(entry.created_at) }}</span>
+            <span class="font-mono text-xs uppercase tracking-wider text-text-muted flex-shrink-0">{{ entry.channel_name }}</span>
+            <span class="font-mono text-xs uppercase tracking-wider flex-shrink-0" :class="statusLabel(entry.status)">{{ entry.status }}</span>
+            <span class="font-mono text-xs text-text-muted flex-shrink-0 w-16 text-right">{{ timeAgo(entry.created_at) }}</span>
           </div>
         </div>
       </section>

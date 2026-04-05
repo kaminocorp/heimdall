@@ -41,19 +41,19 @@ const entryTypeLabel = computed(() => {
       <span class="text-text-muted text-xs shrink-0">{{ timestamp }}</span>
       <span
         v-if="isMonitoring"
-        class="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border border-status-warn/30 bg-status-warn/10 text-status-warn shrink-0"
+        class="text-xs font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border border-status-warn/30 bg-status-warn/10 text-status-warn shrink-0"
       >Monitor</span>
       <span
         v-else-if="isHeartbeat"
-        class="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border border-status-ok/30 bg-status-ok/10 text-status-ok shrink-0"
+        class="text-xs font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border border-status-ok/30 bg-status-ok/10 text-status-ok shrink-0"
       >Heartbeat</span>
       <span
         v-else-if="isAgent"
-        class="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border border-accent-border/50 bg-accent-subtle text-accent shrink-0"
+        class="text-xs font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border border-accent-border/50 bg-accent-subtle text-accent shrink-0"
       >Agent</span>
       <span
         v-if="entry.severity"
-        class="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border shrink-0"
+        class="text-xs font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border shrink-0"
         :class="{
           'border-status-critical/30 bg-status-critical/10 text-status-critical': entry.severity === 'critical',
           'border-status-warn/30 bg-status-warn/10 text-status-warn': entry.severity === 'warning',
