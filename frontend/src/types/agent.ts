@@ -1,13 +1,3 @@
-export interface AgentConfig {
-  id: string
-  model: string
-  mode: 'continuous' | 'scheduled' | 'off'
-  schedule: string | null
-  system_prompt_override: string | null
-  created_at: string
-  updated_at: string
-}
-
 export interface ChatMessage {
   id: string
   role: 'user' | 'agent' | 'assistant'

@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.25.0 — Code Assessment Cleanup](#0250--code-assessment-cleanup-2026-04-06)
 - [0.24.5 — Poller, Parser & Shutdown Hardening](#0245--poller-parser--shutdown-hardening-2026-04-06)
 - [0.24.4 — SDK Shutdown Safety](#0244--sdk-shutdown-safety-2026-04-06)
 - [0.24.3 — UpdateConnection Validation](#0243--updateconnection-validation-2026-04-06)
@@ -62,6 +63,80 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.25.0 — Code Assessment Cleanup (2026-04-06)
+
+Four maintenance items from the April 6 code assessment: dead code removed across backend and frontend, poller initialisation deduplicated into a shared factory, stub packages deleted, and a silenced `json.Marshal` error made explicit.
+
+### Refactor — Dead handlers and frontend modules removed
+
+Four backend handlers existed but were not registered in `router.go` — superseded by per-app equivalents (`GetAppAgentConfig`, `GetAppDashboardStats`) when the multi-app model was introduced in 0.10.0 but never deleted. Three frontend modules called the corresponding dead endpoints, and the `AgentConfig` type they referenced used a stale `'scheduled'` mode value instead of the live `'periodic'`.
+
+**Fix:** Deleted all dead backend handlers, their frontend API modules, the orphaned Pinia store, and the stale type. The test file for the dead store was also removed — an orphaned test that passed gives false confidence about unreachable code.
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `backend/internal/api/handlers/agent.go` | Deleted — `GetAgentConfig`, `UpdateAgentConfig`, `RunAgent` unregistered |
+| 2 | `backend/internal/api/handlers/stats.go` | Deleted — `GetDashboardStats` unregistered |
+| 3 | `frontend/src/api/agent.ts` | Deleted — called dead `/agent/config` endpoint |
+| 4 | `frontend/src/stores/agent.ts` | Deleted — consumed dead API module, never imported by any page |
+| 5 | `frontend/src/stores/__tests__/agent.test.ts` | Deleted — test for deleted store |
+| 6 | `frontend/src/api/stats.ts` | Deleted — called dead `/stats` endpoint |
+| 7 | `frontend/src/types/agent.ts` | Removed `AgentConfig` interface; WebSocket/chat types retained |
+
+---
+
+### Refactor — Poller factory extracted to eliminate duplication
+
+Poller startup logic was duplicated between `cmd/heimdall/main.go` (`resumePollers`) and `handlers/connections.go` (`startPoller`) — the same switch over five connector types with identical `New* → poller.Start` patterns. Adding a new poll-based connector required changes in both places.
+
+**Fix:** Extracted a `connectors.StartPoller` factory function. Both call sites now delegate to it. `resumePollers` simplified from a slice of structs-with-closures to a plain loop over type name strings.
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `backend/internal/connectors/factory.go` | New — `StartPoller(poller, connType, config, connID, userID)` with single switch |
+| 2 | `backend/internal/api/handlers/connections.go` | Removed `startPoller`; two call sites replaced with `connectors.StartPoller` |
+| 3 | `backend/cmd/heimdall/main.go` | `resumePollers` rewritten to loop over type strings and call `connectors.StartPoller` |
+
+---
+
+### Refactor — Stub packages deleted
+
+Three packages contained only TODO no-ops with no callers anywhere in the codebase. They were placeholders for future features that had not been developed.
+
+**Fix:** Deleted all three packages in full. The real webhook ingestion path is `handlers/webhook_parsers.go` (HTTP handler), not the `StreamConnector` pattern the stub represented. The `reports` and `memory` packages had no callers at any layer.
+
+| # | Package | Files deleted | Content |
+|---|---------|--------------|---------|
+| 1 | `internal/connectors/logs` | `webhook.go`, `webhook_test.go` | `Stream()` no-op; stub test asserting non-nil constructor |
+| 2 | `internal/reports` | `generator.go`, `templates.go` | `Generate()` returning `nil, nil`; unused template struct |
+| 3 | `internal/memory` | `client.go`, `memory.go`, `types.go` | `RecordEvent`, `QueryMemories`, `GetLessons` all no-ops |
+
+---
+
+### Bug fix — Silenced `json.Marshal` error in syslog TLS injection
+
+In `CreateConnection` and `UpdateConnection`, after injecting server-level TLS cert/key into the syslog config map, the result was re-marshalled with `config, _ = json.Marshal(cfgMap)` — silently discarding any error. While `json.Marshal` on a `map[string]interface{}` with string values won't realistically fail, this pattern deviates from the codebase's otherwise consistent error handling and would mask any future regression.
+
+**Fix:** Replaced the blank identifier with an explicit error check. Returns 500 on failure in both handlers.
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `backend/internal/api/handlers/connections.go` | `CreateConnection` — `config, _ =` → `config, marshalErr =` with `jsonError` return |
+| 2 | `backend/internal/api/handlers/connections.go` | `UpdateConnection` — same fix |
+
+---
+
+### Summary
+
+| # | Category | Item | Severity |
+|---|----------|------|----------|
+| 1 | Dead code | Unregistered handlers + stale frontend modules | Medium |
+| 2 | Maintainability | Duplicated poller init switch across two files | Medium |
+| 3 | Dead code | Three stub packages with no callers | Low |
+| 4 | Correctness | Silenced `json.Marshal` error in syslog config path | Low |
 
 ---
 

@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/hejijunhao/heimdall/backend/internal/api/middleware"
+	"github.com/hejijunhao/heimdall/backend/internal/connectors"
 	"github.com/hejijunhao/heimdall/backend/internal/connectors/database"
 	"github.com/hejijunhao/heimdall/backend/internal/connectors/logs"
 	"github.com/hejijunhao/heimdall/backend/internal/db"
@@ -186,7 +187,11 @@ func (s *Server) CreateConnection(w http.ResponseWriter, r *http.Request) {
 				if _, ok := cfgMap["tls_cert"]; !ok {
 					cfgMap["tls_cert"] = s.Config.SyslogTLSCert
 					cfgMap["tls_key"] = s.Config.SyslogTLSKey
-					config, _ = json.Marshal(cfgMap)
+					var marshalErr error
+					if config, marshalErr = json.Marshal(cfgMap); marshalErr != nil {
+						jsonError(w, "failed to marshal syslog config", http.StatusInternalServerError)
+						return
+					}
 				}
 			}
 		}
@@ -240,7 +245,9 @@ func (s *Server) CreateConnection(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Start polling goroutines for poll-based connectors.
-	startPoller(s, req.Type, config, conn.ID, userID)
+	if err := connectors.StartPoller(s.Poller, req.Type, config, conn.ID, userID); err != nil {
+		slog.Error("poller init failed", "type", req.Type, "connection_id", conn.ID, "err", err)
+	}
 
 	// Start listener for syslog connections.
 	if req.Type == "syslog" {
@@ -365,7 +372,11 @@ func (s *Server) UpdateConnection(w http.ResponseWriter, r *http.Request) {
 				if _, ok := cfgMap["tls_cert"]; !ok {
 					cfgMap["tls_cert"] = s.Config.SyslogTLSCert
 					cfgMap["tls_key"] = s.Config.SyslogTLSKey
-					config, _ = json.Marshal(cfgMap)
+					var marshalErr error
+					if config, marshalErr = json.Marshal(cfgMap); marshalErr != nil {
+						jsonError(w, "failed to marshal syslog config", http.StatusInternalServerError)
+						return
+					}
 				}
 			}
 		}
@@ -433,7 +444,9 @@ func (s *Server) UpdateConnection(w http.ResponseWriter, r *http.Request) {
 	s.Poller.Stop(connID)
 	s.Listener.Stop(connID)
 
-	startPoller(s, req.Type, config, conn.ID, userID)
+	if err := connectors.StartPoller(s.Poller, req.Type, config, conn.ID, userID); err != nil {
+		slog.Error("poller init failed", "type", req.Type, "connection_id", conn.ID, "err", err)
+	}
 
 	if req.Type == "syslog" {
 		sl, err := logs.NewSyslog(config, conn.ID, userID, s.Queries)
@@ -642,47 +655,6 @@ var validConnectionTypes = map[string]bool{
 func isValidConnectionType(t string) bool  { return validConnectionTypes[t] }
 func isValidDirection(d string) bool        { return d == "one_way" || d == "two_way" }
 func isValidConnectionStatus(s string) bool { return s == "active" || s == "inactive" || s == "error" }
-
-// startPoller initializes and starts a polling goroutine for poll-based connector types.
-func startPoller(s *Server, connType string, config json.RawMessage, connID, userID uuid.UUID) {
-	switch connType {
-	case "supabase":
-		sb, err := logs.NewSupabase(config, connID, userID)
-		if err != nil {
-			slog.Error("supabase poller init failed", "connection_id", connID, "err", err)
-			return
-		}
-		s.Poller.Start(sb, connID, time.Duration(sb.ParsedConfig().PollIntervalSecs)*time.Second)
-	case "flyio":
-		f, err := logs.NewFlyio(config, connID, userID)
-		if err != nil {
-			slog.Error("flyio poller init failed", "connection_id", connID, "err", err)
-			return
-		}
-		s.Poller.Start(f, connID, time.Duration(f.ParsedConfig().PollIntervalSecs)*time.Second)
-	case "vercel":
-		v, err := logs.NewVercel(config, connID, userID)
-		if err != nil {
-			slog.Error("vercel poller init failed", "connection_id", connID, "err", err)
-			return
-		}
-		s.Poller.Start(v, connID, time.Duration(v.ParsedConfig().PollIntervalSecs)*time.Second)
-	case "railway":
-		r, err := logs.NewRailway(config, connID, userID)
-		if err != nil {
-			slog.Error("railway poller init failed", "connection_id", connID, "err", err)
-			return
-		}
-		s.Poller.Start(r, connID, time.Duration(r.ParsedConfig().PollIntervalSecs)*time.Second)
-	case "mongodb":
-		m, err := logs.NewMongoDB(config, connID, userID)
-		if err != nil {
-			slog.Error("mongodb poller init failed", "connection_id", connID, "err", err)
-			return
-		}
-		s.Poller.Start(m, connID, time.Duration(m.ParsedConfig().PollIntervalSecs)*time.Second)
-	}
-}
 
 func (s *Server) DeleteConnection(w http.ResponseWriter, r *http.Request) {
 	userID, ok := middleware.UserIDFromContext(r.Context())

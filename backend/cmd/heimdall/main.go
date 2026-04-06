@@ -189,63 +189,19 @@ func resumeSyslogListeners(ctx context.Context, queries *db.Queries, lm *connect
 
 // resumePollers restarts polling goroutines for all active poll-based connections.
 func resumePollers(ctx context.Context, queries *db.Queries, poller *connectors.Poller) {
-	pollerTypes := []struct {
-		typeName string
-		start    func(conn db.Connection)
-	}{
-		{"supabase", func(conn db.Connection) {
-			sb, err := logs.NewSupabase(conn.Config, conn.ID, conn.UserID)
-			if err != nil {
-				slog.Error("resume: supabase init failed", "connection_id", conn.ID, "err", err)
-				return
-			}
-			poller.Start(sb, conn.ID, time.Duration(sb.ParsedConfig().PollIntervalSecs)*time.Second)
-		}},
-		{"flyio", func(conn db.Connection) {
-			f, err := logs.NewFlyio(conn.Config, conn.ID, conn.UserID)
-			if err != nil {
-				slog.Error("resume: flyio init failed", "connection_id", conn.ID, "err", err)
-				return
-			}
-			poller.Start(f, conn.ID, time.Duration(f.ParsedConfig().PollIntervalSecs)*time.Second)
-		}},
-		{"vercel", func(conn db.Connection) {
-			v, err := logs.NewVercel(conn.Config, conn.ID, conn.UserID)
-			if err != nil {
-				slog.Error("resume: vercel init failed", "connection_id", conn.ID, "err", err)
-				return
-			}
-			poller.Start(v, conn.ID, time.Duration(v.ParsedConfig().PollIntervalSecs)*time.Second)
-		}},
-		{"railway", func(conn db.Connection) {
-			r, err := logs.NewRailway(conn.Config, conn.ID, conn.UserID)
-			if err != nil {
-				slog.Error("resume: railway init failed", "connection_id", conn.ID, "err", err)
-				return
-			}
-			poller.Start(r, conn.ID, time.Duration(r.ParsedConfig().PollIntervalSecs)*time.Second)
-		}},
-		{"mongodb", func(conn db.Connection) {
-			m, err := logs.NewMongoDB(conn.Config, conn.ID, conn.UserID)
-			if err != nil {
-				slog.Error("resume: mongodb init failed", "connection_id", conn.ID, "err", err)
-				return
-			}
-			poller.Start(m, conn.ID, time.Duration(m.ParsedConfig().PollIntervalSecs)*time.Second)
-		}},
-	}
-
-	for _, pt := range pollerTypes {
-		conns, err := queries.ListActiveConnectionsByType(ctx, pt.typeName)
+	for _, typeName := range []string{"supabase", "flyio", "vercel", "railway", "mongodb"} {
+		conns, err := queries.ListActiveConnectionsByType(ctx, typeName)
 		if err != nil {
-			slog.Error("failed to list active connections for resume", "type", pt.typeName, "err", err)
+			slog.Error("failed to list active connections for resume", "type", typeName, "err", err)
 			continue
 		}
 		for _, conn := range conns {
-			pt.start(conn)
+			if err := connectors.StartPoller(poller, typeName, conn.Config, conn.ID, conn.UserID); err != nil {
+				slog.Error("resume: poller init failed", "type", typeName, "connection_id", conn.ID, "err", err)
+			}
 		}
 		if len(conns) > 0 {
-			slog.Info("resumed pollers", "type", pt.typeName, "count", len(conns))
+			slog.Info("resumed pollers", "type", typeName, "count", len(conns))
 		}
 	}
 }
