@@ -12,8 +12,8 @@ import (
 	"github.com/hejijunhao/heimdall/backend/internal/github"
 )
 
-func NewRouter(cfg *config.Config, pool *pgxpool.Pool, ag *agent.Agent, jwks *middleware.JWKSClient, gh *github.Client, poller *connectors.Poller) *chi.Mux {
-	s := handlers.NewServer(cfg, pool, ag, jwks, gh, poller)
+func NewRouter(cfg *config.Config, pool *pgxpool.Pool, ag *agent.Agent, jwks *middleware.JWKSClient, gh *github.Client, poller *connectors.Poller, listener *connectors.ListenerManager) *chi.Mux {
+	s := handlers.NewServer(cfg, pool, ag, jwks, gh, poller, listener)
 	r := chi.NewRouter()
 
 	r.Use(middleware.Logging)
@@ -22,6 +22,7 @@ func NewRouter(cfg *config.Config, pool *pgxpool.Pool, ag *agent.Agent, jwks *mi
 	r.Route("/api", func(r chi.Router) {
 		// Public routes — no JWT required.
 		r.Post("/webhooks/logs", s.IngestWebhookLogs)
+		r.Post("/v1/logs", s.IngestOTLPLogs)
 		// GitHub callback is hit by browser redirect from GitHub — auth via state JWT, not session.
 		r.Get("/github/callback", s.GitHubCallback)
 

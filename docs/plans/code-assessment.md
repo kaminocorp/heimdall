@@ -1,6 +1,6 @@
 # Code Assessment — Heimdall Repository
 
-**Date:** 2026-03-22
+**Date:** 2026-04-06 (supersedes 2026-03-22 assessment)
 **Scope:** Full repository — backend (Go), frontend (Vue 3 + TypeScript), infrastructure (migrations, Docker, config)
 **Assessment criteria:** Functionality, accuracy, maintainability, clean code. Files >500 lines flagged for refactoring.
 
@@ -8,379 +8,172 @@
 
 ## Executive Summary
 
-The codebase is well-structured with clean separation of concerns, consistent patterns, and good test coverage for the new Supabase connector work. No Go files exceed 500 lines. One frontend file (541 lines) needs decomposition. However, several **functional bugs** and **security gaps** need attention before production deployment. The most critical are SQL injection in the Supabase connector, unescaped HTML in email notifications, and the `search_logs` agent tool silently ignoring its `query` parameter.
+The codebase is in strong shape. All 12 issues from the March 22 assessment have been addressed — SQL injection patched, XSS escaped, CORS locked down, RLS added, search_logs fixed, pagination corrected, and timer leaks cleaned up. The remaining issues are maintenance-level: dead code that should be removed, one instance of code duplication worth consolidating, and two files slightly over the 500-line threshold.
 
-**Overall score: 7.5/10** — solid architecture, but the issues below need fixing to reach 8.5+.
+**Overall score: 8.5/10** — up from 7.5. No critical or high-severity issues remain.
 
 ---
 
-## Critical Issues (Must Fix)
+## Previous Assessment Status
 
-### 1. SQL injection in Supabase connector
+All 12 issues from the 2026-03-22 assessment are resolved:
 
-**File:** `backend/internal/connectors/logs/supabase.go:126-129`
+| # | Issue | Status |
+|---|-------|--------|
+| 1 | SQL injection in Supabase table name | **Fixed** — allowlist validation in `supabase.go:29-38` |
+| 2 | XSS in email HTML | **Fixed** — `html.EscapeString()` in `format.go:55` |
+| 3 | `search_logs` ignores query param | **Fixed** — reads `input["query"]` in `tools_logs.go:38` |
+| 4 | Chat uses wrong agent config | **Fixed** — `loop.go:36` uses `GetAppAgentConfig` |
+| 5 | Wildcard CORS | **Fixed** — reads `CORS_ALLOWED_ORIGINS` env var in `cors.go:12-28` |
+| 6 | UserQueries always commits | **Fixed** — documented as safe; PG auto-rolls-back aborted txns |
+| 7 | Pagination broken for merged sources | **Fixed** — merges then applies offset/limit in `logs.go:192-199` |
+| 8 | Missing RLS on 5 tables | **Fixed** — migration `021_rls_missing_tables.up.sql` |
+| 9 | Poller not restarted on update | **Fixed** — `UpdateConnection` stops/restarts in `connections.go:339-342` |
+| 10 | Poller error silently swallowed | **Fixed** |
+| 11 | Rate-limit sleep ineffective | **Fixed** |
+| 12 | Timer leak in ConnectionTestModal | **Fixed** — cleanup in `onBeforeUnmount` |
+
+---
+
+## Current Issues
+
+### 1. Dead code: unreachable handlers and frontend modules
+
+**Severity:** Medium
+**Effort:** Small
+
+Four backend handlers exist but are not registered in `router.go`:
+
+| Handler | File | Lines |
+|---------|------|-------|
+| `GetAgentConfig` | `handlers/agent.go:18` | 12 |
+| `UpdateAgentConfig` | `handlers/agent.go:38` | 34 |
+| `RunAgent` | `handlers/agent.go:81` | 27 |
+| `GetDashboardStats` | `handlers/stats.go:10` | 22 |
+
+These were superseded by per-app equivalents (`GetAppAgentConfig`, `GetAppDashboardStats`) but never removed.
+
+Three frontend modules reference these dead endpoints:
+
+| Module | File | Issue |
+|--------|------|-------|
+| `api/agent.ts` | `frontend/src/api/agent.ts` | Calls `/agent/config` — endpoint doesn't exist |
+| `stores/agent.ts` | `frontend/src/stores/agent.ts` | Uses stale `AgentConfig` type; never imported by any page |
+| `api/stats.ts` | `frontend/src/api/stats.ts` | Calls `/stats` — endpoint doesn't exist |
+
+The `AgentConfig` type in `types/agent.ts` defines mode as `'continuous' | 'scheduled' | 'off'`, while the active `AppAgentConfig` in `types/organization.ts` correctly uses `'continuous' | 'periodic' | 'off'`. This type is only used by the dead agent store, so it's not a runtime bug — but it will confuse anyone reading the types.
+
+**Fix:** Delete `handlers/agent.go`, `handlers/stats.go`, `frontend/src/api/agent.ts`, `frontend/src/stores/agent.ts`, `frontend/src/api/stats.ts`, and the `AgentConfig` interface from `types/agent.ts`. Keep the WebSocket message types in `types/agent.ts` as they are actively used.
+
+---
+
+### 2. Duplicated poller/listener initialization logic
+
+**Severity:** Medium
+**Effort:** Small
+
+Poller startup logic is duplicated between two locations:
+
+- **`backend/cmd/heimdall/main.go:177-238`** — `resumePollers()` initializes connectors for all 5 poll-based types on server boot
+- **`backend/internal/api/handlers/connections.go:484-523`** — `startPoller()` initializes connectors when a new connection is created
+
+Both contain the same switch/table over `supabase`, `flyio`, `vercel`, `railway`, `mongodb` with identical `New*` → `poller.Start` patterns. Adding a new connector type requires changes in both places.
+
+**Fix:** Extract a shared factory function into `internal/connectors/`:
 
 ```go
-sql := fmt.Sprintf(
-    "SELECT timestamp, event_message, metadata FROM %s WHERE ...",
-    table, cursorMicro, supabasePollLimit,
-)
-```
-
-The `table` variable comes from user-provided config JSONB (`poll_tables`). It's interpolated directly into the SQL string sent to the Supabase Management API with no validation. A crafted table name like `postgres_logs; DROP TABLE x--` injects arbitrary SQL.
-
-**Fix:** Validate `table` against an allowlist of known Supabase log tables:
-
-```go
-var validTables = map[string]bool{
-    "postgres_logs": true, "auth_logs": true, "edge_logs": true,
-    "function_logs": true, "storage_logs": true, "realtime_logs": true,
+// connectors/factory.go
+func StartPoller(poller *Poller, connType string, config json.RawMessage, connID, userID uuid.UUID) error {
+    // single switch over connector types
 }
-
-func (s *Supabase) pollTable(ctx context.Context, queries *db.Queries, table string) error {
-    if !validTables[table] {
-        return fmt.Errorf("supabase: invalid table name: %q", table)
-    }
-    // ...
-}
 ```
 
-Also validate in `NewSupabase()` at parse time so invalid tables are rejected early.
+Both `resumePollers` and `startPoller` call this function.
 
 ---
 
-### 2. XSS in email notification HTML
+### 3. Stub implementations (dead code)
 
-**File:** `backend/internal/notifications/format.go:43-52`
+**Severity:** Low
+**Effort:** Small
 
-```go
-func FormatEmailHTML(p Payload) string {
-    return fmt.Sprintf(`...
-<p><strong>Summary:</strong> %s</p>
-<div ...>%s</div>
-...`, ..., p.Summary, p.Assessment, ...)
-}
-```
+Three packages contain only TODO stubs with no callers:
 
-`p.Summary` and `p.Assessment` contain LLM-generated text interpolated directly into HTML without escaping. `p.AppName` is user-controlled and also unescaped. If Claude's response includes angle brackets or if a user names their app `<script>alert(1)</script>`, the HTML email will render it.
+| File | Lines | Content |
+|------|-------|---------|
+| `backend/internal/reports/generator.go` | 16 | `Generate()` returns `nil, nil` |
+| `backend/internal/memory/client.go` | 36 | `RecordEvent`, `QueryMemories`, `GetLessons` are all no-ops |
+| `backend/internal/connectors/logs/webhook.go` | 30 | `Stream()` does nothing |
 
-**Fix:** Use `html.EscapeString()` on all interpolated values:
+These were placeholders for future features. They have no callers and provide no functionality.
 
-```go
-import "html"
-
-// In FormatEmailHTML:
-html.EscapeString(p.Summary)
-html.EscapeString(p.Assessment)
-html.EscapeString(p.AppName)
-```
+**Fix:** Either remove entirely, or keep only if active development is planned (in which case, add a `// TODO(feature-name)` comment referencing the tracking issue).
 
 ---
 
-### 3. `search_logs` tool ignores the `query` parameter
+### 4. Silenced `json.Marshal` error in syslog TLS config injection
 
-**File:** `backend/internal/agent/tools_logs.go:14-86`
-
-The tool schema declares a required `query` parameter, but `toolSearchLogs` never reads `input["query"]`. It only filters by `severity` and `limit`. The agent believes it's searching by keyword — it is not. This means every "search" in interactive chat is actually just "list recent logs", making the agent's investigation capability fundamentally broken.
-
-**Fix:** Read the `query` parameter and use it for full-text filtering. Either:
-- Add a `SearchLogsByKeyword` sqlc query with `WHERE payload::text ILIKE '%' || $1 || '%'`
-- Or filter in Go after fetching (less efficient but simpler)
-
----
-
-### 4. Interactive chat uses wrong config source
-
-**File:** `backend/internal/agent/loop.go:34`
+**Severity:** Low
+**Effort:** Small
+**File:** `backend/internal/api/handlers/connections.go:189`
 
 ```go
-cfg, err := a.queries.GetAgentConfig(ctx)
+config, _ = json.Marshal(cfgMap)
 ```
 
-`RunConversation` loads the global `agent_config` singleton. The monitoring loop correctly uses `GetAppAgentConfig`. This means per-app model selection and system prompt overrides configured via the UI are ignored during interactive chat.
+During syslog connection creation, TLS cert/key are injected into the config map and re-marshalled. The marshal error is silenced. While `json.Marshal` on a `map[string]interface{}` with string values won't realistically fail, this deviates from the pattern of checking errors elsewhere in the codebase.
 
-**Fix:** Accept `appID` in `RunConversation` and use `GetAppAgentConfig(ctx, appID)` when `appID != uuid.Nil`. Fall back to the global config only when no app-specific config exists.
-
----
-
-## High Priority Issues
-
-### 5. CORS wildcard allows cross-origin authenticated requests
-
-**File:** `backend/internal/api/middleware/cors.go:7`
+**Fix:** Handle the error:
 
 ```go
-w.Header().Set("Access-Control-Allow-Origin", "*")
-```
-
-A wildcard CORS policy combined with `Authorization` header allowance means any website can make authenticated API calls on behalf of a logged-in Heimdall user. For a production monitoring tool with database access, this is a real attack surface.
-
-**Fix:** Restrict to known frontend origins (e.g., the Vercel deployment URL and `localhost:5173` for dev). Read the allowed origin from an environment variable.
-
----
-
-### 6. UserQueries always commits, never rolls back on error
-
-**File:** `backend/internal/api/handlers/userqueries.go:26`
-
-```go
-return s.Queries.WithTx(tx), func() { tx.Commit(ctx) }, nil
-```
-
-The `done()` function always commits. Handlers use `defer done()`, so even if they return early due to an error, the transaction commits. For read-only handlers this is harmless, but write handlers (`CreateConnection`, `UpdateConnection`, `DeleteConnection`) could commit partial state.
-
-**Fix:** Return a `done` that rolls back, and require explicit commit:
-
-```go
-return s.Queries.WithTx(tx), func() { tx.Rollback(ctx) }, func() error { return tx.Commit(ctx) }, nil
-```
-
-Or simpler: change `done()` to rollback (rollback after commit is a no-op in pgx):
-
-```go
-return s.Queries.WithTx(tx), func() { tx.Rollback(ctx) }, nil
-```
-
-Then have handlers explicitly commit when they succeed. Alternatively, since the current handlers always return before the next write on error, document this as an accepted design constraint.
-
----
-
-### 7. Log pagination broken for combined sources
-
-**File:** `backend/internal/api/handlers/logs.go:82-166`
-
-When `source == "all"`, the handler fetches `limit` rows from raw logs AND `limit` rows from agent logs, merges them, sorts, and truncates. But `offset` is applied independently to each source, so paginating produces inconsistent and duplicate results. Page 2 (offset=50) fetches raw logs 50-100 and agent logs 50-100, but the user expects the next 50 from the merged sorted set.
-
-**Fix:** Either:
-- Use a SQL `UNION ALL` query with shared `ORDER BY` / `LIMIT` / `OFFSET`
-- Or fetch from both sources without offset, merge in memory, then apply offset/limit to the merged result (acceptable for small datasets)
-
----
-
-### 8. Missing RLS on 5 tables
-
-**Files:** Migrations `014`, `016`, `017`, `018`, `019`
-
-The following tables lack `ENABLE ROW LEVEL SECURITY` and RLS policies, inconsistent with the pattern established for all other user-scoped tables:
-
-| Table | Migration |
-|-------|-----------|
-| `organizations` | 014 |
-| `applications` | 014 |
-| `monitoring_state` | 016 |
-| `notification_channels` | 017 |
-| `notification_preferences` | 018 |
-| `notification_log` | 019 |
-
-If the Supabase `authenticated` role accesses these tables via PostgREST, any user can read/modify any other user's data.
-
-**Fix:** Add a new migration enabling RLS and creating appropriate policies for each table.
-
----
-
-## Medium Priority Issues
-
-### 9. Supabase poller not restarted on connection update
-
-**File:** `backend/internal/api/handlers/connections.go` — `UpdateConnection` handler
-
-When a Supabase connection's config is updated (e.g., changing `poll_tables` or `poll_interval_secs`), the running poller continues with the old config. Only `DeleteConnection` calls `s.Poller.Stop()`.
-
-**Fix:** In `UpdateConnection`, after a successful DB update, stop and restart the poller if the connection type is `supabase`:
-
-```go
-if req.Type == "supabase" {
-    s.Poller.Stop(connID)
-    sb, err := logs.NewSupabase(config, connID, userID)
-    if err == nil {
-        cfg := sb.ParsedConfig()
-        s.Poller.Start(sb, connID, time.Duration(cfg.PollIntervalSecs)*time.Second)
-    }
+config, err = json.Marshal(cfgMap)
+if err != nil {
+    jsonError(w, "failed to marshal config", http.StatusInternalServerError)
+    return
 }
 ```
 
 ---
 
-### 10. Supabase poller creation error silently swallowed
+## Files Over 500 Lines
 
-**File:** `backend/internal/api/handlers/connections.go:178-185`
+### `backend/internal/api/handlers/connections.go` — 559 lines
 
-```go
-if req.Type == "supabase" {
-    sb, err := logs.NewSupabase(config, conn.ID, userID)
-    if err == nil {
-        // starts poller
-    }
-    // err silently dropped
-}
-```
+Contains 6 HTTP handlers, 3 validators, and the `startPoller` helper. The file is cohesive (all connection-related) but slightly over threshold.
 
-If `NewSupabase` fails, the connection is created with status "inactive" and the user gets a 201 response with no indication that polling failed to start.
+**Recommendation:** Extract `startPoller` into `internal/connectors/factory.go` (see issue #2 above). This brings the file under 500 lines and eliminates the duplication simultaneously.
 
-**Fix:** Log the error at minimum. Optionally return a warning in the response body.
+### `frontend/src/pages/NotificationsPage.vue` — 541 lines
 
----
+Handles notification preferences (edit/view), channel CRUD (add/edit/delete/test), and notification history in a single component.
 
-### 11. Rate-limit sleep is ineffective
+**Recommendation:** Extract into sub-components:
 
-**File:** `backend/internal/connectors/logs/supabase.go:213-233`
-
-When `X-RateLimit-Remaining` is 0, the code sleeps until the reset time, then falls through to read the response body of the *current* request (which may be a successful 200). The sleep doesn't retry — it just delays the return. The poller will retry on the next tick regardless.
-
-**Fix:** Remove the inline sleep. Instead, track the rate-limit reset time and skip polling until it passes:
-
-```go
-// In Supabase struct:
-rateLimitUntil time.Time
-
-// In pollTable:
-if time.Now().Before(s.rateLimitUntil) {
-    return nil // skip this tick
-}
-```
-
----
-
-### 12. Missing indexes on FK columns
-
-| Table | Column | Issue |
-|-------|--------|-------|
-| `notification_log` | `channel_id` | FK with `ON DELETE CASCADE` — cascade requires full table scan without index |
-| `agent_log` | `conversation_id` | FK with `ON DELETE SET NULL` — same issue |
-
-**Fix:** Add a migration with:
-
-```sql
-CREATE INDEX idx_notification_log_channel_id ON notification_log(channel_id);
-CREATE INDEX idx_agent_log_conversation_id ON agent_log(conversation_id);
-```
-
----
-
-### 13. `ConnectionTestModal` timer leak on unmount
-
-**File:** `frontend/src/components/connections/ConnectionTestModal.vue:19`
-
-The `setInterval` timer for the elapsed counter is started on mount but has no `onUnmounted` cleanup. If the modal is closed while the test is in-flight, the interval continues updating state on a destroyed component.
-
-**Fix:**
-
-```typescript
-onUnmounted(() => {
-  if (timer) clearInterval(timer)
-})
-```
-
----
-
-### 14. Dashboard sequential API calls
-
-**File:** `frontend/src/pages/DashboardPage.vue:29-33`
-
-Five `await` calls run sequentially when they could run in parallel:
-
-```typescript
-const [agentResult, connsResult, ...] = await Promise.allSettled([
-  getAppAgentConfig(appId),
-  listConnectionsByApp(appId),
-  logsStore.fetchLogs(),
-  getAppStats(appId),
-  getMonitoringStatus(appId),
-])
-```
-
-This would cut dashboard load time significantly.
-
----
-
-## Low Priority Issues
-
-### 15. `CopyableField` silently fails on copy
-
-**File:** `frontend/src/components/common/CopyableField.vue:12-14`
-
-The `catch` block swallows the error with no user feedback. Should show a toast or fallback to `document.execCommand('copy')`.
-
----
-
-### 16. `StepPostgresConfig` doesn't validate password
-
-**File:** `frontend/src/components/connections/wizard/steps/StepPostgresConfig.vue:34`
-
-The validation check includes host, database, and username but not password. The wizard allows proceeding without a password, deferring the error to the connection test step.
-
----
-
-### 17. Dead code: Unused handlers and store
-
-**Backend:** `GetAgentConfig`, `UpdateAgentConfig`, `RunAgent` (agent.go), `GetDashboardStats` (stats.go) — defined but not registered in router.go.
-
-**Frontend:** `agent` store (`stores/agent.ts`) — uses stale `AgentConfig` type with `'scheduled'` mode while the app uses `'periodic'`. Pages bypass this store entirely. `api/stats.ts` (`getDashboardStats`) is also unused — pages call `getAppStats` instead.
-
-**Fix:** Remove dead code to reduce confusion.
-
----
-
-### 18. Duplicate unique index on `organizations.slug`
-
-**File:** `backend/migrations/014_organizations_applications.up.sql:8,12`
-
-The column is defined with `UNIQUE` (implicit index) AND has an explicit `CREATE UNIQUE INDEX`. Two indexes are maintained for the same constraint.
-
-**Fix:** Remove the explicit `CREATE UNIQUE INDEX` in a new migration, or leave as-is (harmless but wasteful).
-
----
-
-## Refactoring Required
-
-### `NotificationsPage.vue` — 541 lines (exceeds 500-line threshold)
-
-This page combines preferences editing, channel CRUD, channel form state, notification history display, and multiple utility functions in a single SFC.
-
-**Recommendation:** Decompose into:
-- `NotificationPreferences.vue` — severity threshold, toggle
-- `NotificationChannelList.vue` — channel cards, add/edit/delete
-- `NotificationChannelForm.vue` — channel form (type, webhook URL, etc.)
+- `NotificationPreferences.vue` — severity threshold toggle and edit mode
+- `NotificationChannels.vue` — channel list, add/edit/delete/test
 - `NotificationHistory.vue` — history list with filtering
-
-The page component becomes an orchestrator that imports these sub-components.
+- `NotificationsPage.vue` — orchestrator (imports the three above)
 
 ---
 
-## Verification Results
+## What's Working Well
 
-| Check | Result |
-|-------|--------|
-| `go build ./...` | Clean |
-| `go vet ./...` | Clean |
-| `go test ./internal/connectors/...` | 4 packages, all pass |
-| `npm run build` | Clean |
-| `npm run test` | 5 files, 25 tests, all pass |
-| Backend files >500 lines | None |
-| Frontend files >500 lines | 1 (`NotificationsPage.vue` — 541 lines) |
+- **Security posture** is solid: RLS on all user-scoped tables, SQL injection mitigated, XSS escaped, CORS locked to known origins, auth middleware on all protected routes
+- **Error handling** is consistent: `jsonError`/`jsonServerError` helpers, agent tool errors surfaced as `isError` results
+- **Resource cleanup** is thorough: deferred closes, `onBeforeUnmount` cleanup in Vue components, proper context cancellation
+- **Type safety** in the Go layer via sqlc-generated code
+- **Test coverage** on critical paths: agent monitor, Supabase connector, connection handlers, frontend stores
+- **Clean separation**: connectors implement interfaces, handlers delegate to queries, stores abstract API calls
 
 ---
 
 ## Priority Summary
 
-| # | Issue | Severity | Effort |
-|---|-------|----------|--------|
-| 1 | SQL injection in Supabase table name | Critical | Small |
-| 2 | XSS in email HTML | Critical | Small |
-| 3 | `search_logs` ignores query param | Critical | Medium |
-| 4 | Chat uses wrong agent config | High | Small |
-| 5 | Wildcard CORS | High | Small |
-| 6 | UserQueries always commits | High | Small |
-| 7 | Pagination broken for merged sources | High | Medium |
-| 8 | Missing RLS on 5 tables | High | Medium |
-| 9 | Poller not restarted on update | Medium | Small |
-| 10 | Poller error silently swallowed | Medium | Small |
-| 11 | Rate-limit sleep ineffective | Medium | Small |
-| 12 | Missing FK indexes | Medium | Small |
-| 13 | Timer leak in test modal | Medium | Small |
-| 14 | Dashboard sequential fetches | Medium | Small |
-| 15 | CopyableField silent failure | Low | Small |
-| 16 | Postgres step missing password validation | Low | Small |
-| 17 | Dead code cleanup | Low | Small |
-| 18 | Duplicate slug index | Low | Small |
-| — | Refactor NotificationsPage.vue | Low | Medium |
+| # | Issue | Severity | Effort | Action |
+|---|-------|----------|--------|--------|
+| 1 | Dead code: old handlers + frontend modules | Medium | Small | Delete 5 files |
+| 2 | Duplicated poller initialization | Medium | Small | Extract factory function |
+| 3 | Stub implementations | Low | Small | Delete or annotate |
+| 4 | Silenced json.Marshal error | Low | Small | Add error check |
+| — | `connections.go` over 500 lines | Low | Small | Resolved by #2 |
+| — | `NotificationsPage.vue` over 500 lines | Low | Medium | Extract 3 sub-components |

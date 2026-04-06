@@ -42,6 +42,8 @@ const StepSupabaseTables = defineAsyncComponent(() => import('./steps/StepSupaba
 const StepPostgresConfig = defineAsyncComponent(() => import('./steps/StepPostgresConfig.vue'))
 const StepWebhookSetup = defineAsyncComponent(() => import('./steps/StepWebhookSetup.vue'))
 const StepGitHubInstall = defineAsyncComponent(() => import('./steps/StepGitHubInstall.vue'))
+const StepSyslogConfig = defineAsyncComponent(() => import('./steps/StepSyslogConfig.vue'))
+const StepOTLPSetup = defineAsyncComponent(() => import('./steps/StepOTLPSetup.vue'))
 
 export const flows: PlatformFlow[] = [
   // — Log Sources —
@@ -106,6 +108,20 @@ export const flows: PlatformFlow[] = [
       { id: 'install', label: 'Install', component: StepGitHubInstall },
     ],
   },
+  {
+    id: 'otlp',
+    name: 'OpenTelemetry',
+    icon: 'OT',
+    description: 'OTLP HTTP endpoint for logs',
+    category: 'log_source',
+    connectorType: 'otlp',
+    direction: 'one_way',
+    available: true,
+    steps: [
+      { id: 'name', label: 'Name', component: StepName },
+      { id: 'setup', label: 'Setup', component: StepOTLPSetup },
+    ],
+  },
   // — Coming soon —
   {
     id: 'datadog',
@@ -122,12 +138,16 @@ export const flows: PlatformFlow[] = [
     id: 'syslog',
     name: 'Syslog',
     icon: 'SL',
-    description: 'Standard syslog protocol ingestion',
+    description: 'TCP/TLS listener for syslog protocol',
     category: 'log_source',
     connectorType: 'syslog',
     direction: 'one_way',
-    available: false,
-    steps: [],
+    available: true,
+    steps: [
+      { id: 'name', label: 'Name', component: StepName },
+      { id: 'config', label: 'Config', component: StepSyslogConfig },
+      { id: 'test', label: 'Test', component: StepTest },
+    ],
   },
   {
     id: 'mysql',

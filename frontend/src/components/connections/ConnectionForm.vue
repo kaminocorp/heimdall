@@ -33,11 +33,10 @@ const configFields: Record<string, FieldDef[]> = {
   ],
   webhook_logs: [],
   syslog: [
-    { key: 'host', label: 'Host', type: 'text', required: true, placeholder: 'syslog.example.com' },
-    { key: 'port', label: 'Port', type: 'number', required: false, default: 514, placeholder: '514' },
-    { key: 'protocol', label: 'Protocol', type: 'select', required: false, default: 'udp', options: [
-      { value: 'udp', label: 'UDP' },
-      { value: 'tcp', label: 'TCP' },
+    { key: 'port', label: 'Listen Port', type: 'number', required: false, default: 6514, placeholder: '6514' },
+    { key: 'protocol', label: 'Protocol', type: 'select', required: false, default: 'tcp', options: [
+      { value: 'tcp', label: 'TCP (plaintext)' },
+      { value: 'tls', label: 'TLS (encrypted)' },
     ]},
   ],
   github: [],

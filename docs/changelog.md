@@ -1,5 +1,13 @@
 # Changelog
 
+- [0.24.5 — Poller, Parser & Shutdown Hardening](#0245--poller-parser--shutdown-hardening-2026-04-06)
+- [0.24.4 — SDK Shutdown Safety](#0244--sdk-shutdown-safety-2026-04-06)
+- [0.24.3 — UpdateConnection Validation](#0243--updateconnection-validation-2026-04-06)
+- [0.24.2 — Production Hardening Pass](#0242--production-hardening-pass-2026-04-06)
+- [0.24.1 — Ingestion Hardening](#0241--ingestion-hardening-2026-04-06)
+- [0.24.0 — Webhook Parsers, API Pollers & Python/Go SDKs](#0240--webhook-parsers-api-pollers--pythongo-sdks-2026-04-06)
+- [0.23.0 — OTLP HTTP Receiver & JS SDK](#0230--otlp-http-receiver--js-sdk-2026-04-05)
+- [0.22.0 — Syslog TLS Listener](#0220--syslog-tls-listener-2026-04-05)
 - [0.21.0 — Kamino Design System Alignment](#0210--kamino-design-system-alignment-2026-04-05)
 - [0.20.5 — Stale-Asset Reload on Deploy](#0205--stale-asset-reload-on-deploy-2026-04-02)
 - [0.20.4 — Public Site Header Overlap Fix](#0204--public-site-header-overlap-fix-2026-04-02)
@@ -54,6 +62,489 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.24.5 — Poller, Parser & Shutdown Hardening (2026-04-06)
+
+Four fixes addressing silent data loss in pollers, payload misrouting in webhook parsers, missing failure feedback for syslog connections, and unbounded shutdown duration.
+
+### Bug fix — Pollers silently drop entries with unparseable timestamps
+
+Fly.io, Railway, and MongoDB pollers used `ts, _ := time.Parse(...)`, discarding the error. If an API returned an unexpected timestamp format, the parsed zero-value `time.Time{}` would never pass `ts.After(cursor)`, causing the entry to be permanently skipped — silent data loss with no log output.
+
+**Fix:** Check the parse error. On failure, log a warning with the raw timestamp and fall back to `time.Now()` so the entry is still ingested.
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `backend/internal/connectors/logs/flyio.go` | `time.Parse` error → `slog.Warn` + `time.Now()` fallback |
+| 2 | `backend/internal/connectors/logs/railway.go` | Same pattern |
+| 3 | `backend/internal/connectors/logs/mongodb.go` | Same pattern |
+
+### Bug fix — Webhook format detection matches false positives
+
+`isFirehosePayload` and `isPubSubPayload` used `strings.Contains` to detect formats — checking for `"requestId"` + `"records"` (Firehose) and `"message"` + `"subscription"` (Pub/Sub). The string `"message"` is extremely common in JSON payloads, so a Heimdall native payload with both `"message"` and `"subscription"` keys would be misrouted to the Pub/Sub parser, corrupting the log entry.
+
+**Fix:** Replaced string matching with structural JSON unmarshaling. Each detector now unmarshals into the expected envelope struct and checks that the discriminating fields are non-empty:
+
+- **Firehose:** requires `requestId` (non-empty string) and `records` (non-empty array)
+- **Pub/Sub:** requires `subscription` (non-empty string) and `message.data` (non-empty string)
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `backend/internal/api/handlers/webhook_parsers.go` | `isFirehosePayload` and `isPubSubPayload` now accept `[]byte`, unmarshal into typed structs, check field values |
+
+### Bug fix — Syslog listener failure returns success status
+
+When a syslog listener failed to initialize or bind its port in `CreateConnection` or `UpdateConnection`, the error was logged but the HTTP response still returned the connection with `status: "inactive"`. The user had no way to know the listener wasn't running.
+
+**Fix:** On listener failure, update the connection status to `"error"` in the database and reflect it in the response body. The HTTP status code remains 201 (the connection was created), but `"status": "error"` clearly signals the problem.
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `backend/internal/api/handlers/connections.go` | `CreateConnection` and `UpdateConnection` set `conn.Status = "error"` and call `UpdateConnectionStatus` on listener failure |
+
+### Resilience — Shutdown timeout for connectors
+
+`poller.StopAll()`, `listener.StopAll()`, and `ag.Stop()` all block until their goroutines finish. If a poller's upstream API hangs or a listener's TCP drain takes too long, shutdown blocks indefinitely — preventing clean deploys.
+
+**Fix:** Wrapped the connector shutdown sequence in a goroutine with a 10-second deadline. If connectors don't stop in time, a warning is logged and the process proceeds to exit.
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `backend/cmd/heimdall/main.go` | Connector stop calls wrapped in goroutine with `select` + `time.After(10s)` |
+
+### Summary
+
+| # | Category | Issue | Severity |
+|---|----------|-------|----------|
+| 1 | Data loss | Poller timestamp parse errors silently drop entries | High |
+| 2 | Correctness | Webhook format detection false positives via string matching | Medium-High |
+| 3 | UX | Syslog listener failure returns success status | Medium |
+| 4 | Resilience | No shutdown timeout for pollers/listeners/agent | Medium |
+
+---
+
+## 0.24.4 — SDK Shutdown Safety (2026-04-06)
+
+Pre-production code assessment found data-loss bugs in the JS and Python SDKs during shutdown scenarios. The Go SDK was already correct.
+
+### Bug fix — JS SDK drops in-flight sends on shutdown
+
+The `flush()` method is async but was called in fire-and-forget contexts — the timer callback (`setTimeout`) and the batchSize trigger in `log()` both dropped the returned Promise. If `shutdown()` was called while a timer-initiated send was in-flight, it returned immediately without waiting, and the HTTP request was abandoned.
+
+**Root cause:** The SDK had no way to track fire-and-forget flush operations. A `flushing` flag was declared (line 37) but never used — suggesting concurrent flush protection was planned but not completed.
+
+**Fix:** Replaced the unused `flushing` flag with an `inflightSends` Set that tracks all active send Promises. Every `flush()` call registers its send Promise in the set and removes it on completion. `shutdown()` now awaits both its own flush and all tracked in-flight sends via `Promise.all()`.
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `packages/sdk-js/src/index.ts` | Replaced `flushing` flag with `inflightSends` Set. `flush()` tracks sends. `shutdown()` awaits all in-flight sends. |
+
+### Bug fix — Python SDK loses data on process exit
+
+Two compounding issues caused data loss:
+
+1. **`_closed` check outside lock (race condition)** — `log()` checked `self._closed` at line 83 without holding the lock, then acquired the lock at line 92 to append. If `shutdown()` executed between these two lines, entries appended after shutdown's flush were never sent.
+
+2. **Daemon threads killed on exit** — `_flush_locked()` spawned send threads with `daemon=True`. Daemon threads are terminated immediately when the main thread exits, killing any in-flight HTTP requests. Combined with issue 1, this meant even successfully-queued entries could be lost.
+
+**Fix:**
+- Moved `_closed` check inside the lock, eliminating the race window between check and append.
+- Changed send threads from `daemon=True` to non-daemon. Non-daemon threads keep the process alive until they complete, ensuring in-flight sends finish.
+- Added `_send_threads` tracking list with cleanup of completed threads in `_flush_locked()`. `shutdown()` now joins all in-flight send threads (with a 30-second timeout per thread) before returning.
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `packages/sdk-python/heimdall_sdk/client.py` | `_closed` check moved inside lock. Send threads changed to non-daemon. Added `_send_threads` tracking. `shutdown()` joins all threads. `_flush_locked()` cleans up completed threads. |
+
+### Summary
+
+| # | SDK | Issue | Severity |
+|---|-----|-------|----------|
+| 1 | JS | In-flight sends dropped on shutdown (fire-and-forget flush) | High |
+| 2 | Python | `_closed` race condition between check and lock acquisition | High |
+| 3 | Python | Daemon send threads killed on process exit | High |
+
+---
+
+## 0.24.3 — UpdateConnection Validation (2026-04-06)
+
+Pre-production code assessment found that `UpdateConnection` had no config validation, no syslog TLS injection, and no webhook token preservation — all of which were present in `CreateConnection`. A user updating any connection could break it silently.
+
+### Bug fix — UpdateConnection skips all config validation
+
+`CreateConnection` validated configs eagerly for all 7 connector types (Supabase, Fly.io, Vercel, Railway, MongoDB, syslog, webhook/OTLP) before inserting into the database. `UpdateConnection` skipped all validation entirely — invalid configs were written to the DB, the working poller/listener was stopped, and the replacement failed to start, leaving the connection in a broken state with no active connector.
+
+**Fix:** Added the same config validation block from `CreateConnection` to `UpdateConnection`. All 7 connector types are now validated before the database update.
+
+### Bug fix — UpdateConnection loses syslog TLS certs
+
+`CreateConnection` injected server-level TLS cert/key (from `SYSLOG_TLS_CERT` / `SYSLOG_TLS_KEY` env vars) into syslog connections that didn't specify their own. `UpdateConnection` skipped this injection, so updating a syslog connection that relied on server-level certs would lose TLS configuration.
+
+**Fix:** Added the same TLS cert/key injection logic to `UpdateConnection`.
+
+### Bug fix — UpdateConnection loses webhook tokens
+
+`CreateConnection` auto-generated a `webhook_token` for `webhook_logs` and `otlp` connections. `UpdateConnection` didn't preserve the existing token — if the update payload omitted the token field, it was overwritten with an empty config, breaking all active integrations using that token.
+
+**Fix:** `UpdateConnection` now fetches the existing connection config before updating. If the new config omits `webhook_token`, the existing token is preserved.
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `backend/internal/api/handlers/connections.go` | Added config validation for all 7 types, syslog TLS injection, and webhook token preservation to `UpdateConnection` |
+
+### Summary
+
+| # | Category | Issue | Severity |
+|---|----------|-------|----------|
+| 1 | Functional | UpdateConnection skips config validation for all types | Critical |
+| 2 | Data loss | UpdateConnection loses syslog TLS certs on update | Critical |
+| 3 | Data loss | UpdateConnection loses webhook/OTLP tokens on update | Critical |
+
+---
+
+## 0.24.2 — Production Hardening Pass (2026-04-06)
+
+Pre-production review of the full ingestion pipeline (Phases 1–4) identified 8 issues across the syslog listener, API pollers, OTLP handler, and SDKs. All fixed in a single pass — no architectural changes, all additive.
+
+### Security — Syslog DoS prevention
+
+The syslog TCP/TLS listener accepted unbounded connections with no read timeout. A malicious actor (or misbehaving client) could exhaust goroutines by opening thousands of idle connections.
+
+- **Connection semaphore** — Added a cap of 500 concurrent TCP connections per listener (`syslogMaxConnections`). Connections beyond the limit are rejected immediately with a warning log.
+- **Read deadline** — Each connection now has a 5-minute read deadline (`syslogReadTimeout`), reset after each successful message. Idle clients are evicted automatically.
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `backend/internal/connectors/logs/syslog.go` | Added `connSem` channel semaphore, `syslogMaxConnections` (500), `syslogReadTimeout` (5m). `handleConnection` sets/resets `conn.SetReadDeadline`. Accept loop enforces semaphore with non-blocking select. |
+
+### Bug fix — Poller timestamp cursor loses entries with identical timestamps
+
+All 4 API pollers (Fly.io, Vercel, Railway, MongoDB) used `!ts.After(cursor)` to skip already-seen entries. Two log entries with the same timestamp caused the second to be permanently skipped — silent data loss.
+
+**Root cause:** The cursor was set to the exact `maxTS` of the batch. On the next poll, `!ts.After(cursor)` evaluates to `true` for entries at exactly that timestamp, skipping them.
+
+**Fix:** After each poll cycle, advance the cursor by 1 nanosecond past the last seen timestamp (`maxTS.Add(time.Nanosecond)`), ensuring entries at the boundary are never re-skipped.
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `backend/internal/connectors/logs/flyio.go` | `maxTS = maxTS.Add(time.Nanosecond)` after insert loop |
+| 2 | `backend/internal/connectors/logs/vercel.go` | Same cursor advancement pattern |
+| 3 | `backend/internal/connectors/logs/railway.go` | Same cursor advancement pattern |
+| 4 | `backend/internal/connectors/logs/mongodb.go` | Same cursor advancement pattern |
+
+### Bug fix — Poller DB insert errors silently advance cursor
+
+When `InsertLogEntry` failed in any poller, the error was logged but the loop `continue`d, allowing the cursor to advance past the failed entries. Those entries were permanently lost — the next poll would never see them again.
+
+**Fix:** On insert failure, return an error immediately. The cursor only advances for successfully inserted entries. The poller framework will retry the batch on the next poll cycle.
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `backend/internal/connectors/logs/flyio.go` | `return count, maxTS, fmt.Errorf(...)` on insert error |
+| 2 | `backend/internal/connectors/logs/vercel.go` | `return fmt.Errorf(...)` on insert error |
+| 3 | `backend/internal/connectors/logs/railway.go` | `return fmt.Errorf(...)` on insert error |
+| 4 | `backend/internal/connectors/logs/mongodb.go` | `return fmt.Errorf(...)` on insert error |
+
+### Bug fix — TestConnection auto-passed for new poller types
+
+The `TestConnection` handler's `default` case auto-passed any connection type not explicitly handled. The 4 new API pollers (Fly.io, Vercel, Railway, MongoDB) all fell into this default — users could create connections with invalid tokens or wrong project IDs and receive a "Connection established" success message.
+
+**Fix:** Added explicit `Connect()`-based test cases for all 4 poller types, matching the existing Supabase pattern. Each test validates credentials against the external API with a 10-second timeout.
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `backend/internal/api/handlers/connections.go` | Added `case "flyio"`, `case "vercel"`, `case "railway"`, `case "mongodb"` in `TestConnection` switch |
+
+### Resilience — Poller HTTP 429 rate-limit handling
+
+None of the API pollers checked for HTTP 429 (Too Many Requests). A rate-limited poller would log a generic API error and retry on the regular schedule, potentially escalating to a permanent ban on some platforms.
+
+**Fix:** Added explicit 429 detection in all 4 pollers' HTTP response handling. The error message identifies the rate limit clearly in logs, and the poller framework's existing retry interval naturally provides backoff.
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `backend/internal/connectors/logs/flyio.go` | 429 check in `Poll` and `pollMachineLogs` |
+| 2 | `backend/internal/connectors/logs/vercel.go` | 429 check in `apiRequest` |
+| 3 | `backend/internal/connectors/logs/railway.go` | 429 check in `graphQL` |
+| 4 | `backend/internal/connectors/logs/mongodb.go` | 429 check in `apiRequest` |
+
+### Bug fix — Go SDK loses in-flight logs on shutdown
+
+`flushLocked()` spawned `go c.send(entries)` without tracking the goroutine. `Shutdown()` called `Flush()` (which spawned the goroutine) then returned immediately — in-flight HTTP requests could be killed by process exit.
+
+**Fix:** Added `sync.WaitGroup` to track all send goroutines. `Shutdown()` now calls `wg.Wait()` after flushing, ensuring all in-flight sends complete before returning.
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `packages/sdk-go/heimdall.go` | Added `wg sync.WaitGroup`. `flushLocked` wraps `go c.send(entries)` with `wg.Add(1)` / `defer wg.Done()`. `Shutdown` calls `wg.Wait()`. |
+
+### Bug fix — OTLP handler returns 200 on partial insert failure
+
+The OTLP handler `continue`d past insert errors and returned HTTP 200 even when only some records were inserted. Clients had no way to know records were lost.
+
+**Fix:** Track insert errors separately. Return HTTP 207 (Multi-Status) with `accepted` and `rejected` counts when some records fail. Return HTTP 500 only when all records fail (existing behaviour). HTTP 200 only when all records succeed.
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `backend/internal/api/handlers/otlp.go` | Added `insertErrors` counter. Returns 207 with `{accepted, rejected}` on partial failure. |
+
+### Bug fix — Python SDK shutdown race condition
+
+`shutdown()` set `self._closed = True` without holding the lock, creating a race window where a concurrent `log()` call could interleave with the shutdown flush.
+
+**Fix:** `shutdown()` now acquires the lock before setting `_closed` and calls `_flush_locked()` directly within the lock, eliminating the race.
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `packages/sdk-python/heimdall_sdk/client.py` | `shutdown()` acquires `_lock` before setting `_closed` and flushing |
+
+### Summary
+
+| # | Category | Issue | Severity |
+|---|----------|-------|----------|
+| 1 | Security | Syslog unbounded connections + no read timeout | High |
+| 2 | Data loss | Poller cursor skips entries with identical timestamps | High |
+| 3 | Data loss | Poller insert errors silently advance cursor | High |
+| 4 | UX | TestConnection auto-passes invalid poller configs | High |
+| 5 | Resilience | No HTTP 429 rate-limit handling in pollers | Medium |
+| 6 | Data loss | Go SDK loses in-flight logs on shutdown | Medium |
+| 7 | Correctness | OTLP handler masks partial insert failures | Medium |
+| 8 | Correctness | Python SDK shutdown race condition | Low |
+
+---
+
+## 0.24.1 — Ingestion Hardening (2026-04-06)
+
+Post-implementation review of the ingestion pipeline (Phases 1–3) surfaced and fixed 5 issues before production push.
+
+### Security
+
+- **GraphQL injection in Railway connector** — `Connect()` concatenated `ProjectID` directly into a GraphQL query string. Switched to parameterized variables (`$id: String!`), matching the pattern already used by `Poll()`.
+
+### Bug fixes
+
+- **MongoDB missing `cluster_name` validation** — `NewMongoDB` accepted empty `cluster_name` despite using it for source type (`"mongodb/<cluster>"`) and hostname discovery. Added a required check in the constructor.
+
+### Cleanup
+
+- **Removed tracked `__pycache__` files** — 4 Python bytecode files were committed to the repo. Removed from git index and added `**/__pycache__/` and `*.pyc` to `.gitignore`.
+- **Removed dead code `parseOTLPTimestamp`** — Function in `otlp.go` was defined but never called. Removed along with the unused `strconv` import.
+- **Documented `resolveAnyValue` `BoolValue` limitation** — OTLP `BoolValue: false` is indistinguishable from an unset field due to Go's zero-value semantics. Added a comment documenting the trade-off.
+
+### Phase ordering review
+
+Confirmed Phases 1–3 were implemented in the correct order with no do/undo conflicts. Each phase built additively on the last — no prior work was reverted or overwritten.
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `.gitignore` | Added `**/__pycache__/` and `*.pyc` |
+| 2 | `backend/internal/connectors/logs/railway.go` | `Connect()` uses parameterized `$id` variable |
+| 3 | `backend/internal/connectors/logs/mongodb.go` | Added `cluster_name is required` validation |
+| 4 | `backend/internal/api/handlers/otlp.go` | Removed `parseOTLPTimestamp`, removed `strconv` import, documented `BoolValue` limitation |
+
+---
+
+## 0.24.0 — Webhook Parsers, API Pollers & Python/Go SDKs (2026-04-06)
+
+Ingestion Phase 3 — four items completing the ingestion roadmap. Together with Phases 1–2, Heimdall now covers ~80% of early users' infrastructure.
+
+### Webhook payload parsers
+
+The webhook endpoint (`POST /api/webhooks/logs`) previously accepted only Heimdall's native JSON format. Added automatic format detection via `parseWebhookPayload` that inspects `Content-Type` and payload structure, then normalises to the internal format before insertion.
+
+| Format | Detection | Source type |
+|--------|-----------|-------------|
+| Vercel NDJSON | `Content-Type: application/x-ndjson` or multi-line JSON structure | `vercel/<source>` |
+| AWS Kinesis Firehose | `requestId` + `records` fields, base64-decoded records | `firehose` |
+| GCP Pub/Sub | `message` + `subscription` fields, base64-decoded data | `pubsub` |
+| Heimdall native | Default fallback (single object or JSON array) | As provided |
+
+Shared `normalizeSeverity` function maps common severity strings from any platform to Heimdall's 5-level system.
+
+### API pollers
+
+Four new poll-based connectors, all following the established Supabase pattern (`PollConnector` interface, cursor-based dedup, rate-limit-aware intervals):
+
+| Platform | API | Auth | Min interval | Source type |
+|----------|-----|------|-------------|-------------|
+| Fly.io | Machines API (`api.machines.dev`) | Bearer token | 15s | `flyio/<app>` |
+| Vercel | REST API (`api.vercel.com`) | Bearer token | 30s | `vercel/deployment` |
+| Railway | GraphQL API (`backboard.railway.app`) | Bearer token | 30s | `railway/<project>` |
+| MongoDB Atlas | Admin API v2 (`cloud.mongodb.com`) | HTTP Basic | 60s | `mongodb/<cluster>` |
+
+Refactored `resumePollers` in `main.go` from Supabase-only to a generic loop over all 5 poller types. Added `startPoller` helper in `connections.go` to consolidate poller initialization.
+
+### Python SDK
+
+`heimdall-sdk` — zero-dependency Python package using `urllib.request` (stdlib). Thread-safe batching with `threading.Lock`, background flush via `threading.Timer`, exponential backoff retry. Same API shape as the JS SDK. Python 3.9+.
+
+### Go SDK
+
+`github.com/hejijunhao/heimdall/sdk-go` — zero-dependency Go module using `net/http`. `sync.Mutex` for thread safety, `time.AfterFunc` for flush timer, goroutine-based async send. Custom `*http.Client` injectable via `Options.HTTPClient`.
+
+### Test coverage
+
+| Component | Tests |
+|-----------|-------|
+| Webhook parsers | 12 |
+| Go SDK | 9 |
+| Python SDK | 9 |
+
+### Files created
+
+| # | File | Purpose |
+|---|------|---------|
+| 1 | `backend/internal/api/handlers/webhook_parsers.go` | Format detection, Vercel/Firehose/Pub/Sub/native parsers, severity normalisation |
+| 2 | `backend/internal/api/handlers/webhook_parsers_test.go` | 12 parser tests |
+| 3 | `backend/internal/connectors/logs/flyio.go` | Fly.io Machines API poller |
+| 4 | `backend/internal/connectors/logs/vercel.go` | Vercel REST API poller |
+| 5 | `backend/internal/connectors/logs/railway.go` | Railway GraphQL API poller |
+| 6 | `backend/internal/connectors/logs/mongodb.go` | MongoDB Atlas Admin API poller |
+| 7 | `packages/sdk-python/heimdall_sdk/client.py` | Python SDK client |
+| 8 | `packages/sdk-python/heimdall_sdk/__init__.py` | Package exports |
+| 9 | `packages/sdk-python/tests/test_client.py` | 9 Python SDK tests |
+| 10 | `packages/sdk-python/pyproject.toml` | Python package config |
+| 11 | `packages/sdk-go/heimdall.go` | Go SDK client |
+| 12 | `packages/sdk-go/heimdall_test.go` | 9 Go SDK tests |
+| 13 | `packages/sdk-go/go.mod` | Go module definition |
+
+### Files modified
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `backend/internal/api/handlers/webhooks.go` | Refactored to use `parseWebhookPayload` with size-limited body reading |
+| 2 | `backend/internal/api/handlers/connections.go` | 4 new types in validation map, config validation, `startPoller` helper |
+| 3 | `backend/cmd/heimdall/main.go` | Generic `resumePollers` for all 5 poller types |
+
+---
+
+## 0.23.0 — OTLP HTTP Receiver & JS SDK (2026-04-05)
+
+Ingestion Phase 2 — two new ingestion paths covering OpenTelemetry-instrumented applications, serverless environments, and any Node.js app.
+
+### OTLP HTTP receiver
+
+New public endpoint `POST /api/v1/logs` accepting the OpenTelemetry Protocol `ExportLogsServiceRequest` JSON format. Uses the same bearer token auth as webhook ingestion (`GetConnectionByWebhookToken`). Flattens the nested OTel structure (`resourceLogs → scopeLogs → logRecords`) into individual `log_buffer` entries.
+
+| OTLP field | Heimdall payload field |
+|------------|----------------------|
+| `resource.attributes` | `resource` (flattened map) |
+| `scope.name` | `scope` |
+| `logRecords[].timeUnixNano` | `time_unix_nano` |
+| `logRecords[].severityText/Number` | `severity_text`, `severity_number` + mapped Heimdall severity |
+| `logRecords[].body` | `body` (resolved AnyValue) |
+| `logRecords[].attributes` | `attributes` (flattened map) |
+| `logRecords[].traceId/spanId` | `trace_id`, `span_id` |
+
+Source type is `"otlp"` by default, or `"otlp/<service.name>"` when the resource carries that attribute.
+
+OTLP severity mapping: 1–8 → `debug`, 9–12 → `info`, 13–16 → `warning`, 17–20 → `error`, 21–24 → `critical`. Falls back to `severityText` string matching when the number is 0.
+
+New connection type `"otlp"` added to `validConnectionTypes`. OTLP connections auto-generate a webhook token on creation.
+
+### JS/TS SDK
+
+`@heimdall/sdk` — zero-dependency TypeScript package using the global `fetch` API (Node 18+, Bun, Deno, Cloudflare Workers, browsers). Dual ESM/CJS output via tsup.
+
+Batching: entries accumulate in-memory, flushed when buffer reaches `batchSize` (default 25) or `flushInterval` fires (default 5000ms). Retry: 4xx errors are permanent (no retry), 5xx and network errors retry with exponential backoff up to `maxRetries` (default 3).
+
+API surface: `log(severity, sourceType, payload)` plus severity shorthands (`debug`, `info`, `warn`, `error`, `critical`), `flush()`, `shutdown()`, `pending`.
+
+### Test coverage
+
+| Component | Tests |
+|-----------|-------|
+| OTLP handler | 7 |
+| JS SDK | 10 |
+
+### Platforms unlocked
+
+Neon (OTLP), Heroku Fir (OTLP), OTel Collector (OTLP), Fluent Bit / Vector (OTLP), any Node.js app (SDK), serverless — Lambda, Edge, Workers (SDK).
+
+### Files created
+
+| # | File | Purpose |
+|---|------|---------|
+| 1 | `backend/internal/api/handlers/otlp.go` | OTLP handler — parsing, flattening, severity mapping, insertion |
+| 2 | `backend/internal/api/handlers/otlp_test.go` | 7 OTLP unit tests |
+| 3 | `packages/sdk-js/src/index.ts` | Heimdall class — batching, retry, severity methods |
+| 4 | `packages/sdk-js/src/index.test.ts` | 10 SDK unit tests |
+| 5 | `packages/sdk-js/package.json` | Package config (tsup build, vitest) |
+| 6 | `packages/sdk-js/tsconfig.json` | TypeScript config |
+| 7 | `frontend/src/components/connections/wizard/steps/StepOTLPSetup.vue` | Wizard step — endpoint format, payload example |
+
+### Files modified
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `backend/internal/api/router.go` | Added `POST /api/v1/logs` route |
+| 2 | `backend/internal/api/handlers/connections.go` | Added `"otlp"` to valid types, auto-generate token for OTLP connections |
+| 3 | `frontend/src/components/connections/wizard/flows.ts` | OTLP flow: Name → Setup (auto-valid) |
+
+---
+
+## 0.22.0 — Syslog TLS Listener (2026-04-05)
+
+Ingestion Phase 1 — a production-ready TCP/TLS syslog listener that accepts RFC 5424 and RFC 3164 messages over persistent TCP connections and inserts them into `log_buffer`.
+
+### Architecture
+
+Syslog is a long-running TCP server, not a timer-driven poller. This required a new concurrency primitive: the **ListenerManager** — analogous to `Poller` but for persistent network listener goroutines. Each syslog connection binds a port and accepts inbound TCP connections; each client connection is handled in its own goroutine with line-by-line parsing via `bufio.Scanner`.
+
+No external dependencies — uses Go's standard library (`net`, `crypto/tls`, `bufio`, `regexp`) for TCP/TLS listening and syslog parsing.
+
+### Protocol support
+
+Parser tries formats in order: RFC 5424 → RFC 3164 → raw fallback.
+
+| Format | Pattern | Fields extracted |
+|--------|---------|-----------------|
+| RFC 5424 | `<PRI>VERSION TIMESTAMP HOSTNAME APP-NAME PROCID MSGID MSG` | facility, severity, timestamp, hostname, app name, proc ID, msg ID, message |
+| RFC 3164 | `<PRI>TIMESTAMP HOSTNAME MSG` | facility, severity, BSD timestamp, hostname, message |
+| Fallback | Any unstructured line | message (severity defaults to Informational) |
+
+Severity mapping: 0–2 → `critical`, 3 → `error`, 4 → `warning`, 5–6 → `info`, 7 → `debug`.
+
+### TLS configuration
+
+TLS cert/key can be provided per-connection (config JSONB `tls_cert`/`tls_key`) or server-level (`SYSLOG_TLS_CERT`/`SYSLOG_TLS_KEY` env vars, auto-injected into connections that don't specify their own). Plaintext TCP mode (`protocol: "tcp"`) available for development.
+
+### Connection lifecycle
+
+Create → listener binds port. Listen → accepts TCP connections in a loop. Update → old listener stopped, new one started. Delete → listener stopped. Server restart → `resumeSyslogListeners()` restarts all active syslog connections.
+
+### Platforms unlocked
+
+Render (syslog log streams), Heroku Cedar (syslog drain), DigitalOcean (rsyslog forwarding), any Linux server (rsyslog / syslog-ng).
+
+### Test coverage
+
+| Component | Tests |
+|-----------|-------|
+| Syslog connector | 9 |
+
+### Files created
+
+| # | File | Purpose |
+|---|------|---------|
+| 1 | `backend/internal/connectors/logs/syslog.go` | Syslog listener — config, TCP/TLS server, RFC parsing, log insertion, graceful shutdown |
+| 2 | `backend/internal/connectors/logs/syslog_test.go` | 9 unit tests |
+| 3 | `backend/internal/connectors/listener.go` | `ListenerManager` — start/stop/stopAll for persistent listener goroutines |
+| 4 | `frontend/src/components/connections/wizard/steps/StepSyslogConfig.vue` | Wizard step — port + protocol config |
+
+### Files modified
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `backend/internal/config/config.go` | Added `SyslogTLSCert` and `SyslogTLSKey` fields |
+| 2 | `backend/internal/api/handlers/server.go` | Added `Listener *connectors.ListenerManager` to Server struct |
+| 3 | `backend/internal/api/router.go` | Updated `NewRouter` to accept `ListenerManager` |
+| 4 | `backend/internal/api/handlers/connections.go` | Syslog validation, TLS injection, listener lifecycle on create/update/delete |
+| 5 | `backend/cmd/heimdall/main.go` | Create `ListenerManager`, `resumeSyslogListeners` on boot, stop on shutdown |
+| 6 | `frontend/src/components/connections/wizard/flows.ts` | Syslog flow: Name → Config → Test |
+| 7 | `frontend/src/components/connections/ConnectionForm.vue` | Fixed syslog edit fields (listener, not remote target) |
 
 ---
 

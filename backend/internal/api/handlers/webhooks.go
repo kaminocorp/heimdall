@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 
@@ -14,6 +15,8 @@ type webhookLogRequest struct {
 	Severity   string          `json:"severity"`
 	Payload    json.RawMessage `json:"payload"`
 }
+
+const maxWebhookRequestBytes = 10 << 20 // 10 MB
 
 func (s *Server) IngestWebhookLogs(w http.ResponseWriter, r *http.Request) {
 	// Extract bearer token from Authorization header.
@@ -31,30 +34,19 @@ func (s *Server) IngestWebhookLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Try to decode as a single entry or a batch (array).
-	var entries []webhookLogRequest
-
-	raw := json.NewDecoder(r.Body)
-	// Peek at first byte to determine single vs batch.
-	var rawMsg json.RawMessage
-	if err := raw.Decode(&rawMsg); err != nil {
-		jsonError(w, "invalid request body", http.StatusBadRequest)
+	// Read body with size limit.
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxWebhookRequestBytes))
+	if err != nil {
+		jsonError(w, "failed to read request body", http.StatusBadRequest)
 		return
 	}
 
-	trimmed := strings.TrimSpace(string(rawMsg))
-	if len(trimmed) > 0 && trimmed[0] == '[' {
-		if err := json.Unmarshal(rawMsg, &entries); err != nil {
-			jsonError(w, "invalid request body", http.StatusBadRequest)
-			return
-		}
-	} else {
-		var single webhookLogRequest
-		if err := json.Unmarshal(rawMsg, &single); err != nil {
-			jsonError(w, "invalid request body", http.StatusBadRequest)
-			return
-		}
-		entries = []webhookLogRequest{single}
+	// Detect format and parse into normalized entries.
+	contentType := r.Header.Get("Content-Type")
+	entries, err := parseWebhookPayload(body, contentType)
+	if err != nil {
+		jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
 	}
 
 	if len(entries) == 0 {
@@ -86,7 +78,7 @@ func (s *Server) IngestWebhookLogs(w http.ResponseWriter, r *http.Request) {
 			UserID:       conn.UserID,
 		})
 		if err != nil {
-			jsonError(w, "failed to insert log entry", http.StatusInternalServerError)
+			jsonServerError(w, "failed to insert log entry", err)
 			return
 		}
 		inserted = append(inserted, row)

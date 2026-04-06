@@ -4,8 +4,9 @@ backend/bin/
 backend/heimdall
 
 # Node
-frontend/node_modules/
+**/node_modules/
 frontend/dist/
+packages/*/dist/
 
 # Environment
 **/.env
@@ -17,6 +18,10 @@ frontend/dist/
 .idea/
 *.swp
 *.swo
+
+# Python
+**/__pycache__/
+*.pyc
 
 # OS
 .DS_Store
