@@ -11,7 +11,8 @@
       "WebFetch(domain:kaminocorp.com)",
       "WebSearch",
       "WebFetch(domain:github.com)",
-      "WebFetch(domain:gofastmcp.com)"
+      "WebFetch(domain:gofastmcp.com)",
+      "WebFetch(domain:fly.io)"
     ]
   }
 }

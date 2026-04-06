@@ -1,5 +1,7 @@
 # Changelog
 
+- [0.28.0 — Fly.io VM Memory Upgrade](#0280--flyio-vm-memory-upgrade-2026-04-06)
+- [0.27.1 — Go 1.25 Build Image](#0271--go-125-build-image-2026-04-06)
 - [0.27.0 — Lumber Classifier Hardening](#0270--lumber-classifier-hardening-2026-04-06)
 - [0.26.1 — Postgres Connector Interface Fix](#0261--postgres-connector-interface-fix-2026-04-06)
 - [0.26.0 — Observability & Deployment Hygiene](#0260--observability--deployment-hygiene-2026-04-06)
@@ -66,6 +68,42 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.28.0 — Fly.io VM Memory Upgrade (2026-04-06)
+
+### Infra — VM memory doubled from 1 GB to 2 GB
+
+The Lumber ONNX classifier (added in 0.20.3, hardened in 0.27.0) loads the quantized `mdbr-leaf-mt` model into memory at startup. The model alone occupies ~250–400 MB in the ONNX Runtime, leaving only ~400–620 MB headroom on the previous 1 GB machine — before the Go runtime, pgxpool, HTTP server, and concurrent classification workloads. Under the monitoring loop's `maxConcurrentApps: 10` concurrency, transient allocations during batch classification could push the machine to OOM.
+
+2 GB gives comfortable headroom for the model baseline plus concurrent classification spikes, with no change to machine type (shared CPU remains appropriate — ONNX inference is serialised by the mutex added in Lumber v0.10.6).
+
+**Cost impact:** $5.92/month → $11.11/month (+$5.19/month).
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `backend/fly.toml` | `memory = '1gb'` → `'2gb'`; `memory_mb = 1024` → `2048` |
+
+---
+
+## 0.27.1 — Go 1.25 Build Image (2026-04-06)
+
+### Fix — Dockerfile build image updated to Go 1.25
+
+`fly deploy` failed at `go mod download` with:
+
+```
+go: go.mod requires go >= 1.25.0 (running go 1.24.13; GOTOOLCHAIN=local)
+```
+
+When `golang.org/x/time v0.15.0` was added as a direct dependency in 0.27.0, `go get` automatically bumped the `go` directive in `go.mod` to `1.25.0` — the minimum version declared by that module. The Dockerfile build stage was still pinned to `golang:1.24`, which predates that requirement.
+
+**Fix:** Build image updated from `golang:1.24` to `golang:1.25`.
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `backend/Dockerfile` | `FROM golang:1.24 AS build` → `FROM golang:1.25 AS build` |
 
 ---
 
