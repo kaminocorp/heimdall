@@ -25,6 +25,11 @@ import (
 
 func main() {
 	cfg := config.Load()
+
+	if cfg.LogFormat == "json" {
+		slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+	}
+
 	if err := cfg.Validate(); err != nil {
 		slog.Error("invalid configuration", "err", err)
 		os.Exit(1)

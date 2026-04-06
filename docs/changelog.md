@@ -1,5 +1,7 @@
 # Changelog
 
+- [0.26.1 — Postgres Connector Interface Fix](#0261--postgres-connector-interface-fix-2026-04-06)
+- [0.26.0 — Observability & Deployment Hygiene](#0260--observability--deployment-hygiene-2026-04-06)
 - [0.25.0 — Code Assessment Cleanup](#0250--code-assessment-cleanup-2026-04-06)
 - [0.24.5 — Poller, Parser & Shutdown Hardening](#0245--poller-parser--shutdown-hardening-2026-04-06)
 - [0.24.4 — SDK Shutdown Safety](#0244--sdk-shutdown-safety-2026-04-06)
@@ -63,6 +65,109 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.26.1 — Postgres Connector Interface Fix (2026-04-06)
+
+### Bug fix — Postgres connector did not satisfy the `Connector` interface
+
+`connectors/database/postgres.go` had two interface mismatches against the `Connector` interface defined in `connectors/connector.go`:
+
+1. **`Close` signature mismatch** — `Postgres.Close(ctx context.Context) error` does not match the required `Close() error`. The `Registry.Remove` call site at `registry.go:38` calls `c.Close()` polymorphically via the interface, which would fail to compile if `Postgres` were ever stored in the registry.
+2. **`Health` method missing** — `Connector` requires `Health(ctx context.Context) error`. `Postgres` had no such method, making it impossible to use `Postgres` anywhere a `Connector` or `QueryConnector` is expected.
+
+Neither issue surfaced as a compile error today because `Postgres` is only ever used via its concrete type at the two call sites (`tools_db.go`, `connections.go`) — never stored as a `Connector`. That would change the moment it is passed to the registry or any other polymorphic context.
+
+**Fix:**
+- `Close(ctx context.Context) error` → `Close() error`. The underlying `pgx.Conn.Close` requires a context internally (to send a graceful termination to the server); `context.Background()` is used so teardown is never cancelled by an expired caller context.
+- `Health(ctx context.Context) error` added — delegates to `conn.Ping(ctx)`.
+- Two call sites updated from `pg.Close(ctx)` to `pg.Close()`.
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `backend/internal/connectors/database/postgres.go` | `Close` signature fixed; `Health` method added |
+| 2 | `backend/internal/agent/tools_db.go` | `defer pg.Close(ctx)` → `defer pg.Close()` |
+| 3 | `backend/internal/api/handlers/connections.go` | `defer pg.Close(ctx)` → `defer pg.Close()` |
+
+---
+
+## 0.26.0 — Observability & Deployment Hygiene (2026-04-06)
+
+Four items from the post-0.25.0 incomplete-features audit: a health check endpoint for Docker and K8s probes, a Prometheus metrics endpoint instrumenting the monitor loop and notification pipeline, JSON-structured log output for aggregators, and the missing notification env vars documented in `.env.example`.
+
+### Feature — Health check endpoint
+
+No `/health` route existed, so the Docker Compose backend service could not report a healthy status and K8s readiness/liveness probes had nothing to hit.
+
+**Implementation:** New `GET /health` handler at `handlers/health.go`. Calls `pool.Ping` — returns `{"status":"ok"}` (200) if the database is reachable, `{"status":"error","db":"unreachable"}` (503) if not. Registered at the top level in `router.go`, outside the `/api` prefix and the JWT middleware group, so probes never need auth. `docker-compose.yml` backend service now includes a `healthcheck` using `curl -sf http://localhost:8080/health`.
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `backend/internal/api/handlers/health.go` | New — `Health` handler with DB ping |
+| 2 | `backend/internal/api/router.go` | `GET /health` registered at top level |
+| 3 | `docker-compose.yml` | `healthcheck` block added to backend service |
+
+---
+
+### Feature — Prometheus metrics endpoint
+
+No metrics existed, leaving the monitor loop, classifier pipeline, and notification dispatcher as black boxes in production.
+
+**Implementation:** New `internal/metrics/metrics.go` package defines three metrics as package-level `promauto` vars, registered against the default Prometheus registry at init time. Instrumented at the two most valuable call sites in the codebase. `GET /metrics` exposed via `promhttp.Handler()` at the top level, unauthenticated (standard for Prometheus scraping).
+
+**Metrics:**
+
+| Metric | Type | Labels | What it measures |
+|--------|------|--------|-----------------|
+| `heimdall_monitor_tick_duration_seconds` | Histogram | — | Wall time of each full monitoring tick across all active apps |
+| `heimdall_logs_classified_total` | Counter | `result` (safe \| flagged) | Log entries processed by the classifier pipeline |
+| `heimdall_notifications_total` | Counter | `status` (sent \| failed), `channel_type` (email \| slack \| discord) | Notification dispatch outcomes by channel |
+
+**Instrumentation call sites:**
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `backend/internal/metrics/metrics.go` | New — three metric definitions |
+| 2 | `backend/internal/api/router.go` | `GET /metrics` via `promhttp.Handler()` |
+| 3 | `backend/internal/agent/monitor.go` | `MonitorTickDuration` timed with deferred closure; `LogsClassifiedTotal` incremented after each `Classify` call |
+| 4 | `backend/internal/notifications/notifier.go` | `NotificationsTotal` incremented at each dispatch outcome in `dispatchToChannel` |
+
+---
+
+### Feature — Structured JSON log output
+
+`slog` wrote text lines to stdout only, making log ingestion into Datadog, Loki, or CloudWatch require fragile parsing.
+
+**Implementation:** New `LOG_FORMAT` env var in config (default: `text`). When set to `json`, `main.go` initialises the default slog logger with `slog.NewJSONHandler` before any other startup code runs, so all subsequent log output is structured JSON. No change to log callsites.
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `backend/internal/config/config.go` | `LogFormat string` field, loaded from `LOG_FORMAT` env var |
+| 2 | `backend/cmd/heimdall/main.go` | JSON handler initialised if `cfg.LogFormat == "json"` |
+
+---
+
+### Fix — Notification env vars documented
+
+`RESEND_API_KEY` and `NOTIFICATION_FROM_EMAIL` were loaded by config and required for email notifications, but absent from `.env.example`. Operators deploying email channels had no indication these were needed, causing silent send failures.
+
+**Fix:** Both vars added to `.env.example` under the `# Optional` block alongside `LOG_FORMAT`.
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `.env.example` | `RESEND_API_KEY`, `NOTIFICATION_FROM_EMAIL`, `LOG_FORMAT` added |
+
+---
+
+### Summary
+
+| # | Category | Item | Impact |
+|---|----------|------|--------|
+| 1 | Feature | `GET /health` with DB ping + Docker healthcheck | Deployment hygiene |
+| 2 | Feature | `GET /metrics` — monitor tick duration, logs classified, notifications sent/failed | Production visibility |
+| 3 | Feature | `LOG_FORMAT=json` structured slog output | Log aggregator compatibility |
+| 4 | Fix | Notification env vars added to `.env.example` | Operator experience |
 
 ---
 

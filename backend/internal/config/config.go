@@ -7,6 +7,7 @@ import (
 
 type Config struct {
 	Port                  string
+	LogFormat             string // "text" (default) or "json"
 	DatabaseURL           string
 	AnthropicKey          string
 	ElephantasmURL        string
@@ -28,6 +29,7 @@ type Config struct {
 func Load() *Config {
 	return &Config{
 		Port:           getEnv("PORT", "8080"),
+		LogFormat:      getEnv("LOG_FORMAT", "text"),
 		DatabaseURL:    getEnv("DATABASE_URL", ""),
 		AnthropicKey:   getEnv("ANTHROPIC_API_KEY", ""),
 		ElephantasmURL: getEnv("ELEPHANTASM_URL", ""),

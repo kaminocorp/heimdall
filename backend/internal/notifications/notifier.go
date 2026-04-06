@@ -12,6 +12,7 @@ import (
 
 	"github.com/hejijunhao/heimdall/backend/internal/config"
 	"github.com/hejijunhao/heimdall/backend/internal/db"
+	"github.com/hejijunhao/heimdall/backend/internal/metrics"
 )
 
 // Payload represents a notification to be sent.
@@ -116,11 +117,13 @@ func (d *Dispatcher) dispatchToChannel(ctx context.Context, ch db.NotificationCh
 		if retryErr := sender.Send(ctx, p); retryErr != nil {
 			slog.Warn("notification: retry failed", "channel", ch.Name, "err", retryErr)
 			d.markFailed(ctx, logEntry.ID, retryErr.Error())
+			metrics.NotificationsTotal.WithLabelValues("failed", ch.Type).Inc()
 			return
 		}
 	}
 
 	d.markSent(ctx, logEntry.ID)
+	metrics.NotificationsTotal.WithLabelValues("sent", ch.Type).Inc()
 }
 
 func (d *Dispatcher) markSent(ctx context.Context, id uuid.UUID) {

@@ -50,7 +50,7 @@ func (a *Agent) toolQueryDatabase(ctx context.Context, userID uuid.UUID, input m
 	if err := pg.Connect(ctx); err != nil {
 		return "", fmt.Errorf("query_database: %w", err)
 	}
-	defer pg.Close(ctx)
+	defer pg.Close()
 
 	rows, err := pg.Query(ctx, sql)
 	if err != nil {

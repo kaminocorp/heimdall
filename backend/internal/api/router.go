@@ -3,6 +3,7 @@ package api
 import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/hejijunhao/heimdall/backend/internal/agent"
 	"github.com/hejijunhao/heimdall/backend/internal/api/handlers"
@@ -89,6 +90,8 @@ func NewRouter(cfg *config.Config, pool *pgxpool.Pool, ag *agent.Agent, jwks *mi
 		})
 	})
 
+	r.Get("/health", s.Health)
+	r.Handle("/metrics", promhttp.Handler())
 	r.Get("/ws/chat", s.HandleChat)
 
 	return r

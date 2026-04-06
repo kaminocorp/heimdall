@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/hejijunhao/heimdall/backend/internal/db"
+	"github.com/hejijunhao/heimdall/backend/internal/metrics"
 )
 
 const (
@@ -46,6 +47,9 @@ func (a *Agent) Monitor(ctx context.Context) {
 
 // monitorTick runs a single monitoring cycle across all active applications.
 func (a *Agent) monitorTick(ctx context.Context, sem chan struct{}) {
+	tickStart := time.Now()
+	defer func() { metrics.MonitorTickDuration.Observe(time.Since(tickStart).Seconds()) }()
+
 	apps, err := a.queries.ListActiveApplications(ctx)
 	if err != nil {
 		slog.Error("monitor: failed to list active applications", "err", err)
@@ -132,6 +136,8 @@ func (a *Agent) monitorApp(ctx context.Context, app db.ListActiveApplicationsRow
 
 	// Classify logs through the pipeline.
 	flagged, safeCount := a.classifier.Classify(logs)
+	metrics.LogsClassifiedTotal.WithLabelValues("safe").Add(float64(safeCount))
+	metrics.LogsClassifiedTotal.WithLabelValues("flagged").Add(float64(len(flagged)))
 
 	// Emit heartbeat (always, even if no flagged logs).
 	a.EmitLogWithSeverity(ctx, userID, nil, "heartbeat",

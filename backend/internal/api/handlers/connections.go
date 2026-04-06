@@ -515,7 +515,7 @@ func (s *Server) TestConnection(w http.ResponseWriter, r *http.Request) {
 			slog.Error("connection test failed", "connection_id", connID, "err", err)
 			result = testResult{Success: false, Message: fmt.Sprintf("Failed to connect to database: %v", err)}
 		} else {
-			defer pg.Close(ctx)
+			defer pg.Close()
 			result = testResult{Success: true, Message: "Connection established"}
 		}
 	case "supabase":

@@ -101,10 +101,19 @@ func (p *Postgres) Query(ctx context.Context, sql string) ([]map[string]any, err
 	return results, nil
 }
 
+// Health checks whether the connection is still alive.
+func (p *Postgres) Health(ctx context.Context) error {
+	if p.conn == nil {
+		return fmt.Errorf("postgres: not connected")
+	}
+	return p.conn.Ping(ctx)
+}
+
 // Close closes the database connection.
-func (p *Postgres) Close(ctx context.Context) error {
+// Uses context.Background so teardown is not cancelled by an expired caller context.
+func (p *Postgres) Close() error {
 	if p.conn != nil {
-		return p.conn.Close(ctx)
+		return p.conn.Close(context.Background())
 	}
 	return nil
 }
