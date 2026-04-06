@@ -18,7 +18,6 @@ type LumberClassifier struct {
 func NewLumberClassifier(modelDir string) (*LumberClassifier, error) {
 	l, err := lumber.New(
 		lumber.WithModelDir(modelDir),
-		lumber.WithConfidenceThreshold(0.5),
 		lumber.WithVerbosity("minimal"),
 	)
 	if err != nil {
@@ -53,6 +52,8 @@ func (c *LumberClassifier) Classify(logs []db.LogBuffer) ([]ClassifiedLog, int) 
 	safeCount := 0
 
 	for i, event := range events {
+		// We own the confidence threshold here rather than delegating to Lumber's
+		// WithConfidenceThreshold option, so the policy stays in one place.
 		if event.Confidence < 0.5 || ShouldEscalate(event) {
 			flagged = append(flagged, ClassifiedLog{
 				Log:        logs[i],

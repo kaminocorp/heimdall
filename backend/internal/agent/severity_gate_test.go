@@ -45,17 +45,18 @@ func TestShouldEscalate(t *testing.T) {
 		{"access/permission_change", "ACCESS", "permission_change"},
 		{"access/api_key_event", "ACCESS", "api_key_event"},
 
-		// DATA — selective
-		{"data/migration", "DATA", "migration"},
-
-		// SCHEDULED — selective
-		{"scheduled/cron_failed", "SCHEDULED", "cron_failed"},
-
 		// UNCLASSIFIED — always
 		{"unclassified", "UNCLASSIFIED", ""},
 
-		// Unknown type — escalate
+		// Unknown types (incl. DATA and SCHEDULED, which are not in Lumber's taxonomy)
+		// fall through to the default branch and escalate unconditionally.
 		{"unknown_type", "BANANA", "whatever"},
+		{"data/migration", "DATA", "migration"},
+		{"data/query_executed", "DATA", "query_executed"},
+		{"data/replication", "DATA", "replication"},
+		{"scheduled/cron_failed", "SCHEDULED", "cron_failed"},
+		{"scheduled/cron_started", "SCHEDULED", "cron_started"},
+		{"scheduled/cron_completed", "SCHEDULED", "cron_completed"},
 	}
 
 	for _, tt := range escalated {
@@ -83,13 +84,6 @@ func TestShouldEscalate(t *testing.T) {
 		{"access/login_success", "ACCESS", "login_success"},
 		{"access/session_expired", "ACCESS", "session_expired"},
 
-		// DATA — safe
-		{"data/query_executed", "DATA", "query_executed"},
-		{"data/replication", "DATA", "replication"},
-
-		// SCHEDULED — safe
-		{"scheduled/cron_started", "SCHEDULED", "cron_started"},
-		{"scheduled/cron_completed", "SCHEDULED", "cron_completed"},
 	}
 
 	for _, tt := range safe {

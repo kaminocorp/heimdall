@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.27.0 — Lumber Classifier Hardening](#0270--lumber-classifier-hardening-2026-04-06)
 - [0.26.1 — Postgres Connector Interface Fix](#0261--postgres-connector-interface-fix-2026-04-06)
 - [0.26.0 — Observability & Deployment Hygiene](#0260--observability--deployment-hygiene-2026-04-06)
 - [0.25.0 — Code Assessment Cleanup](#0250--code-assessment-cleanup-2026-04-06)
@@ -65,6 +66,97 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.27.0 — Lumber Classifier Hardening (2026-04-06)
+
+Six issues found in a post-integration audit of the Lumber ONNX classifier pipeline: a thread-safety risk in the shared model instance, dead code in the severity gate, a silently divergent confidence threshold, an unbounded Claude escalation risk on classifier failure, invisible tokenizer truncation on large payloads, and unnecessary agent_log noise on every monitoring tick.
+
+### Fix — Lumber upgraded v0.9.0 → v0.10.6 (thread-safety)
+
+`ONNXEmbedder` in v0.9.0 had no mutex protecting ONNX inference calls. The underlying `DynamicAdvancedSession` is not thread-safe. With `maxConcurrentApps: 10` all sharing the same `*lumber.Lumber` instance and potentially calling `ClassifyBatch` concurrently during a monitoring tick, this was a real risk of memory corruption or crash under load. v0.10.6 adds a `sync.Mutex` around all inference calls.
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `backend/go.mod` | `github.com/kaminocorp/lumber v0.9.0` → `v0.10.6` |
+| 2 | `backend/go.sum` | Updated |
+
+---
+
+### Fix — Dead DATA/SCHEDULED branches removed from severity gate
+
+Lumber's current taxonomy has six root types: `ERROR`, `REQUEST`, `DEPLOY`, `SYSTEM`, `ACCESS`, `PERFORMANCE`. There is no `DATA` or `SCHEDULED` type — logs that would semantically match them are returned as `UNCLASSIFIED` by the model. The `DATA` and `SCHEDULED` switch cases in `ShouldEscalate` would never execute; the intended category-level nuance (e.g. treating `DATA.query_executed` as safe) was silently lost. Escalation still happened, but via the `UNCLASSIFIED → all` default rather than the intended branch.
+
+**Fix:** Both switch cases removed. A comment documents the six actual root types. Any type not explicitly handled falls through to `default: return true`. Tests updated: the previously "safe" DATA/SCHEDULED categories are moved to the escalated list.
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `backend/internal/agent/severity_gate.go` | `DATA` and `SCHEDULED` cases removed; taxonomy comment added |
+| 2 | `backend/internal/agent/severity_gate_test.go` | Safe DATA/SCHEDULED cases moved to escalated list |
+
+---
+
+### Fix — Confidence threshold ownership consolidated
+
+`NewLumberClassifier` passed `lumber.WithConfidenceThreshold(0.5)` to the Lumber engine, which relabels low-confidence events internally. `classifier_lumber.go` then independently re-checked `event.Confidence < 0.5` before escalating. Two separate places owning the same policy: changing one without the other (e.g. tuning the threshold to 0.3) would silently diverge escalation behaviour.
+
+**Fix:** Removed `lumber.WithConfidenceThreshold(0.5)` from `NewLumberClassifier`. The explicit `< 0.5` check in `Classify` is now the single source of truth; a comment documents the ownership decision.
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `backend/internal/agent/classifier_lumber.go` | `WithConfidenceThreshold` removed; ownership comment added |
+
+---
+
+### Fix — Rate limiter added on Claude invocations
+
+The default `CLASSIFIER_MODE` is `fallback`. If the Lumber model fails to load (wrong path, corrupted file, ORT version mismatch), `PassthroughClassifier` silently takes over and escalates every log to Claude. With `maxConcurrentApps: 10`, `logBatchLimit: 200`, and a 15-second tick, this could drive significant unintended API cost with no signal beyond a startup warning log.
+
+**Fix:** Added `golang.org/x/time/rate` as a direct dependency. A `*rate.Limiter` field was added to `Agent`, initialised at 30 sustained invocations per minute (1 per 2 seconds), burst of 5. `monitorApp` calls `limiter.Wait(ctx)` immediately before `RunMonitoring`; if the context is cancelled while waiting, the function returns without calling Claude. The rate is permissive for normal operation but bounds the damage on classifier failure.
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `backend/internal/agent/agent.go` | `*rate.Limiter` field; `monitorLLMRate` var; `golang.org/x/time/rate` imported |
+| 2 | `backend/internal/agent/monitor.go` | `a.limiter.Wait(ctx)` before `RunMonitoring` |
+| 3 | `backend/go.mod` | `golang.org/x/time` promoted to direct dependency |
+
+---
+
+### Fix — Payload size guard before classification
+
+`ExtractText` falls back to the raw JSON string when no known message field is present. The underlying BERT-style tokenizer silently truncates at ~512 tokens, so very large JSON payloads degraded classification quality unpredictably with no visible indication.
+
+**Fix:** Added `maxClassifyChars = 1000` constant. The raw JSON fallback path now truncates to 1000 UTF-8 characters before returning to `ClassifyBatch`, making the tokenizer boundary explicit and auditable. Extracted message strings (from known fields) are not truncated.
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `backend/internal/agent/extract.go` | `maxClassifyChars = 1000`; raw JSON fallback truncated |
+
+---
+
+### Fix — Heartbeat suppressed when no flagged logs
+
+`EmitLogWithSeverity` was called for every app on every 15-second monitoring tick, writing an `agent_log` entry regardless of whether anything was flagged. In a multi-app deployment running continuous monitoring, this generated significant log volume in the UI with no signal value — a heartbeat entry for every clean tick.
+
+**Fix:** The `EmitLogWithSeverity` call is now inside the `if len(flagged) > 0` block. Agent log entries are only written when the monitoring cycle has something to report. Go `slog` output to stdout continues unconditionally.
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `backend/internal/agent/monitor.go` | Heartbeat emit moved inside `flagged > 0` block |
+
+---
+
+### Summary
+
+| # | Category | Item | Impact |
+|---|----------|------|--------|
+| 1 | Fix | Lumber v0.10.6 — mutex on ONNX inference | Thread-safety under concurrent load |
+| 2 | Fix | Dead DATA/SCHEDULED gate branches removed | Correct escalation behaviour + clean code |
+| 3 | Fix | Confidence threshold owned in one place | Policy divergence on threshold tuning prevented |
+| 4 | Fix | Rate limiter on Claude calls (30/min) | API cost bounded on classifier failure |
+| 5 | Fix | 1000-char cap on raw JSON before classification | Predictable tokenizer behaviour |
+| 6 | Fix | Heartbeat only emitted when logs are flagged | Reduced agent_log noise in UI |
 
 ---
 

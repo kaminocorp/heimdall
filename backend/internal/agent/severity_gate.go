@@ -4,6 +4,10 @@ import "github.com/kaminocorp/lumber/pkg/lumber"
 
 // ShouldEscalate returns true if a classified log event warrants LLM attention.
 // Rules are hardcoded per the Phase 8 severity gate table.
+//
+// Lumber's current taxonomy has six root types: ERROR, REQUEST, DEPLOY, SYSTEM,
+// ACCESS, PERFORMANCE. Any log that does not match a known type is returned as
+// UNCLASSIFIED by the model and escalated unconditionally via the default branch.
 func ShouldEscalate(event lumber.Event) bool {
 	switch event.Type {
 	case "ERROR":
@@ -33,22 +37,6 @@ func ShouldEscalate(event lumber.Event) bool {
 	case "ACCESS":
 		switch event.Category {
 		case "login_failure", "auth_failure", "permission_change", "api_key_event":
-			return true
-		default:
-			return false
-		}
-
-	case "DATA":
-		switch event.Category {
-		case "migration":
-			return true
-		default:
-			return false
-		}
-
-	case "SCHEDULED":
-		switch event.Category {
-		case "cron_failed":
 			return true
 		default:
 			return false

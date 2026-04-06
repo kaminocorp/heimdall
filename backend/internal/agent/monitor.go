@@ -139,19 +139,6 @@ func (a *Agent) monitorApp(ctx context.Context, app db.ListActiveApplicationsRow
 	metrics.LogsClassifiedTotal.WithLabelValues("safe").Add(float64(safeCount))
 	metrics.LogsClassifiedTotal.WithLabelValues("flagged").Add(float64(len(flagged)))
 
-	// Emit heartbeat (always, even if no flagged logs).
-	a.EmitLogWithSeverity(ctx, userID, nil, "heartbeat",
-		fmt.Sprintf("[%s] Processed %d logs: %d safe, %d flagged", app.Name, len(logs), safeCount, len(flagged)),
-		map[string]any{
-			"app_id":         app.ID,
-			"app_name":       app.Name,
-			"logs_processed": len(logs),
-			"safe":           safeCount,
-			"flagged":        len(flagged),
-		},
-		"info",
-	)
-
 	// If flagged logs exist, escalate to LLM.
 	if len(flagged) > 0 {
 		escalated := flagged
@@ -168,6 +155,13 @@ func (a *Agent) monitorApp(ctx context.Context, app db.ListActiveApplicationsRow
 				AppID: app.ID,
 				Model: "claude-sonnet-4-6",
 			}
+		}
+
+		// Acquire rate limiter token before calling the LLM.
+		// This bounds Claude API cost if the classifier falls back to passthrough.
+		if err := a.limiter.Wait(ctx); err != nil {
+			slog.Warn("monitor: LLM rate limit wait interrupted", "app_id", app.ID, "err", err)
+			return
 		}
 
 		input := formatFlaggedLogs(app, escalated)

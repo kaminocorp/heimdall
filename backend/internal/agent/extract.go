@@ -3,9 +3,15 @@ package agent
 import (
 	"encoding/json"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/hejijunhao/heimdall/backend/internal/db"
 )
+
+// maxClassifyChars is the maximum number of UTF-8 characters passed to Lumber.
+// The underlying BERT-style tokenizer silently truncates at ~512 tokens; capping
+// here makes the truncation explicit and keeps classification quality predictable.
+const maxClassifyChars = 1000
 
 // messageFields is the priority-ordered list of JSON fields to check
 // for the primary log message text.
@@ -49,7 +55,12 @@ func ExtractText(entry db.LogBuffer) string {
 		return message
 	}
 
-	return strings.TrimSpace(string(entry.Payload))
+	// Fallback: pass raw JSON, but truncate so the tokenizer boundary is explicit.
+	raw := strings.TrimSpace(string(entry.Payload))
+	if utf8.RuneCountInString(raw) > maxClassifyChars {
+		return string([]rune(raw)[:maxClassifyChars])
+	}
+	return raw
 }
 
 // ExtractTexts extracts classifiable text from a batch of log entries.
