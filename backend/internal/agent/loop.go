@@ -14,8 +14,13 @@ import (
 )
 
 const (
-	maxIterations    = 10
-	defaultModelID   = "claude-sonnet-4-6"
+	maxIterations = 10
+	// DefaultModelID is the fallback model used when no per-app / global
+	// agent config row specifies one. Exported so handlers (e.g. the
+	// CreateApplication default, the GetAppAgentConfig fallback) can point
+	// at a single source of truth — preventing drift on the next Sonnet
+	// release.
+	DefaultModelID   = "claude-sonnet-4-6"
 	defaultMaxTokens = 4096
 )
 
@@ -63,7 +68,7 @@ func emitEvent(ctx context.Context, events chan<- AgentEvent, ev AgentEvent) {
 func (a *Agent) runConversationCore(ctx context.Context, userID uuid.UUID, appID uuid.UUID, conversationID *uuid.UUID, history []Message, input string, events chan<- AgentEvent) (string, error) {
 	// Load agent config: prefer per-app config when appID is provided,
 	// fall back to global agent_config singleton.
-	model := defaultModelID
+	model := DefaultModelID
 	systemOverride := ""
 	providerName := defaultProviderName
 
@@ -226,7 +231,7 @@ func (a *Agent) runConversationCore(ctx context.Context, userID uuid.UUID, appID
 func (a *Agent) RunMonitoring(ctx context.Context, userID uuid.UUID, appConfig db.AppAgentConfig, flaggedLogs string) (string, string) {
 	model := appConfig.Model
 	if model == "" {
-		model = defaultModelID
+		model = DefaultModelID
 	}
 
 	// Monitoring mode resolves the provider from app_agent_config.provider,

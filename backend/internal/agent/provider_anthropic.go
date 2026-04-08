@@ -30,7 +30,7 @@ func NewAnthropicProviderWithClient(client *anthropic.Client) *AnthropicProvider
 // ChatCompletion translates ChatParams → anthropic.MessageNewParams, calls the
 // SDK, and translates the response back to *ChatResponse.
 func (p *AnthropicProvider) ChatCompletion(ctx context.Context, params ChatParams) (*ChatResponse, error) {
-	// params.Model is always populated by the agent loop (defaultModelID kicks
+	// params.Model is always populated by the agent loop (DefaultModelID kicks
 	// in there when no per-app / global config row is found). We don't second-
 	// guess it here — passing an empty string through would be a caller bug,
 	// not something the provider should paper over with a different default.

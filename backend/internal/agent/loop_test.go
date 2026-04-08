@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -183,4 +184,59 @@ func TestRunLoop_ToolError(t *testing.T) {
 	assert.Equal(t, "I encountered an error while searching logs.", result)
 	// Verify we made exactly 2 API calls: tool_use + final response.
 	assert.Equal(t, int32(2), callCount.Load())
+}
+
+// TestRunLoop_RoutesThroughOpenRouter pins the end-to-end contract introduced
+// in 0.29.0: when the Agent's default provider is OpenRouter, the loop sends
+// OpenAI-shaped wire bodies (role:"system" + role:"user"), parses OpenAI-shaped
+// responses (finish_reason:"stop"), and returns the assistant text unchanged.
+//
+// This complements provider_openrouter_test.go (which pins the translator at
+// the field level) by exercising the loop → provider → HTTP → translator path
+// that Phase 3 wired up. If the abstraction ever regresses so that the loop
+// accidentally speaks SDK-specific types, this is the test that will catch it.
+func TestRunLoop_RoutesThroughOpenRouter(t *testing.T) {
+	var captured orRequest
+	var hits atomic.Int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		body, _ := io.ReadAll(r.Body)
+		require.NoError(t, json.Unmarshal(body, &captured))
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{
+			"id":"t",
+			"choices":[{"index":0,"message":{"role":"assistant","content":"routed via openrouter"},"finish_reason":"stop"}],
+			"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}
+		}`))
+	}))
+	defer server.Close()
+
+	queries := db.New(&stubDBTX{})
+	ag := &Agent{
+		queries: queries,
+		providers: map[string]Provider{
+			// Swap the default provider to OpenRouter so RunLoop (which runs
+			// with appID=uuid.Nil and can't consult app_agent_config.provider)
+			// routes through the OpenRouter mock instead of Anthropic.
+			defaultProviderName: NewOpenRouterProviderWithURL("test-key", server.URL),
+		},
+		config:     &config.Config{OpenRouterKey: "test-key"},
+		classifier: &PassthroughClassifier{},
+	}
+
+	result, err := ag.RunLoop(context.Background(), uuid.New(), "hello")
+	require.NoError(t, err)
+	assert.Equal(t, "routed via openrouter", result)
+	assert.Equal(t, int32(1), hits.Load())
+
+	// Wire body must be OpenAI-shaped, not Anthropic-shaped.
+	require.GreaterOrEqual(t, len(captured.Messages), 2)
+	assert.Equal(t, "system", captured.Messages[0].Role, "system prompt must be the first message, not a top-level field")
+	assert.NotEmpty(t, captured.Messages[0].Content)
+	assert.Equal(t, "user", captured.Messages[1].Role)
+	assert.Equal(t, "hello", captured.Messages[1].Content)
+
+	// MaxTokens must be present (not omitted) — see L2 in openrouter-assessment.md.
+	assert.Equal(t, 4096, captured.MaxTokens, "MaxTokens must be emitted on the wire")
 }

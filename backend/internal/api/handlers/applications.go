@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/hejijunhao/heimdall/backend/internal/agent"
 	"github.com/hejijunhao/heimdall/backend/internal/api/middleware"
 	"github.com/hejijunhao/heimdall/backend/internal/db"
 )
@@ -77,7 +78,7 @@ func (s *Server) CreateApplication(w http.ResponseWriter, r *http.Request) {
 	// Create default agent config
 	_, err = s.Queries.UpsertAppAgentConfig(r.Context(), db.UpsertAppAgentConfigParams{
 		AppID:                app.ID,
-		Model:                "claude-sonnet-4-6",
+		Model:                agent.DefaultModelID,
 		Mode:                 "off",
 		ScheduleIntervalSecs: 60,
 		Provider:             "anthropic",
@@ -141,7 +142,7 @@ func (s *Server) GetAppAgentConfig(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
 			"app_id":                 app.ID,
-			"model":                  "claude-sonnet-4-6",
+			"model":                  agent.DefaultModelID,
 			"mode":                   "off",
 			"schedule_interval_secs": 60,
 			"provider":               "anthropic",
@@ -174,7 +175,7 @@ func (s *Server) UpdateAppAgentConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.Model == "" {
-		req.Model = "claude-sonnet-4-6"
+		req.Model = agent.DefaultModelID
 	}
 	if req.Mode == "" {
 		req.Mode = "off"

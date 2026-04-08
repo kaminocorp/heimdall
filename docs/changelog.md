@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.29.1 — OpenRouter Post-Assessment Polish](#0291--openrouter-post-assessment-polish-2026-04-08)
 - [0.29.0 — OpenRouter Multi-Provider Support](#0290--openrouter-multi-provider-support-2026-04-08)
 - [0.28.0 — Fly.io VM Memory Upgrade](#0280--flyio-vm-memory-upgrade-2026-04-06)
 - [0.27.1 — Go 1.25 Build Image](#0271--go-125-build-image-2026-04-06)
@@ -69,6 +70,103 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.29.1 — OpenRouter Post-Assessment Polish (2026-04-08)
+
+Five low-severity findings from the `docs/plans/openrouter-assessment.md` review of the 0.29.0 OpenRouter integration. None were blocking for production — this release clears the follow-up queue so the next engineer touching the provider layer inherits a clean slate.
+
+Findings are numbered L1–L6 to match the assessment doc. L5 (severity parsing heuristic) was deliberately deferred as monitor-in-production rather than code fix.
+
+---
+
+### L3 — Deduplicate `defaultModelID` (highest-value fix)
+
+**What / where.** The string `"claude-sonnet-4-6"` was hardcoded in **four** places:
+
+1. `backend/internal/agent/loop.go:18` — the `defaultModelID` const the agent loop uses when no config row exists.
+2. `backend/internal/api/handlers/applications.go:80` — the `CreateApplication` default that seeds new app_agent_config rows.
+3. `backend/internal/api/handlers/applications.go:144` — the `GetAppAgentConfig` fallback returned when the config row is missing.
+4. `backend/internal/api/handlers/applications.go:177` — the `UpdateAppAgentConfig` request fallback when the client omits `model`.
+
+**How.** Renamed the loop's private `defaultModelID` to exported `agent.DefaultModelID`, added a package-level doc comment, and swapped all three handler call sites to `agent.DefaultModelID`. The `handlers` package already depends on `internal/db` and `internal/config` but had not previously imported `internal/agent` — verified via `go build ./...` that the new import does not create a cycle (agent depends on db/config, handlers depend on agent/db/config, no back-edge).
+
+**Why.** The real hazard was drift on the next Sonnet release: updating the const in one place would silently leave the three handler call sites pointing at an old model. Every newly-created app would get Sonnet 4.6 while the loop defaulted to 4.7 — the kind of inconsistency that's easy to write and hard to notice. One const, one source of truth.
+
+---
+
+### L2 — OpenRouter `MaxTokens` default parity with Anthropic provider
+
+**What / where.** `backend/internal/agent/provider_openrouter.go` — the `orRequest.MaxTokens` field had `json:"max_tokens,omitempty"` and `buildOpenRouterRequest` passed `params.MaxTokens` through raw.
+
+**How.** Dropped the `omitempty` tag (field is now always emitted) and added the same `if maxTokens == 0 { maxTokens = 4096 }` guard that `provider_anthropic.go:40–42` has. Both providers now substitute 4096 identically when the caller forgets to set it.
+
+**Why.** The agent loop currently always passes `defaultMaxTokens = 4096`, so the divergence was unreachable in 0.29.0 — but it was a time bomb. A future refactor that added a new call site forgetting to set MaxTokens would cause Anthropic to substitute 4096 while OpenRouter quietly fell back to each model's wildly different provider default (Gemini's is much higher than Claude's). Silent behavioural divergence between providers for the same `ChatParams` is exactly the bug class the Phase 1 abstraction was supposed to prevent.
+
+---
+
+### L1 — OpenRouter `Content` field always emitted
+
+**What / where.** `backend/internal/agent/provider_openrouter.go` — the `orMessage.Content` field had `json:"content,omitempty"`.
+
+**How.** Dropped the `omitempty`. Content is now always present in the wire body — empty string for assistant messages that have only `tool_calls`, populated otherwise. Added a code comment above `orMessage` explaining the choice.
+
+**Why.** The OpenAI chat completions spec is ambiguous on whether assistant messages with `tool_calls` may omit `content` or must emit `content: ""` (or `null`). OpenAI itself tolerates omission; OpenRouter proxies to many downstream providers, some of which are stricter. Emitting an explicit empty string is the wire shape that's spec-legal *and* maximally compatible. Zero behavioural impact on the existing provider set; immunity to one class of future-provider-rejects-our-body bug.
+
+---
+
+### L4 — End-to-end integration test for OpenRouter routing
+
+**What / where.** `backend/internal/agent/loop_test.go` — added `TestRunLoop_RoutesThroughOpenRouter`.
+
+**How.** Stands up an `httptest.Server` that returns an OpenAI-shaped response, constructs an `Agent` with `NewOpenRouterProviderWithURL` registered under `defaultProviderName` (so `RunLoop` — which runs with `appID=uuid.Nil` and can't consult `app_agent_config.provider` — routes through it), calls `RunLoop("hello")`, and asserts three things on the captured wire body:
+
+1. **Routing.** The mock server was hit exactly once and returned "routed via openrouter" (proves the loop actually went through `OpenRouterProvider.ChatCompletion`, not `AnthropicProvider`).
+2. **Wire shape.** `captured.Messages[0].Role == "system"` with non-empty content (proves the system prompt was translated to first-message form per the Phase 2 divergence, not left as a top-level Anthropic-style field).
+3. **MaxTokens emission.** `captured.MaxTokens == 4096` (pins the L2 fix: the field must be on the wire).
+
+**Why.** The pre-0.29.1 test suite covered the provider translator at the field level (`provider_openrouter_test.go`, four tests) and the agent loop's Anthropic path end-to-end (`loop_test.go`, three tests). What was missing was a test that proved the routing itself: that the `providerFor(appCfg.Provider)` indirection in `runConversationCore` actually reaches the right provider, and that the full loop → provider → HTTP → translator chain produces an OpenAI-shaped body. Phase 3 was a two-line change — that's exactly the kind of change that gets silently broken by an unrelated refactor months later. This test is the tripwire.
+
+The test also doubles as a regression guard for L1 and L2: if either of those fixes ever gets reverted, the `captured.MaxTokens == 4096` assertion and the wire-body inspection will fail.
+
+---
+
+### L6 — Frontend `formProvider` derived from `formModel`
+
+**What / where.** `frontend/src/pages/AgentConfigPage.vue`.
+
+**How.** Converted `formProvider` from a `ref` with an imperative `onModelSelect` `@change` handler to a `computed` that derives the provider from the selected model's catalogue entry, falling back to `config.value?.provider ?? 'anthropic'` for legacy-model safety. Dropped the `@change="onModelSelect"` binding from the `<select>`, deleted the `onModelSelect` function, and removed the manual `formProvider.value = ...` assignment from `startEdit`. Net diff: -7 lines.
+
+**Why.** Two-source-of-truth state is a small but real bug magnet. The model ID is the user's actual choice; the provider is a deterministic function of it (look up the model's `provider` in the catalogue). Modelling that as a `computed` instead of a manually-synced `ref` removes an entire class of "did we forget to resync after X" bugs. The fallback order is preserved exactly: selected model's provider → existing config's provider → `'anthropic'`. Save payload is unchanged.
+
+---
+
+### L5 — Severity parsing (deferred, not fixed)
+
+Documented in the assessment as "monitor in production" rather than a code change. `parseSeverityFromResponse` in `loop.go:334` is a prose keyword scan that assumes the Heimdall system prompt's exact "severity: critical" phrasing. OpenRouter is the first time the agent will routinely run on non-Anthropic models that may not emit that marker. Tracked as future work: if non-Anthropic models produce noisy severity ratings in production, move extraction into a structured severity tool call. Shipping 0.29.1 without touching this — the failure mode is "severity is sometimes wrong", not "agent breaks".
+
+---
+
+### Verification
+
+```
+cd backend && go build ./...                                  # clean
+cd backend && go vet ./...                                    # clean
+cd backend && go test ./internal/agent/... ./internal/api/handlers/...  # PASS
+cd frontend && npx vue-tsc --noEmit                           # clean
+```
+
+All pre-existing tests still pass; the new `TestRunLoop_RoutesThroughOpenRouter` is the only addition. Zero behaviour change for users on Anthropic; OpenRouter users get a more spec-compliant wire body and guaranteed MaxTokens emission.
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `backend/internal/agent/loop.go` | `defaultModelID` → exported `DefaultModelID` with doc comment |
+| 2 | `backend/internal/agent/provider_anthropic.go` | Comment updated to reference new exported name |
+| 3 | `backend/internal/agent/provider_openrouter.go` | `orMessage.Content` no longer `omitempty`; `orRequest.MaxTokens` no longer `omitempty`; `buildOpenRouterRequest` adds Anthropic-parity 4096 default guard |
+| 4 | `backend/internal/agent/loop_test.go` | New `TestRunLoop_RoutesThroughOpenRouter`; `io` import added |
+| 5 | `backend/internal/api/handlers/applications.go` | New `internal/agent` import; 3 call sites switched to `agent.DefaultModelID` |
+| 6 | `frontend/src/pages/AgentConfigPage.vue` | `formProvider` ref → computed; `onModelSelect` handler deleted; `@change` binding removed; `startEdit` no longer manually syncs provider |
 
 ---
 

@@ -62,17 +62,21 @@ func NewOpenRouterProviderWithURL(apiKey, url string) *OpenRouterProvider {
 
 type orRequest struct {
 	Model      string      `json:"model"`
-	MaxTokens  int         `json:"max_tokens,omitempty"`
+	MaxTokens  int         `json:"max_tokens"` // always emitted — see buildOpenRouterRequest for the default guard
 	Messages   []orMessage `json:"messages"`
 	Tools      []orTool    `json:"tools,omitempty"`
 	ToolChoice string      `json:"tool_choice,omitempty"`
 	Stream     bool        `json:"stream"`
 }
 
+// orMessage intentionally omits `omitempty` on Content. The OpenAI spec requires
+// assistant messages with tool_calls to include a content field (empty string
+// is legal; omission is not guaranteed to be accepted by stricter downstreams
+// that OpenRouter proxies to). Emitting "" explicitly is the safer wire shape.
 type orMessage struct {
-	Role       string       `json:"role"`                  // "system" | "user" | "assistant" | "tool"
-	Content    string       `json:"content,omitempty"`     // text body (or empty when tool_calls present)
-	ToolCalls  []orToolCall `json:"tool_calls,omitempty"`  // assistant → tool requests
+	Role       string       `json:"role"`              // "system" | "user" | "assistant" | "tool"
+	Content    string       `json:"content"`           // text body; "" when assistant has only tool_calls
+	ToolCalls  []orToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string       `json:"tool_call_id,omitempty"` // role:"tool" replies
 	Name       string       `json:"name,omitempty"`
 }
@@ -174,9 +178,17 @@ func (p *OpenRouterProvider) ChatCompletion(ctx context.Context, params ChatPara
 // buildOpenRouterRequest translates the neutral ChatParams into the OpenAI
 // wire format. The translation is deterministic and one-pass.
 func buildOpenRouterRequest(params ChatParams) ([]byte, error) {
+	// Mirror the Anthropic provider's default (provider_anthropic.go:40–42)
+	// so both providers behave identically when MaxTokens is unset. Today
+	// the agent loop always passes defaultMaxTokens, but this guard prevents
+	// silent behavioural divergence if a future caller forgets.
+	maxTokens := params.MaxTokens
+	if maxTokens == 0 {
+		maxTokens = 4096
+	}
 	out := orRequest{
 		Model:     params.Model,
-		MaxTokens: params.MaxTokens,
+		MaxTokens: maxTokens,
 		Stream:    false,
 	}
 

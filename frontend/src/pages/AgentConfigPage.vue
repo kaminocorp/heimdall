@@ -19,7 +19,6 @@ const saving = ref(false)
 
 // Form state
 const formModel = ref('')
-const formProvider = ref<'anthropic' | 'openrouter'>('anthropic')
 const formMode = ref<'continuous' | 'periodic' | 'off'>('off')
 const formInterval = ref(60)
 const formPrompt = ref('')
@@ -29,6 +28,16 @@ const models = ref<ModelOption[]>([])
 const anthropicModels = computed(() => models.value.filter(m => m.provider === 'anthropic'))
 const openrouterModels = computed(() => models.value.filter(m => m.provider === 'openrouter'))
 
+// formProvider is *derived* from formModel — there is one source of truth
+// (the selected model ID) and the provider follows from the model's catalogue
+// entry. Falls back to the existing config's provider (for models not in the
+// catalogue — e.g. a legacy row) and finally to 'anthropic'.
+const formProvider = computed<'anthropic' | 'openrouter'>(() => {
+  const selected = models.value.find(m => m.id === formModel.value)
+  if (selected) return selected.provider
+  return config.value?.provider ?? 'anthropic'
+})
+
 function formatContext(tokens: number): string {
   if (tokens >= 1_000_000) return `${tokens / 1_000_000}M`
   return `${tokens / 1_000}k`
@@ -36,12 +45,6 @@ function formatContext(tokens: number): string {
 
 function formatModelLabel(m: ModelOption): string {
   return `${m.name} — ${formatContext(m.context_length)} · $${m.pricing.prompt}/$${m.pricing.completion}`
-}
-
-// Auto-set provider whenever the user picks a model from a different group.
-function onModelSelect() {
-  const selected = models.value.find(m => m.id === formModel.value)
-  if (selected) formProvider.value = selected.provider
 }
 
 const intervalPresets = [
@@ -72,7 +75,7 @@ async function fetchConfig() {
 function startEdit() {
   if (!config.value) return
   formModel.value = config.value.model
-  formProvider.value = config.value.provider ?? 'anthropic'
+  // formProvider is computed from formModel — no manual sync needed.
   formMode.value = config.value.mode
   formInterval.value = config.value.schedule_interval_secs
   formPrompt.value = config.value.system_prompt_override ?? ''
@@ -152,7 +155,6 @@ watch(() => appStore.currentAppId, () => {
         <select
           v-model="formModel"
           required
-          @change="onModelSelect"
           class="block w-full bg-bg-elevated/80 border border-border rounded px-3 py-2 text-text-primary font-mono text-sm focus:border-accent focus:ring-1 focus:ring-accent/30 focus:outline-none transition-colors appearance-none cursor-pointer"
         >
           <optgroup label="Anthropic (Direct)">
