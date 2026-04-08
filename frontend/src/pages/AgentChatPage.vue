@@ -8,8 +8,12 @@ import ChatWindow from '@/components/agent/ChatWindow.vue'
 const route = useRoute()
 const existingId = route.query.conversation_id as string | undefined
 
-const { messages, status, conversationId, isThinking, error, sendMessage, loadMessages } =
+const { messages, status, conversationId, isThinking, activeTools, error, sendMessage, loadMessages } =
   useAgent(existingId)
+
+function formatTool(name: string): string {
+  return name.replace(/_/g, ' ')
+}
 
 onMounted(async () => {
   if (existingId) {
@@ -48,6 +52,16 @@ onMounted(async () => {
 
     <div v-if="error" class="mb-3 rounded border border-status-critical/30 bg-status-critical/10 px-4 py-2 text-sm font-mono text-status-critical">
       {{ error }}
+    </div>
+
+    <!-- Live tool-progress indicator. Populated from streaming tool_start /
+         tool_result events on the WebSocket; empty when no tool is running. -->
+    <div
+      v-if="activeTools.length"
+      class="mb-3 flex items-center gap-2 rounded border border-accent-border/30 bg-accent-subtle/40 px-4 py-2 font-mono text-xs uppercase tracking-wider text-text-secondary"
+    >
+      <span class="w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
+      <span>{{ activeTools.map(formatTool).join(' · ') }}</span>
     </div>
 
     <ChatWindow

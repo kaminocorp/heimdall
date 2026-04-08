@@ -10,6 +10,11 @@ export function useAgent(existingConversationId?: string) {
   const messages = ref<ChatMessage[]>([])
   const conversationId = ref<string | null>(existingConversationId ?? null)
   const isThinking = ref(false)
+  // activeTools is the running list of tool names the agent is currently
+  // executing. The chat page renders these as a small progress indicator so
+  // the user can see what the agent is doing during the wait. Populated by
+  // tool_start events from the backend; entries are removed on tool_result.
+  const activeTools = ref<string[]>([])
   const error = ref<string | null>(null)
 
   const wsUrl = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/chat`
@@ -44,12 +49,38 @@ export function useAgent(existingConversationId?: string) {
       // Error message from agent.
       if (parsed.type === 'error') {
         isThinking.value = false
+        activeTools.value = []
         error.value = parsed.content ?? 'Unknown error'
+        return
+      }
+
+      // Tool progress events from the streaming agent loop. The backend
+      // emits tool_start immediately before dispatch and tool_result
+      // immediately after. We swap "thinking" for the active-tools indicator
+      // on the first tool_start so the UI doesn't show both at once.
+      if (parsed.type === 'tool_start') {
+        isThinking.value = false
+        if (parsed.tool && !activeTools.value.includes(parsed.tool)) {
+          activeTools.value = [...activeTools.value, parsed.tool]
+        }
+        return
+      }
+      if (parsed.type === 'tool_result') {
+        if (parsed.tool) {
+          activeTools.value = activeTools.value.filter((t) => t !== parsed.tool)
+        }
+        // When the last tool finishes the agent is back to "thinking" while
+        // it composes its synthesis. Re-arm the indicator only if no other
+        // tools are still running.
+        if (activeTools.value.length === 0) {
+          isThinking.value = true
+        }
         return
       }
 
       // Chat message from agent.
       isThinking.value = false
+      activeTools.value = []
       error.value = null
       const msg = parsed as ChatMessage
       messages.value.push({
@@ -84,5 +115,5 @@ export function useAgent(existingConversationId?: string) {
     }))
   }
 
-  return { messages, status, conversationId, isThinking, error, sendMessage, loadMessages }
+  return { messages, status, conversationId, isThinking, activeTools, error, sendMessage, loadMessages }
 }

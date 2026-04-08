@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -79,6 +80,7 @@ func (s *Server) CreateApplication(w http.ResponseWriter, r *http.Request) {
 		Model:                "claude-sonnet-4-6",
 		Mode:                 "off",
 		ScheduleIntervalSecs: 60,
+		Provider:             "anthropic",
 	})
 	if err != nil {
 		jsonServerError(w, "failed to create agent config", err)
@@ -142,6 +144,7 @@ func (s *Server) GetAppAgentConfig(w http.ResponseWriter, r *http.Request) {
 			"model":                  "claude-sonnet-4-6",
 			"mode":                   "off",
 			"schedule_interval_secs": 60,
+			"provider":               "anthropic",
 		})
 		return
 	}
@@ -152,6 +155,7 @@ func (s *Server) GetAppAgentConfig(w http.ResponseWriter, r *http.Request) {
 
 type updateAppAgentConfigRequest struct {
 	Model                string `json:"model"`
+	Provider             string `json:"provider"`
 	Mode                 string `json:"mode"`
 	ScheduleIntervalSecs int32  `json:"schedule_interval_secs"`
 	SystemPromptOverride string `json:"system_prompt_override"`
@@ -186,9 +190,36 @@ func (s *Server) UpdateAppAgentConfig(w http.ResponseWriter, r *http.Request) {
 		req.ScheduleIntervalSecs = 60
 	}
 
+	// Provider validation. Empty defaults to "anthropic" for backwards compat
+	// with clients that pre-date the dropdown. "openrouter" is only accepted
+	// when OPENROUTER_API_KEY is configured on the platform — otherwise we
+	// reject at the API boundary instead of silently falling back, so the
+	// user sees a clear error rather than wondering why their model choice
+	// is being ignored.
+	// Normalise before validating so "OpenRouter", " openrouter ", etc. all
+	// resolve to the canonical lower-case form rather than falling through to
+	// the default "unknown provider" error.
+	req.Provider = strings.ToLower(strings.TrimSpace(req.Provider))
+	if req.Provider == "" {
+		req.Provider = "anthropic"
+	}
+	switch req.Provider {
+	case "anthropic":
+		// always available
+	case "openrouter":
+		if s.Config.OpenRouterKey == "" {
+			jsonError(w, "openrouter provider not enabled on this server", http.StatusBadRequest)
+			return
+		}
+	default:
+		jsonError(w, "provider must be one of: anthropic, openrouter", http.StatusBadRequest)
+		return
+	}
+
 	cfg, err := s.Queries.UpsertAppAgentConfig(r.Context(), db.UpsertAppAgentConfigParams{
 		AppID:                app.ID,
 		Model:                req.Model,
+		Provider:             req.Provider,
 		Mode:                 req.Mode,
 		ScheduleIntervalSecs: req.ScheduleIntervalSecs,
 		SystemPromptOverride: pgtype.Text{

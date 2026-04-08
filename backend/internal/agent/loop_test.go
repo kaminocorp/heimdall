@@ -55,8 +55,10 @@ func newTestAgent(t *testing.T, server *httptest.Server) *Agent {
 	)
 	queries := db.New(&stubDBTX{})
 	return &Agent{
-		queries:    queries,
-		client:     &client,
+		queries: queries,
+		providers: map[string]Provider{
+			defaultProviderName: NewAnthropicProviderWithClient(&client),
+		},
 		config:     &config.Config{AnthropicKey: "test-key"},
 		classifier: &PassthroughClassifier{},
 	}

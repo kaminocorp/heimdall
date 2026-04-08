@@ -172,13 +172,46 @@ func (s *Server) HandleChat(w http.ResponseWriter, r *http.Request) {
 		// Convert stored messages to agent history (exclude the current message — it goes as input).
 		history := toAgentHistory(storedMessages[:len(storedMessages)-1])
 
-		// Run agent with conversation history.
-		response, err := s.Agent.RunConversation(ctx, userID, appID, &convID, history, msg.Content)
-		if err != nil {
-			slog.Error("agent error", "err", err, "user_id", userID, "conversation_id", convID)
+		// Run agent with conversation history. RunConversationStream emits
+		// tool_start / tool_result events as the loop iterates, then either a
+		// final "message" event with the full assistant text or an "error"
+		// event. The underlying LLM call is still blocking — only the loop's
+		// progress is streamed (see loop_stream.go).
+		events := s.Agent.RunConversationStream(ctx, userID, appID, &convID, history, msg.Content)
+
+		var fullResponse string
+		var streamErr string
+		for ev := range events {
+			switch ev.Type {
+			case "tool_start":
+				if err := wsjson.Write(ctx, conn, map[string]string{
+					"type": "tool_start",
+					"tool": ev.Tool,
+				}); err != nil {
+					slog.Error("websocket write error", "err", err)
+					return
+				}
+			case "tool_result":
+				if err := wsjson.Write(ctx, conn, map[string]any{
+					"type":     "tool_result",
+					"tool":     ev.Tool,
+					"is_error": ev.IsError,
+				}); err != nil {
+					slog.Error("websocket write error", "err", err)
+					return
+				}
+			case "message":
+				fullResponse = ev.Content
+			case "error":
+				streamErr = ev.Content
+			}
+		}
+
+		if streamErr != "" {
+			slog.Error("agent error", "err", streamErr, "user_id", userID, "conversation_id", convID)
 			if writeErr := wsjson.Write(ctx, conn, map[string]string{
 				"type":    "error",
-				"content": "Agent error: " + err.Error(),
+				"content": "Agent error: " + streamErr,
 			}); writeErr != nil {
 				slog.Error("websocket write error", "err", writeErr)
 				return
@@ -190,7 +223,7 @@ func (s *Server) HandleChat(w http.ResponseWriter, r *http.Request) {
 		agentMsg := chatMessage{
 			ID:        uuid.New().String(),
 			Role:      "assistant",
-			Content:   response,
+			Content:   fullResponse,
 			Timestamp: time.Now().UTC().Format(time.RFC3339),
 		}
 		storedMessages = append(storedMessages, agentMsg)

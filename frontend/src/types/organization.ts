@@ -18,6 +18,7 @@ export interface Application {
 export interface AppAgentConfig {
   app_id: string
   model: string
+  provider: 'anthropic' | 'openrouter'
   mode: 'continuous' | 'periodic' | 'off'
   schedule_interval_secs: number
   system_prompt_override: string | null

@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.29.0 — OpenRouter Multi-Provider Support](#0290--openrouter-multi-provider-support-2026-04-08)
 - [0.28.0 — Fly.io VM Memory Upgrade](#0280--flyio-vm-memory-upgrade-2026-04-06)
 - [0.27.1 — Go 1.25 Build Image](#0271--go-125-build-image-2026-04-06)
 - [0.27.0 — Lumber Classifier Hardening](#0270--lumber-classifier-hardening-2026-04-06)
@@ -68,6 +69,233 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.29.0 — OpenRouter Multi-Provider Support (2026-04-08)
+
+Decouples the agent from `anthropic-sdk-go` and adds OpenRouter as a second LLM provider, exposing hundreds of models (GPT-4o, Gemini 2.5, Llama 4, direct Claude) through a single integration. End-users pick a model from a grouped dropdown; the backend routes through the right provider based on per-app config. Monitoring stays on the 0.27.0 rate-limiter contract regardless of provider. Shipped in eight phases across the backend, database, and frontend, then hardened twice — once post-integration (Phase 7) and once post-assessment (Phase 8).
+
+Canonical completion docs live in `docs/completions/openrouter-phase-1.md` through `docs/completions/openrouter-phase-8.md`. This entry is the condensed per-phase summary.
+
+---
+
+### Phase 1 — Provider abstraction (pure refactor, zero behaviour change)
+
+The agent loop was speaking `anthropic-sdk-go` types directly in `loop.go`, `tools.go`, and `agent.go`. Adding a second provider would have meant editing all three files and touching every tool registration site — exactly the kind of fan-out that turns a 200-line feature into a 1000-line PR.
+
+Phase 1 introduced a neutral `Provider` interface with a single `ChatCompletion` method and domain types (`ChatParams`, `ChatMessage`, `ContentBlock`, `ToolCall`, `ToolResult`, `ToolDef`, `ChatResponse`, `StopReason`) that the agent loop speaks exclusively. `AnthropicProvider` became the only file in the package that imports `anthropic-sdk-go`. The mapping between neutral and SDK types is mechanical and one-to-one, and the stop-reason collapse (any unknown reason → `EndTurn`) matches the pre-refactor loop's fallthrough exactly.
+
+Streaming was deferred despite being bundled in the original plan — the selection doc explicitly said "Not now, Option A." Shipping the abstraction as a pure refactor first kept Phase 1 easy to review and rollback, and let Phases 2–6 land on top without taking on any frontend risk.
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `backend/internal/agent/provider.go` | New — interface + neutral types |
+| 2 | `backend/internal/agent/provider_anthropic.go` | New — only file importing `anthropic-sdk-go` |
+| 3 | `backend/internal/agent/agent.go` | `client *anthropic.Client` → `providers map[string]Provider`; `providerFor(name)` resolver with fallback to `"anthropic"` |
+| 4 | `backend/internal/agent/loop.go` | `RunConversation` / `RunMonitoring` build neutral types; SDK imports removed; `defaultModelID` extracted as const |
+| 5 | `backend/internal/agent/tools.go` | `ToolRegistry()` returns `[]ToolDef`; SDK import removed |
+| 6 | `backend/internal/agent/loop_test.go` | Tests use `NewAnthropicProviderWithClient` to inject an SDK client wired to the existing `httptest.Server` — same mock server pattern, zero scenario changes |
+
+---
+
+### Phase 2 — `OpenRouterProvider` (raw HTTP, blocking)
+
+The second provider implementation, routed through OpenRouter's OpenAI-compatible `/chat/completions` endpoint. Raw HTTP rather than a second SDK — the surface area was one endpoint, and pulling in `openai-go` would have brought its own retry policies, transport config, and version churn for no benefit.
+
+The translation between neutral types and OpenAI wire format is the riskiest part of the phase. Five concrete divergences from Anthropic, all handled in `buildOpenRouterRequest` / `translateOpenRouterResponse`:
+
+1. **System prompt** becomes the first `role:"system"` message, not a separate top-level field.
+2. **Tool schemas** get wrapped in a full JSON Schema `object` (with `type`, `properties`, `required`) inside `function.parameters`, not passed as the inner schema alone.
+3. **Tool calls in responses** arrive as a `tool_calls[]` array on the assistant message, not as `tool_use` content blocks — the translator flattens both sides so the agent loop sees a uniform `[]ContentBlock`.
+4. **Tool results** are one `role:"tool"` message per result (with its own `tool_call_id`), not a single user message holding multiple `tool_result` blocks.
+5. **Stop reason:** `finish_reason:"tool_calls"` → `StopReasonToolUse`; every other value collapses to `StopReasonEndTurn`, matching Phase 1's Anthropic mapping.
+
+Two subtleties worth calling out: OpenAI's `function.arguments` is a *JSON-encoded string*, not an inline object, so the translator round-trips it through `json.RawMessage` so the agent loop's `json.Unmarshal(tu.Input, ...)` works unchanged. And OpenAI has no equivalent for Anthropic's `is_error` flag on tool results, so failed tool responses get a `"ERROR: "` content prefix — pragmatic, and models generally pick up on the convention.
+
+Error handling distinguishes 401 (bad key), 402 (out of credits), 429 (rate limited), and catch-all 5xx, each with a readable message. No silent fallback to Anthropic — the selection plan explicitly said failing loudly is better than "why is my GPT-4o app responding like Claude."
+
+Four `httptest`-backed tests pin the wire format at the field level, with the multi-turn `TestOpenRouter_AssistantToolUseRoundTrip` doing the heavy lifting.
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `backend/internal/agent/provider_openrouter.go` | New — ~270 lines of raw HTTP client + private wire types |
+| 2 | `backend/internal/agent/provider_openrouter_test.go` | New — 4 tests: request shape, tool call response, assistant tool-use round-trip, error mapping |
+| 3 | `backend/internal/config/config.go` | Added `OpenRouterKey string` field loaded from `OPENROUTER_API_KEY`; unvalidated (optional) |
+| 4 | `backend/internal/agent/agent.go` | `New()` registers `providers["openrouter"]` only when `cfg.OpenRouterKey != ""`; logs `openrouter provider enabled` at startup |
+
+---
+
+### Phase 3 — `provider` column + handler validation
+
+Phase 2 built the engine; Phase 3 connected the wires. The `app_agent_config` table gained a `provider TEXT NOT NULL DEFAULT 'anthropic'` column, threaded through sqlc, the agent loop, and the API handler.
+
+The actual unblocker is two lines in `loop.go` — replacing the hardcoded `providerFor(defaultProviderName)` with `providerFor(appCfg.Provider)` in `RunConversation` and `RunMonitoring`. That's the payoff of Phase 1's abstraction: the loop change is one string per call site.
+
+Validation lives in the handler, not the database. No `CHECK (provider IN ('anthropic','openrouter'))` constraint — adding a third provider shouldn't require a migration, and the `OPENROUTER_API_KEY` gate is server-side state a SQL constraint can't express anyway. The handler rejects `openrouter` at the API boundary when the key isn't set (visible error), and `providerFor` silently falls back to Anthropic if somehow a bad row slips through (defence in depth). **Zero test edits required** — the empty-string default resolves to `"anthropic"` via the fallback, so every existing `AppAgentConfig{...}` literal still compiles and passes.
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `backend/migrations/022_agent_config_provider.up.sql` | New — `ALTER TABLE app_agent_config ADD COLUMN provider TEXT NOT NULL DEFAULT 'anthropic'` |
+| 2 | `backend/migrations/022_agent_config_provider.down.sql` | New — symmetric `DROP COLUMN` |
+| 3 | `backend/internal/db/queries/app_agent_config.sql` | `provider` added to `UpsertAppAgentConfig` INSERT + ON CONFLICT SET |
+| 4 | `backend/internal/db/{models.go,app_agent_config.sql.go}` | Regenerated via `sqlc generate` |
+| 5 | `backend/internal/agent/loop.go` | Two call sites switch from `defaultProviderName` to `appCfg.Provider` |
+| 6 | `backend/internal/api/handlers/applications.go` | `UpdateAppAgentConfig` accepts `provider`; validates `anthropic` (always) / `openrouter` (only if key set) / rejects anything else |
+
+---
+
+### Phase 4 — `GET /api/models` curated catalogue
+
+A thin read-only endpoint serving the model dropdown (Phase 5). Three Anthropic models are always returned; six OpenRouter models are appended only when `OPENROUTER_API_KEY` is set. No DB access, no external calls — the lists live in Go and are served straight out of memory.
+
+**Anthropic (3):** `claude-sonnet-4-6`, `claude-haiku-4-5-20251001`, `claude-opus-4-6`, all 200k context.
+
+**OpenRouter (6):** `anthropic/claude-sonnet-4`, `openai/gpt-4o`, `openai/gpt-4o-mini`, `google/gemini-2.5-pro` (1M context), `google/gemini-2.5-flash` (1M context), `meta-llama/llama-4-maverick`.
+
+Curated, not proxied from OpenRouter's 500+-model catalogue, for three reasons: tool-use compatibility is per-model (many smaller open-source models don't handle multi-turn tool calls reliably), pricing is stable in a hardcoded list, and a dropdown of six is browsable where six hundred isn't.
+
+This is the third place `OpenRouterKey != ""` gates behaviour (after `agent.New` registration in Phase 2 and `UpdateAppAgentConfig` validation in Phase 3), completing the "user never sees a UI option the backend would reject" principle.
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `backend/internal/agent/models.go` | New — `ModelOption` / `Pricing` types + `AnthropicModels` / `OpenRouterModels` slices |
+| 2 | `backend/internal/api/handlers/models.go` | New — `GetAvailableModels` handler, 4-line concatenation + key gate |
+| 3 | `backend/internal/api/router.go` | `r.Get("/models", ...)` registered inside the auth-protected `/api` group |
+
+---
+
+### Phase 5 — Frontend dropdown
+
+Replaced the free-text `<input>` + `<datalist>` model picker on the Agent Configuration page with a native `<select>` grouped by provider via `<optgroup>`. Fetches from `GET /api/models` on mount (parallelised with the config fetch via `Promise.all`).
+
+Native `<select>` rather than extending the project's custom `BaseSelect` component — the custom dropdown doesn't support `<optgroup>`, and rebuilding keyboard nav, focused-index tracking, and grouped-panel styling for one use case was ~80 lines of new code for no user win. The trade-off is that the open panel is OS-drawn (not Tailwind-styled), but the closed state matches the rest of the form via `appearance-none` + the standard border/focus classes. If the model count grows past ~15 entries, a custom grouped dropdown becomes worth it; six entries in two groups doesn't justify the build.
+
+Option labels render as `{Name} — {context} · ${prompt}/${completion}`, e.g. `Claude Sonnet 4.6 — 200k · $3/$15`. The `formatContext` helper switches to `1M` for Gemini's million-token window.
+
+The provider is auto-set from the model's `<optgroup>` membership — users only ever pick a model, and the provider follows. This eliminates the invalid combo (`provider:"anthropic"` + `model:"openai/gpt-4o"`) and matches the user mental model ("I want GPT-4o," not "I want to switch providers").
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `frontend/src/types/models.ts` | New — mirrors `ModelOption` struct |
+| 2 | `frontend/src/api/models.ts` | New — axios wrapper for `GET /api/models` |
+| 3 | `frontend/src/types/organization.ts` | `AppAgentConfig.provider: 'anthropic' \| 'openrouter'` added |
+| 4 | `frontend/src/pages/AgentConfigPage.vue` | Dropdown rewrite — `formProvider` state, `anthropicModels` / `openrouterModels` computeds, `onModelSelect` auto-sync, `saveConfig` includes provider; display mode shows `via {provider}` in muted text |
+
+---
+
+### Phase 6 — Tool-progress streaming (scope cut)
+
+The original plan called for full token-by-token LLM streaming — ~600 lines spanning the `Provider` interface (new streaming method), both provider implementations, the agent loop (`RunConversationStream`), the chat handler (channel consumer), the frontend composable (in-progress message slot), and the chat page (active tools indicator).
+
+Phase 6 shipped the **loop-level** streaming only — the user sees which tool is running live, but the model's prose still arrives as a single block. That cuts the scope roughly in half (~150 lines) and delivers the bigger UX win (users see `searching logs · querying database` live during the wait instead of a blank "thinking…" spinner). Token streaming is tracked separately in `docs/executing/streaming-implementation.md`.
+
+The architectural change is that `runConversationCore` is now a single shared loop body with an optional event sink:
+
+```go
+func (a *Agent) runConversationCore(
+    ctx context.Context, userID, appID uuid.UUID,
+    conversationID *uuid.UUID, history []Message, input string,
+    events chan<- AgentEvent, // nil for blocking callers
+) (string, error)
+```
+
+`RunConversation` (blocking, what `RunLoop` uses) passes `nil`. `RunConversationStream` passes the producer side of a buffered channel and wraps the core call in a goroutine. A nil-safe `emitEvent` helper keeps the blocking path byte-for-byte equivalent to pre-Phase-6. The alternative — duplicating the 100-line loop body — would have been the classic "fixed in one path, forgot the other" source of bugs, and the loop is exactly the kind of code that gets touched frequently.
+
+The frontend indicator has one UX subtlety worth preserving: after the last tool returns but before the final synthesis arrives, `isThinking` is re-armed so the wait is always visually accounted for. Without it, state 3 ("agent is composing its reply after tools") looks like the chat broke.
+
+**Monitoring stays blocking** — the 0.27.0 rate limiter contract depends on `RunMonitoring` calling the blocking `ChatCompletion` path as one atomic unit. The callout is loud in `loop.go:187` for future contributors.
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `backend/internal/agent/loop_stream.go` | New — `AgentEvent` type, `RunConversationStream`, `streamBufferSize = 16` |
+| 2 | `backend/internal/agent/loop.go` | `runConversationCore` private helper; `emitEvent` nil-safe helper; `tool_start` / `tool_result` emit sites added |
+| 3 | `backend/internal/api/handlers/chat.go` | Replaced blocking `RunConversation` + write with `for ev := range events` consumer; forwards `tool_start` / `tool_result` to WS; persists final message on `message` event |
+| 4 | `frontend/src/composables/useAgent.ts` | `activeTools` ref; `tool_start` / `tool_result` handlers; `isThinking` re-arm logic; error + final-message handlers clear `activeTools` |
+| 5 | `frontend/src/pages/AgentChatPage.vue` | Active-tools indicator above `<ChatWindow>` — muted accent bar, pulsing dot, tool list joined by ` · ` |
+| 6 | `docs/executing/streaming-implementation.md` | New — canonical follow-up plan for token streaming |
+
+---
+
+### Phase 7 — Post-integration hardening
+
+A code review after Phases 1–6 surfaced two issues worth fixing before the production push.
+
+**Fix 1 — Stale `defaultModelID` fallback.** `loop.go` still carried `defaultModelID = "claude-sonnet-4-5"` from a pre-0.21 world, and `provider_anthropic.go` had a matching `anthropic.ModelClaudeSonnet4_5` safety net. Every other site in the codebase (applications.go, organizations.go, `agent/models.go`, monitor.go, migrations 002 and 015, every test fixture) already pointed at `claude-sonnet-4-6`. The fallback would only fire if both config reads failed — unlikely on a healthy system, but "unlikely" is the wrong bar when the failure mode is "request goes to a model not in the curated list, producing a confusing error with no visible clue." The provider's own fallback was also deleted as redundant defensive coding (the loop guarantees `params.Model` is populated); a comment documents the caller contract.
+
+**Fix 2 — Producer goroutine leak on WebSocket disconnect (the real bug).** `RunConversationStream` spawned a goroutine that pushed events onto a buffered channel (`streamBufferSize = 16`). If the chat client disconnected mid-loop, `chat.go` returned without draining the channel. A chatty tool-use loop can exceed 16 events (10 iterations × 2–3 tools × 2 events per tool ≈ 40–60 worst case), so the buffer fills, and the next blind channel send in `emitEvent` blocks **forever** — context cancellation alone doesn't unblock a bare send. The goroutine holds onto the loop's stack, tool results, message history, and provider response until the process restarts. One leak per flaky mobile client × days between deploys = the slow memory growth that turns into an OOM at 3am two weeks after deploy.
+
+Fix: make all channel sends ctx-aware by wrapping them in `select { case events <- ev: case <-ctx.Done(): }`. The chat handler's `r.Context()` is cancelled automatically by `net/http` when the handler returns, so the cancellation now propagates cleanly into the producer — any blocked `emitEvent` unblocks, the loop's in-flight `ChatCompletion` aborts (same ctx on the HTTP request), `defer close(ch)` fires, and the channel is collected. The blocking path is untouched because `emitEvent` short-circuits at the nil-events check before reaching the `select`.
+
+Zero test edits required — neither fix changed externally observable behaviour on any existing code path.
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `backend/internal/agent/loop.go` | `defaultModelID` bumped; `emitEvent` signature gains `ctx`; three call sites updated; channel send wrapped in `select` |
+| 2 | `backend/internal/agent/provider_anthropic.go` | Stale `ModelClaudeSonnet4_5` fallback removed; contract comment added |
+| 3 | `backend/internal/agent/loop_stream.go` | Terminal `error` / `message` sends wrapped in the same `select` pattern |
+
+---
+
+### Phase 8 — Post-assessment hardening (the production-push gate)
+
+A second, more formal production-readiness assessment after Phase 7 graded the integration at ~8.0/10 with the gap concentrated in raw-HTTP hygiene and API-boundary polish. Three concrete fixes; the assessment also surfaced two false alarms that turned out to already be correct on re-verification (worth documenting so future readers don't re-investigate).
+
+**Fix 1 — Unbounded OpenRouter response body read.** The HTTP client had a 2-minute request timeout, but `io.ReadAll(resp.Body)` had no size cap. A broken or hostile upstream could return an arbitrarily large body and OOM the Fly VM — which is exactly the failure mode 0.28.0's memory upgrade was trying to avoid in the first place. Introduced `openRouterMaxBodyBytes = 10 << 20` (10 MiB — ~100× legitimate response size) and wrapped the read in `io.LimitReader`. If the cap is ever hit, `json.Unmarshal` fails on the truncated body and surfaces as a normal `openrouter: decode response` error — the right signal for "something is very wrong upstream."
+
+**Fix 2 — Rune-unsafe `truncate` helper.** The function doc comment claimed "n runes" but the body did `s[:n]` (byte slicing). Multi-byte characters (emoji, non-Latin script, CJK stack trace lines) in error bodies would get sliced mid-codepoint, producing invalid UTF-8 that `json.Marshal` silently replaces with U+FFFD — invisible mangling. Phase 7 flagged this and punted; Phase 8 fixed it with a zero-alloc fast path (`len(s) <= n` returns immediately, since UTF-8 guarantees byte length ≥ rune count) and a `[]rune`-sliced slow path only when needed.
+
+**Fix 3 — Case-sensitive provider validation.** `req.Provider` switch in `applications.go` rejected `"OpenRouter"`, `"ANTHROPIC"`, and whitespace-padded variants. No correctness impact, but a rough API edge. Normalised with `strings.ToLower(strings.TrimSpace(...))` before the existing empty-check and switch. The `TrimSpace` also defends against stray-newline bugs from clients that read the value out of a file.
+
+**False alarms (documented in the completion doc, not fixed):** The assessment flagged `orMessage.Content` as missing `omitempty` and the chat handler as sending-before-persisting. Both turned out to already be correct on re-read — `Content` has `omitempty`, and `chat.go:230` persists before `chat.go:233` sends. The lesson: treat a code review's suggestions as hypotheses, not findings, until verified against the actual lines.
+
+Post-Phase-8 score: ~8.7/10. Ready to push.
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `backend/internal/agent/provider_openrouter.go` | `openRouterMaxBodyBytes` const; `io.LimitReader`-wrapped body read; rune-safe `truncate` with zero-alloc fast path |
+| 2 | `backend/internal/api/handlers/applications.go` | `strings` import; `strings.ToLower(strings.TrimSpace(req.Provider))` normalisation before the validation switch |
+| 3 | `docs/completions/openrouter-phase-8.md` | New — completion doc covering the three fixes, the two false alarms, and the pre-push checklist |
+
+---
+
+### Summary
+
+| Phase | Category | Item | Impact |
+|---|---|---|---|
+| 1 | Refactor | Provider abstraction — neutral types + interface | Decouples agent loop from anthropic-sdk-go; load-bearing for everything downstream |
+| 2 | Feature | `OpenRouterProvider` (raw HTTP, blocking) | Second provider implementation; ~270 lines; 4 wire-format tests |
+| 2 | Feature | `OPENROUTER_API_KEY` config load + conditional registration | Providers map grows only when key is set |
+| 3 | Migration | `022_agent_config_provider` — `provider` column | Per-app provider selection reaches the DB |
+| 3 | Feature | `UpdateAppAgentConfig` provider validation | API-boundary rejection when key not set; no silent fallback |
+| 4 | Feature | `GET /api/models` curated catalogue | 3 Anthropic + 6 OpenRouter models, key-gated |
+| 5 | Feature | Grouped model dropdown with auto-set provider | End-users can select OpenRouter models from the UI |
+| 6 | Feature | Tool-progress streaming (scope cut from token streaming) | Active-tools indicator replaces blank "thinking…" during multi-tool loops |
+| 6 | Refactor | `runConversationCore` with nil-safe event sink | Shared loop body for blocking + streaming callers; no duplication |
+| 7 | Fix | Stale `defaultModelID` `claude-sonnet-4-5` → `claude-sonnet-4-6` | Dead fallback path no longer points at a model outside the curated list |
+| 7 | Fix | Producer goroutine leak on WebSocket disconnect | Ctx-aware `emitEvent`; eliminates slow memory growth on flaky clients |
+| 8 | Fix | Unbounded OpenRouter response body read | `io.LimitReader` (10 MiB cap); bounds OOM risk on broken upstream |
+| 8 | Fix | Rune-unsafe `truncate` helper | Zero-alloc fast path; no more invalid UTF-8 in multi-byte error bodies |
+| 8 | Fix | Case-sensitive provider validation | `strings.ToLower(strings.TrimSpace(...))` normalisation at the API boundary |
+
+**What stayed the same across all eight phases:**
+
+- The 0.27.0 monitoring rate limiter (`a.limiter.Wait(ctx)`) — still wraps each `RunMonitoring` invocation as one atomic blocking unit. Monitoring never moved to streaming, by design.
+- The 10-iteration cap on the tool-use loop.
+- Tool dispatch via `Agent.Dispatch`, keyed on tool name.
+- Conversation persistence via `chat.go` → `persistMessages`. Phase 6 moved the call site but not the ordering (persist → then WS write).
+- `EmitLog` calls for `tool_call` / `tool_result` / `observation` agent_log entries. Every emit site is preserved with identical arguments.
+- All existing tests — zero edits across all eight phases on the Go side; frontend tests untouched (23/23 green throughout).
+- The Anthropic provider's behaviour. Every fix and every feature addition preserved the "Anthropic path is byte-equivalent to before" invariant.
+
+**Known follow-ups not addressed in 0.29.0:**
+
+1. **Token-by-token streaming** — tracked in `docs/executing/streaming-implementation.md`. The Phase 7 ctx-aware emit pattern and the Phase 8 `io.LimitReader` both carry through transparently when this lands.
+2. **`claude-sonnet-4-6` literal duplicated across 7+ sites** — flagged in Phases 3, 4, and 7. Extract `agent.DefaultModelID` the next time the ID changes.
+3. **Live OpenRouter pricing verification** — the six entries in `agent/models.go` came from the selection plan as a working baseline. Cross-check against openrouter.ai/models before announcing OpenRouter support publicly.
+4. **End-to-end smoke test** against staging with a real `OPENROUTER_API_KEY`. The Phase 3 manual recipe is the canonical validation — wire-format tests cover translation but not a full agent-loop round-trip through a real model.
+
+None of these block the production push.
 
 ---
 

@@ -13,7 +13,7 @@ import (
 )
 
 const getAppAgentConfig = `-- name: GetAppAgentConfig :one
-SELECT app_id, model, mode, schedule_interval_secs, system_prompt_override, created_at, updated_at FROM app_agent_config WHERE app_id = $1
+SELECT app_id, model, mode, schedule_interval_secs, system_prompt_override, created_at, updated_at, provider FROM app_agent_config WHERE app_id = $1
 `
 
 func (q *Queries) GetAppAgentConfig(ctx context.Context, appID uuid.UUID) (AppAgentConfig, error) {
@@ -27,20 +27,22 @@ func (q *Queries) GetAppAgentConfig(ctx context.Context, appID uuid.UUID) (AppAg
 		&i.SystemPromptOverride,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Provider,
 	)
 	return i, err
 }
 
 const upsertAppAgentConfig = `-- name: UpsertAppAgentConfig :one
-INSERT INTO app_agent_config (app_id, model, mode, schedule_interval_secs, system_prompt_override)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO app_agent_config (app_id, model, mode, schedule_interval_secs, system_prompt_override, provider)
+VALUES ($1, $2, $3, $4, $5, $6)
 ON CONFLICT (app_id) DO UPDATE
 SET model = EXCLUDED.model,
     mode = EXCLUDED.mode,
     schedule_interval_secs = EXCLUDED.schedule_interval_secs,
     system_prompt_override = EXCLUDED.system_prompt_override,
+    provider = EXCLUDED.provider,
     updated_at = now()
-RETURNING app_id, model, mode, schedule_interval_secs, system_prompt_override, created_at, updated_at
+RETURNING app_id, model, mode, schedule_interval_secs, system_prompt_override, created_at, updated_at, provider
 `
 
 type UpsertAppAgentConfigParams struct {
@@ -49,6 +51,7 @@ type UpsertAppAgentConfigParams struct {
 	Mode                 string      `json:"mode"`
 	ScheduleIntervalSecs int32       `json:"schedule_interval_secs"`
 	SystemPromptOverride pgtype.Text `json:"system_prompt_override"`
+	Provider             string      `json:"provider"`
 }
 
 func (q *Queries) UpsertAppAgentConfig(ctx context.Context, arg UpsertAppAgentConfigParams) (AppAgentConfig, error) {
@@ -58,6 +61,7 @@ func (q *Queries) UpsertAppAgentConfig(ctx context.Context, arg UpsertAppAgentCo
 		arg.Mode,
 		arg.ScheduleIntervalSecs,
 		arg.SystemPromptOverride,
+		arg.Provider,
 	)
 	var i AppAgentConfig
 	err := row.Scan(
@@ -68,6 +72,7 @@ func (q *Queries) UpsertAppAgentConfig(ctx context.Context, arg UpsertAppAgentCo
 		&i.SystemPromptOverride,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Provider,
 	)
 	return i, err
 }

@@ -83,6 +83,9 @@ func NewRouter(cfg *config.Config, pool *pgxpool.Pool, ag *agent.Agent, jwks *mi
 
 			r.Get("/auth/me", s.Me)
 
+			// Available models for the agent-config dropdown.
+			r.Get("/models", s.GetAvailableModels)
+
 			r.Route("/reports", func(r chi.Router) {
 				r.Get("/", s.ListReports)
 				r.Get("/{id}", s.GetReport)

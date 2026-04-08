@@ -10,6 +10,7 @@ type Config struct {
 	LogFormat             string // "text" (default) or "json"
 	DatabaseURL           string
 	AnthropicKey          string
+	OpenRouterKey         string
 	ElephantasmURL        string
 	ElephantasmKey        string
 	SupabaseURL           string
@@ -32,6 +33,7 @@ func Load() *Config {
 		LogFormat:      getEnv("LOG_FORMAT", "text"),
 		DatabaseURL:    getEnv("DATABASE_URL", ""),
 		AnthropicKey:   getEnv("ANTHROPIC_API_KEY", ""),
+		OpenRouterKey:  getEnv("OPENROUTER_API_KEY", ""),
 		ElephantasmURL: getEnv("ELEPHANTASM_URL", ""),
 		ElephantasmKey: getEnv("ELEPHANTASM_API_KEY", ""),
 		SupabaseURL:    getEnv("SUPABASE_URL", ""),

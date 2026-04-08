@@ -41,6 +41,7 @@ type AppAgentConfig struct {
 	SystemPromptOverride pgtype.Text `json:"system_prompt_override"`
 	CreatedAt            time.Time   `json:"created_at"`
 	UpdatedAt            time.Time   `json:"updated_at"`
+	Provider             string      `json:"provider"`
 }
 
 type Application struct {
