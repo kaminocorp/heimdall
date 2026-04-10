@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.30.2 — Production Schema Drift Fix](#0302--production-schema-drift-fix-2026-04-10)
 - [0.30.1 — GitHub Connection Flow Fixes](#0301--github-connection-flow-fixes-2026-04-10)
 - [0.30.0 — GitHub App Provisioning](#0300--github-app-provisioning-2026-04-10)
 - [0.29.1 — OpenRouter Post-Assessment Polish](#0291--openrouter-post-assessment-polish-2026-04-08)
@@ -72,6 +73,32 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.30.2 — Production Schema Drift Fix (2026-04-10)
+
+Three database migrations (020–022) were committed and deployed with the application code but never executed against the production Supabase database. This caused a 500 error when updating agent config via the model dropdown — the `UpsertAppAgentConfig` query references the `provider` column (added in migration 022), which didn't exist in production.
+
+**Symptom.** Changing the model on the Agent Config page returned `500` with:
+
+```
+ERROR: column "provider" of relation "app_agent_config" does not exist (SQLSTATE 42703)
+```
+
+The `GET` endpoint was unaffected because `SELECT *` tolerates missing columns at the sqlc scan level, but `INSERT INTO ... (provider)` fails hard when PostgreSQL doesn't recognise the column name.
+
+**Root cause.** Migrations 020–022 were added across the GitHub App (v0.30.0) and OpenRouter (v0.29.0) releases but `migrate-up` was never run against production after deploy.
+
+**Fix.** Ran `migrate-up` against production. Three migrations applied:
+
+| Migration | Description |
+|-----------|-------------|
+| 020 | `github_repos` — repo selection table for GitHub App |
+| 021 | `rls_missing_tables` — RLS policies for new tables |
+| 022 | `agent_config_provider` — adds `provider TEXT NOT NULL DEFAULT 'anthropic'` to `app_agent_config` |
+
+**Prevention.** This class of bug (code deployed ahead of schema) should be caught by a pre-deploy migration check or a CI step that compares the deployed migration version against the database. See `docs/executing/schema-drift-check.md` for a proposed solution.
 
 ---
 
