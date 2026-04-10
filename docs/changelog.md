@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.30.0 — GitHub App Provisioning](#0300--github-app-provisioning-2026-04-10)
 - [0.29.1 — OpenRouter Post-Assessment Polish](#0291--openrouter-post-assessment-polish-2026-04-08)
 - [0.29.0 — OpenRouter Multi-Provider Support](#0290--openrouter-multi-provider-support-2026-04-08)
 - [0.28.0 — Fly.io VM Memory Upgrade](#0280--flyio-vm-memory-upgrade-2026-04-06)
@@ -70,6 +71,85 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.30.0 — GitHub App Provisioning (2026-04-10)
+
+The v0.16.0 GitHub App integration was fully implemented in code but never operational — the four required environment variables (`GITHUB_APP_ID`, `GITHUB_CLIENT_ID`, `GITHUB_PRIVATE_KEY`, `GITHUB_APP_SLUG`) were missing from both the local `.env` and Fly.io production secrets. This release provisions the GitHub App and deploys the credentials, making the codebase connector live for the first time.
+
+---
+
+### GitHub App creation
+
+Created **Heimdall Monitoring Agent** (`heimdall-monitoring-agent`) as a GitHub App under the **@kaminocorp** organisation.
+
+| Setting | Value |
+|---------|-------|
+| **Owner** | @kaminocorp |
+| **App name** | Heimdall Monitoring Agent |
+| **Slug** | `heimdall-monitoring-agent` |
+| **Homepage URL** | `https://heimdall-backend.fly.dev` |
+| **Callback URL** | `https://heimdall-backend.fly.dev/api/github/callback` |
+| **Webhook** | Inactive (handler not yet implemented) |
+| **Installation scope** | Any account |
+
+**Permissions granted:**
+- Repository → **Contents**: Read-only (needed for `search_code`, `read_file`, `list_tree`)
+- Repository → **Metadata**: Read-only (auto-granted)
+
+No organisation or account permissions. No event subscriptions.
+
+---
+
+### Credentials deployed
+
+Generated an RSA private key via the GitHub App settings page and collected the App ID (`3334949`) and Client ID (`Iv23liymBQCp9EhNYmZW`).
+
+**Local `.env`** — added four new variables:
+```
+GITHUB_APP_ID=3334949
+GITHUB_CLIENT_ID=Iv23liymBQCp9EhNYmZW
+GITHUB_APP_SLUG=heimdall-monitoring-agent
+GITHUB_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY----- ... -----END RSA PRIVATE KEY-----"
+```
+
+**Fly.io production** — set the same four secrets via `fly secrets set`. Both machines (`683732ef163d68`, `0807de1c140d98`) restarted successfully with rolling deployment. DNS verified.
+
+---
+
+### Fly.io secrets (as of 0.30.0)
+
+```
+ANTHROPIC_API_KEY     ✅ Set
+DATABASE_URL          ✅ Set
+SUPABASE_URL          ✅ Set
+OPENROUTER_API_KEY    ✅ Set
+GITHUB_APP_ID         ✅ Set (new)
+GITHUB_CLIENT_ID      ✅ Set (new)
+GITHUB_PRIVATE_KEY    ✅ Set (new)
+GITHUB_APP_SLUG       ✅ Set (new)
+```
+
+---
+
+### What this unlocks
+
+The GitHub install flow is now operational end-to-end:
+
+1. User navigates to **Connections → Add GitHub** in the Heimdall UI
+2. Backend generates a state JWT and redirects to `github.com/apps/heimdall-monitoring-agent/installations/new`
+3. User selects repositories and installs the app
+4. GitHub redirects back to `/api/github/callback` with `installation_id`
+5. A `github` connection is created in the database
+6. User enables specific repos via the repo selector
+7. Agent can now use the `search_codebase` tool during investigations (`search_code`, `read_file`, `list_tree` actions via the GitHub codebase connector)
+
+---
+
+### No code changes
+
+This release is purely operational — no source files were modified. The GitHub App integration code shipped in v0.16.0 is unchanged. The only file touched in the repo is `.env` (gitignored).
 
 ---
 
