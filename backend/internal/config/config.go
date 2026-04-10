@@ -23,6 +23,7 @@ type Config struct {
 	GitHubClientID        string
 	GitHubAppSlug         string
 	GitHubWebhookSecret   string
+	FrontendURL           string
 	SyslogTLSCert         string
 	SyslogTLSKey          string
 }
@@ -46,6 +47,7 @@ func Load() *Config {
 		GitHubClientID:        getEnv("GITHUB_CLIENT_ID", ""),
 		GitHubAppSlug:         getEnv("GITHUB_APP_SLUG", "heimdall-agent"),
 		GitHubWebhookSecret:   getEnv("GITHUB_WEBHOOK_SECRET", ""),
+		FrontendURL:           getEnv("FRONTEND_URL", "http://localhost:5173"),
 		SyslogTLSCert:         getEnv("SYSLOG_TLS_CERT", ""),
 		SyslogTLSKey:          getEnv("SYSLOG_TLS_KEY", ""),
 	}

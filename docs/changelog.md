@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.30.1 — GitHub Connection Flow Fixes](#0301--github-connection-flow-fixes-2026-04-10)
 - [0.30.0 — GitHub App Provisioning](#0300--github-app-provisioning-2026-04-10)
 - [0.29.1 — OpenRouter Post-Assessment Polish](#0291--openrouter-post-assessment-polish-2026-04-08)
 - [0.29.0 — OpenRouter Multi-Provider Support](#0290--openrouter-multi-provider-support-2026-04-08)
@@ -71,6 +72,59 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.30.1 — GitHub Connection Flow Fixes (2026-04-10)
+
+Three bugs prevented the GitHub App integration (v0.16.0, provisioned in v0.30.0) from working end-to-end. They shared a root cause: the connection wizard assumed it owns connection creation, but for GitHub the OAuth callback creates the connection server-side, leaving the wizard out of sync.
+
+---
+
+### Phase 1 — Fix callback redirect
+
+**Problem.** After the user installs the GitHub App, GitHub redirects to `/api/github/callback` on the **backend** origin. The handler then issued a relative redirect to `/connections?github=installed`, which resolved to the backend server — not the frontend SPA. The user saw a blank page.
+
+**Fix.** Added a `FRONTEND_URL` config field (`backend/internal/config/config.go`, default `http://localhost:5173`) and changed the redirect in `github.go:240` to use the full frontend URL:
+
+```go
+http.Redirect(w, r, s.Config.FrontendURL+"/connections?github=installed", http.StatusFound)
+```
+
+**Deployment requirement:** `FRONTEND_URL` must be set in Fly.io secrets before this fix is live in production.
+
+---
+
+### Phase 2 — Prevent wizard from creating empty GitHub connections
+
+**Problem.** The wizard's `finish()` function called `createConnection()` for all flows, including GitHub. This created a connection with `config: {}` (no `installation_id`), which broke `ListGitHubRepos` and `TestGitHubConnection`. The Done button was also incorrectly enabled on GitHub's install step because the disabled condition (`!stepValid && isTestStep`) only gated test steps.
+
+**Fix.** Two changes in `ConnectionWizard.vue`:
+
+1. Added an early return in `finish()` for GitHub flows — emits `close` without calling `createConnection()`.
+2. Simplified the Done button's `:disabled` from `!stepValid && isTestStep` to `!stepValid`. If a step says it's invalid, Done is disabled regardless of step type. No regression for other flows — their last steps either emit `valid: true` or are test steps that already controlled `stepValid`. Removed the now-dead `isTestStep` computed.
+
+---
+
+### Phase 3 — Detect existing installation and skip to repo selection
+
+**Problem.** `StepGitHubInstall` always showed "Install GitHub App" even when a GitHub connection already existed. Users who deleted and re-added GitHub were forced through the full OAuth flow again, creating confusion and duplicate connections.
+
+**Fix.** Two changes:
+
+1. `ConnectionWizard.vue` — added an early intercept in `selectPlatform()`: when `flowId === 'github'`, checks `store.connections` for an existing `type === 'github'` connection. If found, emits `manage-repos` with the connection ID and `close` — the wizard closes and the repo selector opens immediately. Added `manage-repos` to the emit signature.
+2. `ConnectionsPage.vue` — wired `@manage-repos` on the wizard component to call `closeWizard()` then `openRepoSelector(id)`. Both functions already existed.
+
+---
+
+### Files changed
+
+| File | Change |
+|------|--------|
+| `backend/internal/config/config.go` | Added `FrontendURL` field (env: `FRONTEND_URL`, default `http://localhost:5173`) |
+| `backend/internal/api/handlers/github.go` | Callback redirect uses `s.Config.FrontendURL` prefix |
+| `frontend/src/components/connections/wizard/ConnectionWizard.vue` | GitHub early return in `finish()`, simplified Done button gating, existing-install intercept in `selectPlatform()`, `manage-repos` emit |
+| `frontend/src/pages/ConnectionsPage.vue` | Wired `@manage-repos` handler on wizard |
 
 ---
 

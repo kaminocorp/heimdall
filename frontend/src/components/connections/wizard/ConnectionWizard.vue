@@ -9,6 +9,7 @@ import WizardStepIndicator from './WizardStepIndicator.vue'
 const emit = defineEmits<{
   close: []
   created: [connectionId: string]
+  'manage-repos': [connectionId: string]
 }>()
 
 const store = useConnectionsStore()
@@ -61,12 +62,23 @@ const isFirstStep = computed(() => currentStepIndex.value === 0)
 const isLastStep = computed(() =>
   selectedFlow.value ? currentStepIndex.value === selectedFlow.value.steps.length - 1 : false
 )
-const isTestStep = computed(() => currentStep.value?.id === 'test')
 
 // — Actions —
 function selectPlatform(flowId: string) {
   const flow = getFlowById(flowId)
   if (!flow) return
+
+  // GitHub connections are created by the OAuth callback, not the wizard.
+  // If one already exists, skip straight to repo selection.
+  if (flowId === 'github') {
+    const existing = store.connections.find(c => c.type === 'github')
+    if (existing) {
+      emit('manage-repos', existing.id)
+      emit('close')
+      return
+    }
+  }
+
   selectedFlow.value = flow
   currentStepIndex.value = 0
   stepValid.value = false
@@ -126,7 +138,13 @@ async function createConnection() {
 }
 
 async function finish() {
-  // For flows without a test step (webhook, github), create the connection now.
+  // GitHub connections are created server-side by the OAuth callback — don't duplicate.
+  if (selectedFlow.value?.id === 'github') {
+    emit('close')
+    return
+  }
+
+  // For flows without a test step (webhook), create the connection now.
   if (!createdConnectionId.value) {
     await createConnection()
     if (error.value) return
@@ -232,9 +250,9 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown))
           <button
             v-if="isLastStep"
             @click="finish"
-            :disabled="!stepValid && isTestStep"
+            :disabled="!stepValid"
             class="px-5 py-2 font-mono text-xs font-medium uppercase tracking-wider rounded transition-colors cursor-pointer"
-            :class="(!stepValid && isTestStep)
+            :class="!stepValid
               ? 'bg-action/30 text-bg-primary cursor-not-allowed'
               : 'bg-action text-bg-primary hover:bg-action-hover'"
           >

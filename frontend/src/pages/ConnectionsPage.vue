@@ -222,6 +222,7 @@ function closeRepoSelector() {
       v-if="showWizard"
       @close="closeWizard"
       @created="closeWizard"
+      @manage-repos="(id: string) => { closeWizard(); openRepoSelector(id) }"
     />
   </div>
 </template>

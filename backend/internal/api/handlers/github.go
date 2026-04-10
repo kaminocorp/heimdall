@@ -236,8 +236,8 @@ func (s *Server) GitHubCallback(w http.ResponseWriter, r *http.Request) {
 			"connection_id", conn.ID, "installation_id", installationID, "setup_action", setupAction)
 	}
 
-	// Redirect browser back to the connections page.
-	http.Redirect(w, r, "/connections?github=installed", http.StatusFound)
+	// Redirect browser back to the frontend connections page.
+	http.Redirect(w, r, s.Config.FrontendURL+"/connections?github=installed", http.StatusFound)
 }
 
 // --- Repository Management ---
