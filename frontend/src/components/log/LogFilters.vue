@@ -26,7 +26,7 @@ function handleFilter() {
 const sourceOptions = [
   { value: 'all', label: 'All sources' },
   { value: 'raw', label: 'Raw logs' },
-  { value: 'agent', label: 'Agent activity' },
+  { value: 'agent', label: 'Agent observations' },
 ]
 
 const severityOptions = [

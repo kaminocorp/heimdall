@@ -23,6 +23,7 @@ const sections = [
     label: 'Overview',
     items: [
       { name: 'Dashboard', to: '/dashboard', routeName: 'dashboard' },
+      { name: 'Activity', to: '/activity', routeName: 'activity' },
     ],
   },
   {
@@ -36,7 +37,7 @@ const sections = [
     items: [
       { name: 'Configuration', to: '/agent/config', routeName: 'agent-config' },
       { name: 'Chat', to: '/agent/chat', routeName: 'agent-chat' },
-      { name: 'Log', to: '/agent/log', routeName: 'agent-log' },
+      { name: 'Schedules', to: '/schedules', routeName: 'schedules' },
       { name: 'Notifications', to: '/notifications', routeName: 'notifications' },
     ],
   },

@@ -50,4 +50,4 @@ ORDER BY ingested_at DESC
 LIMIT @row_limit OFFSET @row_offset;
 
 -- name: PruneExpiredLogs :execrows
-DELETE FROM log_buffer WHERE ingested_at < now() - interval '24 hours';
+DELETE FROM log_buffer WHERE ingested_at < now() - interval '48 hours';

@@ -31,7 +31,7 @@ function handleFilter(filters: { severity?: string; connection_id?: string; sour
   <div>
     <!-- Page header -->
     <div class="pb-6 mb-6 border-b border-border">
-      <h2 class="font-mono text-2xl font-bold uppercase tracking-wider text-text-primary">Agent Log</h2>
+      <h2 class="font-mono text-2xl font-bold uppercase tracking-wider text-text-primary">Activity</h2>
       <p class="font-sans text-sm text-text-secondary mt-1">Unified chronological feed of all system activity</p>
     </div>
 

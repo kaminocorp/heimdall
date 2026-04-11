@@ -57,6 +57,13 @@ func NewRouter(cfg *config.Config, pool *pgxpool.Pool, ag *agent.Agent, jwks *mi
 				r.Delete("/notifications/channels/{channelId}", s.DeleteNotificationChannel)
 				r.Post("/notifications/channels/{channelId}/test", s.TestNotificationChannel)
 				r.Get("/notifications/history", s.ListNotificationHistory)
+
+				// Scheduled investigations (Phase 3)
+				r.Get("/schedules", s.ListSchedules)
+				r.Post("/schedules", s.CreateSchedule)
+				r.Patch("/schedules/{id}", s.UpdateSchedule)
+				r.Delete("/schedules/{id}", s.DeleteSchedule)
+				r.Post("/schedules/{id}/run", s.RunScheduleNow)
 			})
 
 			// GitHub App integration (install requires JWT; callback is public above)

@@ -70,20 +70,36 @@ func (a *Agent) providerFor(name string) Provider {
 	return a.providers[defaultProviderName]
 }
 
-// Start launches the monitoring goroutine.
-// Safe to call multiple times: stops the previous instance first.
+// Start launches the agent's background goroutines: the monitoring loop,
+// the log_buffer pruner, and the investigation scheduler. Safe to call
+// multiple times: stops the previous instance first. Stop() waits on a.wg,
+// so all goroutines are joined before Stop returns.
 func (a *Agent) Start(ctx context.Context) {
 	if a.cancel != nil {
 		slog.Warn("agent already running, stopping previous instance before restart")
 		a.Stop()
 	}
 	ctx, a.cancel = context.WithCancel(ctx)
+
 	a.wg.Add(1)
 	go func() {
 		defer a.wg.Done()
 		a.Monitor(ctx)
 	}()
-	slog.Info("agent started, monitoring goroutine spawned")
+
+	a.wg.Add(1)
+	go func() {
+		defer a.wg.Done()
+		a.Prune(ctx)
+	}()
+
+	a.wg.Add(1)
+	go func() {
+		defer a.wg.Done()
+		a.InvestigationScheduler(ctx)
+	}()
+
+	slog.Info("agent started, monitoring + pruner + scheduler goroutines spawned")
 }
 
 // Stop cancels the monitoring goroutine and waits for it to finish.

@@ -254,7 +254,7 @@ func (q *Queries) ListLogsByUserAndSeverity(ctx context.Context, arg ListLogsByU
 }
 
 const pruneExpiredLogs = `-- name: PruneExpiredLogs :execrows
-DELETE FROM log_buffer WHERE ingested_at < now() - interval '24 hours'
+DELETE FROM log_buffer WHERE ingested_at < now() - interval '48 hours'
 `
 
 func (q *Queries) PruneExpiredLogs(ctx context.Context) (int64, error) {

@@ -103,6 +103,22 @@ type Investigation struct {
 	UserID        uuid.UUID       `json:"user_id"`
 }
 
+type InvestigationSchedule struct {
+	ID           uuid.UUID   `json:"id"`
+	AppID        uuid.UUID   `json:"app_id"`
+	Name         string      `json:"name"`
+	Prompt       string      `json:"prompt"`
+	IntervalSecs int32       `json:"interval_secs"`
+	CronExpr     pgtype.Text `json:"cron_expr"`
+	Enabled      bool        `json:"enabled"`
+	LastRunAt    *time.Time  `json:"last_run_at"`
+	LastStatus   pgtype.Text `json:"last_status"`
+	LastError    pgtype.Text `json:"last_error"`
+	LastSummary  pgtype.Text `json:"last_summary"`
+	CreatedAt    time.Time   `json:"created_at"`
+	UpdatedAt    time.Time   `json:"updated_at"`
+}
+
 type LogBuffer struct {
 	ID           uuid.UUID       `json:"id"`
 	ConnectionID uuid.UUID       `json:"connection_id"`

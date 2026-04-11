@@ -157,6 +157,13 @@ func testSetup(t *testing.T) *testEnv {
 			r.Put("/agent/config", srv.UpdateAppAgentConfig)
 			r.Get("/monitoring/status", srv.GetMonitoringStatus)
 			r.Get("/stats", srv.GetAppDashboardStats)
+
+			// Scheduled investigations (Phase 3)
+			r.Get("/schedules", srv.ListSchedules)
+			r.Post("/schedules", srv.CreateSchedule)
+			r.Patch("/schedules/{id}", srv.UpdateSchedule)
+			r.Delete("/schedules/{id}", srv.DeleteSchedule)
+			r.Post("/schedules/{id}/run", srv.RunScheduleNow)
 		})
 
 		r.Route("/connections", func(r chi.Router) {

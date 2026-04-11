@@ -56,9 +56,20 @@ const router = createRouter({
       component: () => import('@/pages/AgentChatPage.vue'),
     },
     {
+      path: '/schedules',
+      name: 'schedules',
+      component: () => import('@/pages/SchedulesPage.vue'),
+    },
+    {
+      path: '/activity',
+      name: 'activity',
+      component: () => import('@/pages/ActivityPage.vue'),
+    },
+    // Legacy path kept so existing bookmarks and in-product links survive
+    // the Phase 2 rename. Safe to delete after a grace period.
+    {
       path: '/agent/log',
-      name: 'agent-log',
-      component: () => import('@/pages/AgentLogPage.vue'),
+      redirect: '/activity',
     },
     {
       path: '/notifications',
