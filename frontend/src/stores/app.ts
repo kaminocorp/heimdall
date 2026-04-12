@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import type { Organization, Application, AppAgentConfig, MonitoringStatus } from '@/types/organization'
+import type { Organization, Application } from '@/types/organization'
 import * as orgApi from '@/api/organizations'
 import * as appApi from '@/api/applications'
 
@@ -52,11 +52,47 @@ export const useAppStore = defineStore('app', () => {
     return result
   }
 
-  async function createApp(name: string) {
+  // `select` controls whether the new app becomes the currently-selected one
+  // immediately after creation. Defaults to true so the common "user clicks
+  // +Create" path stays idiomatic. The AppWizard passes { select: false }
+  // because it creates the app *eagerly* at step 1 and only commits the
+  // selection when the user reaches the final step — if we auto-selected the
+  // draft and the user discarded mid-wizard, their previous selection would
+  // be silently lost.
+  async function createApp(name: string, { select = true }: { select?: boolean } = {}) {
     const app = await appApi.createApplication(name)
     applications.value.unshift(app)
-    selectApp(app.id)
+    if (select) {
+      selectApp(app.id)
+    }
     return app
+  }
+
+  // Deletes an application via the backend and reconciles local state.
+  //
+  // Reconciliation rules:
+  //   1. The row is removed from the local `applications` list optimistically
+  //      *after* the server call succeeds (no rollback needed).
+  //   2. If the deleted app was the currently-selected one, we fall back to
+  //      the first remaining app so the sidebar selector never ends up in an
+  //      invalid "points to nothing" state.
+  //   3. The backend's last-app guard (409 + code: "last_app") is surfaced
+  //      as-is — the caller is expected to either check upfront (Settings
+  //      page disables the button) or catch and render the error (the
+  //      wizard's discard path should never hit this because it's deleting
+  //      a *newly-created* app).
+  async function deleteApp(appId: string) {
+    await appApi.deleteApplication(appId)
+    applications.value = applications.value.filter((a) => a.id !== appId)
+    if (currentAppId.value === appId) {
+      const fallback = applications.value[0]?.id ?? null
+      if (fallback) {
+        selectApp(fallback)
+      } else {
+        currentAppId.value = null
+        localStorage.removeItem('heimdall_current_app')
+      }
+    }
   }
 
   function reset() {
@@ -77,6 +113,7 @@ export const useAppStore = defineStore('app', () => {
     selectApp,
     onboard,
     createApp,
+    deleteApp,
     reset,
   }
 })

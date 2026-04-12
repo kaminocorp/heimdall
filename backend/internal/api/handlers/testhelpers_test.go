@@ -152,6 +152,7 @@ func testSetup(t *testing.T) *testEnv {
 		// Per-application routes
 		r.Route("/apps/{appId}", func(r chi.Router) {
 			r.Get("/", srv.GetApplication)
+			r.Delete("/", srv.DeleteApplication)
 			r.Get("/connections", srv.ListConnectionsByApp)
 			r.Get("/agent/config", srv.GetAppAgentConfig)
 			r.Put("/agent/config", srv.UpdateAppAgentConfig)

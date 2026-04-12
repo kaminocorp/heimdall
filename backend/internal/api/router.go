@@ -42,6 +42,7 @@ func NewRouter(cfg *config.Config, pool *pgxpool.Pool, ag *agent.Agent, jwks *mi
 			// Per-application routes
 			r.Route("/apps/{appId}", func(r chi.Router) {
 				r.Get("/", s.GetApplication)
+				r.Delete("/", s.DeleteApplication)
 				r.Get("/connections", s.ListConnectionsByApp)
 				r.Get("/agent/config", s.GetAppAgentConfig)
 				r.Put("/agent/config", s.UpdateAppAgentConfig)

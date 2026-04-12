@@ -216,6 +216,156 @@ func TestGetAppDashboardStats(t *testing.T) {
 	assert.True(t, hasActive)
 }
 
+func TestDeleteApplication(t *testing.T) {
+	env := testSetup(t)
+
+	// Create a second app so we're above the last-app guard.
+	rr := env.request(t, http.MethodPost, "/api/apps", map[string]string{"name": "Second App"})
+	require.Equal(t, http.StatusCreated, rr.Code)
+	var created map[string]interface{}
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&created))
+	secondID := created["id"].(string)
+
+	// Delete the second app: should 204 and list should drop back to 1.
+	rr = env.request(t, http.MethodDelete, fmt.Sprintf("/api/apps/%s", secondID), nil)
+	require.Equal(t, http.StatusNoContent, rr.Code)
+
+	rr = env.request(t, http.MethodGet, "/api/apps", nil)
+	require.Equal(t, http.StatusOK, rr.Code)
+	var apps []map[string]interface{}
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&apps))
+	assert.Len(t, apps, 1)
+	assert.Equal(t, env.AppID, apps[0]["id"])
+}
+
+func TestDeleteApplication_LastAppGuard(t *testing.T) {
+	env := testSetup(t)
+
+	// testSetup creates exactly one app — deleting it should hit the guard.
+	rr := env.request(t, http.MethodDelete, fmt.Sprintf("/api/apps/%s", env.AppID), nil)
+	require.Equal(t, http.StatusConflict, rr.Code)
+
+	var body map[string]interface{}
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&body))
+	assert.Equal(t, "last_app", body["code"])
+	assert.Contains(t, body["error"], "last application")
+
+	// The app must still exist after the failed delete.
+	rr = env.request(t, http.MethodGet, "/api/apps", nil)
+	require.Equal(t, http.StatusOK, rr.Code)
+	var apps []map[string]interface{}
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&apps))
+	assert.Len(t, apps, 1)
+}
+
+func TestDeleteApplication_WrongOrg(t *testing.T) {
+	env := testSetup(t)
+
+	// Bootstrap a foreign org + app the authenticated user should not see.
+	otherOrgID := uuid.New()
+	otherOrgSlug := fmt.Sprintf("other-org-%s", otherOrgID.String()[:8])
+	_, err := env.Pool.Exec(t.Context(),
+		"INSERT INTO organizations (id, name, slug) VALUES ($1, $2, $3)",
+		otherOrgID, "Other Org", otherOrgSlug,
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		env.Pool.Exec(t.Context(), "DELETE FROM organizations WHERE id = $1", otherOrgID)
+	})
+
+	otherAppID := uuid.New()
+	_, err = env.Pool.Exec(t.Context(),
+		"INSERT INTO applications (id, org_id, name, status) VALUES ($1, $2, $3, $4)",
+		otherAppID, otherOrgID, "Other App", "active",
+	)
+	require.NoError(t, err)
+
+	// Cross-org delete must 404 — we don't leak existence of resources the
+	// caller can't see, matching the pattern in TestGetApplication_WrongOrg.
+	rr := env.request(t, http.MethodDelete, fmt.Sprintf("/api/apps/%s", otherAppID.String()), nil)
+	assert.Equal(t, http.StatusNotFound, rr.Code)
+
+	// And the foreign app must still exist.
+	var exists bool
+	err = env.Pool.QueryRow(t.Context(), "SELECT EXISTS (SELECT 1 FROM applications WHERE id = $1)", otherAppID).Scan(&exists)
+	require.NoError(t, err)
+	assert.True(t, exists, "foreign app should not be deleted by a cross-org request")
+}
+
+func TestDeleteApplication_CascadesToConnections(t *testing.T) {
+	env := testSetup(t)
+
+	// Create a second app + a connection inside it. We delete the *second*
+	// app (not env.AppID) because env.AppID is the last-app-guarded default.
+	rr := env.request(t, http.MethodPost, "/api/apps", map[string]string{"name": "Cascade Target"})
+	require.Equal(t, http.StatusCreated, rr.Code)
+	var created map[string]interface{}
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&created))
+	targetID := created["id"].(string)
+
+	rr = env.request(t, http.MethodPost, "/api/connections", map[string]string{
+		"app_id": targetID,
+		"name":   "cascade-conn",
+		"type":   "webhook_logs",
+	})
+	require.Equal(t, http.StatusCreated, rr.Code)
+	var conn map[string]interface{}
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&conn))
+	connID := conn["id"].(string)
+
+	// Delete the app — the connection row should vanish via FK cascade.
+	rr = env.request(t, http.MethodDelete, fmt.Sprintf("/api/apps/%s", targetID), nil)
+	require.Equal(t, http.StatusNoContent, rr.Code)
+
+	// Codify the cascade assumption: if a future migration accidentally drops
+	// ON DELETE CASCADE on connections.app_id, this assertion will fail and
+	// we'll catch the regression in CI instead of in production.
+	var exists bool
+	err := env.Pool.QueryRow(t.Context(), "SELECT EXISTS (SELECT 1 FROM connections WHERE id = $1)", connID).Scan(&exists)
+	require.NoError(t, err)
+	assert.False(t, exists, "connection should be cascade-deleted with its parent app")
+}
+
+func TestListApplications_WithCounts(t *testing.T) {
+	env := testSetup(t)
+
+	// Seed two connections under env.AppID so the counts are non-trivial.
+	env.createTestConnection(t, "counts-conn-a")
+	env.createTestConnection(t, "counts-conn-b")
+
+	rr := env.request(t, http.MethodGet, "/api/apps?include=counts", nil)
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var rows []map[string]interface{}
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&rows))
+	require.Len(t, rows, 1)
+
+	row := rows[0]
+	assert.Equal(t, env.AppID, row["id"])
+	assert.Equal(t, float64(2), row["connection_count"])
+	// Schedule count is 0 since we didn't seed any investigation_schedules.
+	assert.Equal(t, float64(0), row["schedule_count"])
+}
+
+func TestListApplications_DefaultShapeUnchanged(t *testing.T) {
+	env := testSetup(t)
+
+	// Default call (no ?include=counts) must not surface the count fields —
+	// this guards against accidental shape changes that would break the
+	// sidebar selector and any other lean consumer.
+	rr := env.request(t, http.MethodGet, "/api/apps", nil)
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var rows []map[string]interface{}
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&rows))
+	require.Len(t, rows, 1)
+
+	_, hasConnCount := rows[0]["connection_count"]
+	_, hasSchedCount := rows[0]["schedule_count"]
+	assert.False(t, hasConnCount, "default list must not include connection_count")
+	assert.False(t, hasSchedCount, "default list must not include schedule_count")
+}
+
 func TestListConnectionsByApp(t *testing.T) {
 	env := testSetup(t)
 

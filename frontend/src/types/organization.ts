@@ -15,6 +15,15 @@ export interface Application {
   updated_at: string
 }
 
+// The enriched row returned by GET /api/apps?include=counts. Mirrors the
+// backend's `ListApplicationsByOrgWithCountsRow` struct. Used by the
+// Settings → Applications section to render per-app summaries without
+// firing an N+1 query per row.
+export interface ApplicationWithCounts extends Application {
+  connection_count: number
+  schedule_count: number
+}
+
 export interface AppAgentConfig {
   app_id: string
   model: string

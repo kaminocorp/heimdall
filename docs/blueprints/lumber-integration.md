@@ -14,8 +14,8 @@ The underlying model is MongoDB's `mdbr-leaf-mt`, a multi-label log classifier h
 
 | Field | Type | Example |
 |-------|------|---------|
-| `Type` | string | `ERROR`, `REQUEST`, `DEPLOY`, `SYSTEM`, `ACCESS`, `DATA`, `SCHEDULED` |
-| `Category` | string | `connection_failure`, `server_error`, `login_failure`, `cron_failed` |
+| `Type` | string | `ERROR`, `REQUEST`, `DEPLOY`, `SYSTEM`, `ACCESS`, `PERFORMANCE` (plus `UNCLASSIFIED` for off-taxonomy logs) |
+| `Category` | string | `connection_failure`, `server_error`, `login_failure`, `slow_request` |
 | `Severity` | string | `error`, `warning`, `info`, `debug` |
 | `Confidence` | float64 | `0.87` (cosine similarity, 0.0–1.0) |
 | `Summary` | string | Lumber's compacted plain-text summary of the log |
@@ -214,7 +214,7 @@ Defined in `backend/internal/agent/monitor.go`:
 | `monitorAppTimeout` | 2m | Per-app processing deadline |
 | `maxConcurrentApps` | 10 | Semaphore limit on parallel app processing |
 
-Confidence threshold: `0.5`, set in `NewLumberClassifier` via `lumber.WithConfidenceThreshold(0.5)` and re-checked explicitly in `classifier_lumber.go:56`.
+Confidence threshold: `0.5`, owned explicitly in `classifier_lumber.go:57` — **not** delegated to Lumber's `WithConfidenceThreshold` option. `NewLumberClassifier` only passes `WithModelDir` and `WithVerbosity` to the engine; the gate policy (threshold + `ShouldEscalate`) lives entirely in the Heimdall side of the boundary so it's reviewed as Heimdall code, not Lumber config.
 
 ---
 

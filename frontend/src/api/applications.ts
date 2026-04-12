@@ -1,5 +1,5 @@
 import client from './client'
-import type { Application, AppAgentConfig, MonitoringStatus } from '@/types/organization'
+import type { Application, ApplicationWithCounts, AppAgentConfig, MonitoringStatus } from '@/types/organization'
 import type { Connection } from '@/types/connection'
 
 export async function listApplications(): Promise<Application[]> {
@@ -7,9 +7,24 @@ export async function listApplications(): Promise<Application[]> {
   return data
 }
 
+// Enriched variant — hits GET /api/apps?include=counts so the Settings page
+// can render connection/schedule counts in a single request. The default
+// `listApplications` is kept unchanged so lean callers (sidebar selector)
+// keep their O(1) payload.
+export async function listApplicationsWithCounts(): Promise<ApplicationWithCounts[]> {
+  const { data } = await client.get<ApplicationWithCounts[]>('/apps', {
+    params: { include: 'counts' },
+  })
+  return data
+}
+
 export async function createApplication(name: string): Promise<Application> {
   const { data } = await client.post<Application>('/apps', { name })
   return data
+}
+
+export async function deleteApplication(appId: string): Promise<void> {
+  await client.delete(`/apps/${appId}`)
 }
 
 export async function getApplication(appId: string): Promise<Application> {

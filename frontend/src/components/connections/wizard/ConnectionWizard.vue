@@ -6,6 +6,15 @@ import { getFlowById, type PlatformFlow, type WizardState } from './flows'
 import PlatformGrid from './PlatformGrid.vue'
 import WizardStepIndicator from './WizardStepIndicator.vue'
 
+// `appId` is an optional override. When the wizard is opened from the
+// connections page it's omitted and we fall back to the currently-selected
+// app — matching historical behaviour. When it's embedded in the AppWizard
+// (multi-app setup flow), the caller passes the *draft* app id explicitly,
+// because the new app has deliberately NOT been auto-selected yet.
+const props = defineProps<{
+  appId?: string
+}>()
+
 const emit = defineEmits<{
   close: []
   created: [connectionId: string]
@@ -14,6 +23,11 @@ const emit = defineEmits<{
 
 const store = useConnectionsStore()
 const appStore = useAppStore()
+
+// Resolved target app — caller-provided override wins over the global
+// selection. Computed so that if the store selection changes while the
+// wizard is open in the "no override" case, we still track it live.
+const targetAppId = computed(() => props.appId ?? appStore.currentAppId)
 
 // — State machine —
 const selectedFlow = ref<PlatformFlow | null>(null)
@@ -58,7 +72,6 @@ function confirmDiscard() {
 // — Derived —
 const currentStep = computed(() => selectedFlow.value?.steps[currentStepIndex.value] ?? null)
 const stepLabels = computed(() => selectedFlow.value?.steps.map(s => s.label) ?? [])
-const isFirstStep = computed(() => currentStepIndex.value === 0)
 const isLastStep = computed(() =>
   selectedFlow.value ? currentStepIndex.value === selectedFlow.value.steps.length - 1 : false
 )
@@ -115,14 +128,14 @@ async function goNext() {
 }
 
 async function createConnection() {
-  if (!selectedFlow.value || !appStore.currentAppId) return
+  if (!selectedFlow.value || !targetAppId.value) return
 
   creating.value = true
   error.value = null
 
   try {
     const conn = await store.createConnection({
-      app_id: appStore.currentAppId,
+      app_id: targetAppId.value,
       name: state.name,
       type: selectedFlow.value.connectorType,
       direction: selectedFlow.value.direction,

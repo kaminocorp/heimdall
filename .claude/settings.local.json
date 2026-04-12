@@ -12,7 +12,9 @@
       "WebSearch",
       "WebFetch(domain:github.com)",
       "WebFetch(domain:gofastmcp.com)",
-      "WebFetch(domain:fly.io)"
+      "WebFetch(domain:fly.io)",
+      "WebFetch(domain:openrouter.ai)",
+      "WebFetch(domain:www.digitalapplied.com)"
     ]
   }
 }

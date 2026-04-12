@@ -6,7 +6,7 @@ How Heimdall models and manages connections — the integrations between the pla
 
 ## Schema
 
-The `connections` table is defined in migration `001` with additions in `007` (user scoping) and `014` (app scoping).
+The `connections` table is defined in migration `001` with additions in `007` (user scoping), `008` (webhook-token index), and `014` (app scoping via `app_id`). A broader connector ecosystem (pollers, syslog TLS, GitHub App) has been layered on top via newer migrations and handler code, but the `connections` row shape itself has been stable since 014.
 
 | Column | Type | Default | Nullable | Description |
 |--------|------|---------|----------|-------------|
@@ -36,14 +36,23 @@ The `connections` table is defined in migration `001` with additions in `007` (u
 
 ### Type
 
-Determines what kind of infrastructure the connection links to. Stored as free-text — no DB-level constraint. The frontend enforces valid options via a `<select>` dropdown.
+Determines what kind of infrastructure the connection links to. Stored as free-text — no DB-level constraint. The frontend enforces valid options via a `<select>` dropdown. Connectors fall into three broad shapes, matching the interface hierarchy in `backend/internal/connectors/connector.go`:
 
-| Value | Label | Description |
-|-------|-------|-------------|
-| `postgres` | PostgreSQL | Relational database. Supports test-on-create (live TCP ping via `database.New`). Agent can run read-only SQL queries against it. |
-| `webhook_logs` | Webhook Logs | Log ingestion endpoint. A `webhook_token` is auto-generated on create and stored in `config`. External systems POST logs to `/api/webhooks/logs/{token}`. |
-| `syslog` | Syslog | Syslog source (not yet implemented server-side). Config captures host, port, and protocol. |
-| `github` | GitHub | Codebase connection. Config captures owner, repo, and personal access token. Intended for agent code inspection during investigation. |
+- **Push/stream ingestion** (logs arrive from the outside): `webhook_logs`, `syslog`, plus the public OTLP endpoint which writes directly into `log_buffer` without its own `connections` row.
+- **Pull/poller ingestion** (Heimdall fetches on a schedule, managed by `connectors.Poller`): `flyio`, `vercel`, `railway`, `mongodb`, `supabase`.
+- **Query connectors** (the agent queries on-demand during investigation): `postgres` (read-only SQL), `github` (GitHub App-backed code search).
+
+| Value | Kind | Description |
+|-------|------|-------------|
+| `webhook_logs` | push | Log ingestion endpoint. A `webhook_token` is auto-generated on create and stored in `config`. External systems POST to `/api/webhooks/logs` with `Authorization: Bearer <webhook_token>`. The SDKs (`@heimdall/sdk`, `heimdall-sdk`, `sdk-go`) all use this endpoint. |
+| `syslog` | push | Syslog over TCP/TLS. Backed by `connectors.ListenerManager` — listeners are spawned at boot for every `active` syslog connection and rehydrated in `resumePollers`. Supports TLS when `SYSLOG_TLS_CERT` / `SYSLOG_TLS_KEY` env vars are set. |
+| `flyio` | poll | Fly.io logs poller. Polled via `connectors.Poller`. |
+| `vercel` | poll | Vercel logs poller. |
+| `railway` | poll | Railway logs poller. |
+| `mongodb` | poll | MongoDB Atlas log poller. |
+| `supabase` | poll | Supabase log poller. |
+| `postgres` | query | Relational database. Supports test-on-create (live TCP ping via `database.New`). Agent runs read-only SQL against it via the `query_database` tool (forces `default_transaction_read_only=on`). |
+| `github` | query | Codebase connection. Backed by the **Heimdall GitHub App** (not a PAT) — config stores `installation_id`; a secondary `github_repos` table (migration 020) tracks which repos inside the installation are enabled for this connection/app. Agent uses the `search_codebase` tool to search/read code via the GitHub App client. |
 
 ### Direction
 
@@ -87,23 +96,32 @@ A `JSONB` object whose shape depends on `type`. No schema validation at the DB l
 |-------|------|----------|---------|---------|
 | `webhook_token` | string | Auto | Auto-generated (32 bytes hex) | `a1b2c3d4...` |
 
-No user-provided config fields. The token is generated server-side in `CreateConnection` and used to authenticate incoming log POSTs at `/api/webhooks/logs/{token}`.
+No user-provided config fields. The token is generated server-side in `CreateConnection` and used to authenticate incoming POSTs at `/api/webhooks/logs` via the `Authorization: Bearer <token>` header. The token is looked up against `connections.config->>'webhook_token'` (indexed by migration 008).
 
 #### `syslog`
 
 | Field | Type | Required | Default | Example |
 |-------|------|----------|---------|---------|
-| `host` | string | Yes | — | `syslog.example.com` |
-| `port` | number | No | `514` | `514` |
-| `protocol` | string | No | `udp` | `udp`, `tcp` |
+| `host` | string | Yes | — | `0.0.0.0` (bind address for incoming syslog) |
+| `port` | number | No | `6514` | `6514` (TLS) / `514` (plain) |
+| `protocol` | string | No | `tls` | `tcp`, `tls` |
+| `tls_cert` | string | No (auto) | From `SYSLOG_TLS_CERT` env | PEM-encoded cert |
+| `tls_key` | string | No (auto) | From `SYSLOG_TLS_KEY` env | PEM-encoded key |
+
+The listener is spawned on create (and at boot via `resumeSyslogListeners`) and managed by `connectors.ListenerManager`. Server-level TLS material is injected from config if the connection row doesn't carry its own.
+
+#### Poll-based connectors (`flyio`, `vercel`, `railway`, `mongodb`, `supabase`)
+
+Each has its own provider-specific config shape (API tokens, project IDs, log group names, etc.) defined in `backend/internal/connectors/logs/<provider>.go`. Common pattern: a long-lived credential + the scope of what to poll. On create, `StartPoller` spawns a goroutine that polls the provider's API and inserts matching entries into `log_buffer` under this connection's `user_id` / `connection_id`.
 
 #### `github`
 
-| Field | Type | Required | Default | Example |
-|-------|------|----------|---------|---------|
-| `owner` | string | Yes | — | `my-org` |
-| `repo` | string | Yes | — | `my-app` |
-| `token` | string | Yes | — | `ghp_xxxxxxxxxxxx` |
+| Field | Type | Required | Default | Notes |
+|-------|------|----------|---------|-------|
+| `installation_id` | number | Yes | — | GitHub App installation ID returned from the `/api/github/callback` OAuth flow |
+| `account_login` | string | Yes | — | GitHub org or user that installed the app |
+
+GitHub connections are provisioned via the Heimdall **GitHub App** (not a PAT). The flow is: user hits `GET /api/github/install` → redirects to GitHub → GitHub redirects back to `GET /api/github/callback` with an installation ID → a `github` connection row is created and repos are discovered via the GitHub App client. The per-repo enablement state lives in the separate `github_repos` table (migration 020), queried via `ListEnabledGitHubReposByApp` during agent tool dispatch.
 
 ---
 
@@ -133,6 +151,13 @@ All endpoints require JWT authentication.
 | `PUT` | `/api/connections/{id}` | `UpdateConnection` | Update name, type, direction, config, status |
 | `DELETE` | `/api/connections/{id}` | `DeleteConnection` | Delete a connection |
 | `POST` | `/api/connections/{id}/test` | `TestConnection` | Test connectivity (Postgres: live ping; others: auto-pass) |
+| `GET` | `/api/connections/{id}/github/repos` | `ListGitHubRepos` | List repos discovered for a GitHub App installation |
+| `PUT` | `/api/connections/{id}/github/repos` | `UpdateGitHubRepos` | Update which repos are enabled for agent code search |
+| `GET` | `/api/apps/{appId}/connections` | `ListConnectionsByApp` | App-scoped list (used by the app dashboard) |
+| `POST` | `/api/webhooks/logs` | `IngestWebhookLogs` | **Public** — Bearer-auth log ingestion for `webhook_logs` connections |
+| `POST` | `/api/v1/logs` | `IngestOTLPLogs` | **Public** — OTLP/HTTP ingestion (no connection row required) |
+| `GET` | `/api/github/install` | `InstallGitHub` | Kick off the GitHub App install flow |
+| `GET` | `/api/github/callback` | `GitHubCallback` | GitHub App install callback — creates the `github` connection |
 
 ---
 
@@ -142,9 +167,19 @@ All endpoints require JWT authentication.
 |------|------|
 | `backend/migrations/001_create_connections.up.sql` | Initial table definition |
 | `backend/migrations/007_add_user_id_to_connections.up.sql` | User scoping |
+| `backend/migrations/008_add_webhook_token_index.up.sql` | Index for webhook-token lookup |
 | `backend/migrations/014_organizations_applications.up.sql` | App scoping (`app_id` column) |
+| `backend/migrations/020_github_repos.up.sql` | `github_repos` table — per-repo enablement for GitHub connections |
 | `backend/internal/db/queries/connections.sql` | sqlc query definitions |
 | `backend/internal/db/connections.sql.go` | Generated Go query methods |
 | `backend/internal/api/handlers/connections.go` | HTTP handlers (CRUD + test) |
+| `backend/internal/api/handlers/webhooks.go` | `POST /api/webhooks/logs` ingestion handler |
+| `backend/internal/api/handlers/github.go` | GitHub App install + callback handlers |
+| `backend/internal/connectors/connector.go` | `Connector` / `StreamConnector` / `QueryConnector` interface hierarchy |
+| `backend/internal/connectors/poller.go` | Goroutine pool for poll-based connectors |
+| `backend/internal/connectors/listener.go` | `ListenerManager` for syslog TCP/TLS listeners |
+| `backend/internal/connectors/logs/*.go` | Per-provider implementations (flyio, vercel, railway, mongodb, supabase, syslog, webhook) |
+| `backend/internal/connectors/database/postgres.go` | Read-only Postgres connector used by `query_database` |
+| `backend/internal/connectors/codebase/github.go` | GitHub App code-search connector used by `search_codebase` |
 | `frontend/src/types/connection.ts` | TypeScript types and payload interfaces |
 | `frontend/src/components/connections/ConnectionForm.vue` | Create/edit form with type-specific config fields |

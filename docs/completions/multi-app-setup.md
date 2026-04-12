@@ -83,31 +83,49 @@ Sidebar footer gets a "Settings" link above the existing org-name/email/logout b
 
 ## Implementation phases
 
-Four phases, each independently shippable. Phase 1 is the smallest backend change; phases 2 and 3 are the bulk of the work; phase 4 is polish.
+Four phases, each independently shippable. Phase 1 bundles all backend changes; phases 2 and 3 are the bulk of the work (frontend); phase 4 is polish.
 
-### Phase 1 — Backend: delete-app handler
+### Phase 1 — Backend: delete-app handler + counts endpoint
 
-**Goal:** expose the already-existing `DeleteApplication` query over HTTP, scoped to the caller's org.
+**Goal:** expose the already-existing `DeleteApplication` query over HTTP, and add an opt-in `?include=counts` variant of `GET /api/apps` so the Settings page can fetch connection/schedule counts in a single request instead of N+1.
 
 **Tasks:**
 
 1. **`backend/internal/api/handlers/applications.go`** — add `DeleteApplication(w, r)` handler:
    - Extract `{appId}` from URL, parse as `uuid.UUID`.
    - Call `authorizeApp(ctx, q, userID, appID)` (existing helper) — returns 404 if the app isn't in the caller's org. This matches how every other `/api/apps/{appId}/*` handler guards access.
+   - Enforce the **last-app guard**: count apps in the caller's org; if count == 1, return 409 with `{"error": "cannot delete last application", "code": "last_app"}`. The `code` field is important — the frontend uses it to render the exact reason (vs. a generic error toast).
    - Call `q.DeleteApplication(ctx, appID)`.
-   - Handle the edge case: if this is the user's **last** app, return 409 with `{"error": "cannot delete last application"}`. This prevents users from orphaning themselves — they'd have no current-app and the sidebar selector would break. Alternative: allow it and redirect to onboarding. **I lean toward 409** because it's safer and easier to undo.
    - Return 204 on success.
 
 2. **`backend/internal/api/router.go`** — mount `router.Delete("/{appId}", h.DeleteApplication)` alongside the existing `Get("/{appId}", …)` inside the `/apps` sub-router.
 
-3. **`backend/internal/api/handlers/applications_test.go`** — add three test cases:
-   - Happy path: create two apps, delete one, assert 204 + list returns only the remaining one.
-   - Cross-org guard: user A cannot delete user B's app — 404.
-   - Last-app guard: deleting the only app returns 409.
+3. **`backend/internal/db/queries/applications.sql`** — add `ListApplicationsByOrgWithCounts`:
+   ```sql
+   -- name: ListApplicationsByOrgWithCounts :many
+   SELECT
+     a.*,
+     (SELECT COUNT(*) FROM connections WHERE application_id = a.id) AS connection_count,
+     (SELECT COUNT(*) FROM investigation_schedules WHERE application_id = a.id) AS schedule_count
+   FROM applications a
+   WHERE a.org_id = $1
+   ORDER BY a.created_at DESC;
+   ```
+   Run `make sqlc-generate` to regenerate the Go wrapper. The subquery approach keeps the query cost linear in `#apps` (not `#apps × #connections`), which matters once users have many connections per app.
 
-4. **Smoke test cascade behaviour**: in a test, create an app → create a connection → delete the app → assert the connection row is gone. This codifies the CASCADE assumption so a future migration that accidentally drops it will fail a test rather than silently leak rows.
+4. **`backend/internal/api/handlers/applications.go`** — modify `ListApplications` to inspect `?include=counts` and route to the new query when present. Response shape gains `connection_count` and `schedule_count` fields on each app *only* when the query param is set — keeps the default sidebar fetch cheap and avoids breaking existing callers.
 
-**Files changed:** 3 (`applications.go`, `router.go`, `applications_test.go`). No migration, no sqlc regen.
+5. **`backend/internal/api/handlers/applications_test.go`** — add test cases:
+   - Delete happy path: create two apps, delete one, assert 204 + list returns only the remaining one.
+   - Delete cross-org guard: user A cannot delete user B's app — 404.
+   - Delete last-app guard: deleting the only app returns 409 with `code: "last_app"`.
+   - Delete cascade: create an app → create a connection → delete the app → assert the connection row is gone. This codifies the CASCADE assumption so a future migration that accidentally drops it will fail a test rather than silently leak rows.
+   - List with counts: create an app with 2 connections and 1 schedule, `GET /api/apps?include=counts`, assert the response includes `connection_count: 2` and `schedule_count: 1`.
+   - List without counts (default): assert the response does **not** include count fields (default behaviour unchanged).
+
+**Files changed:** 4 (`applications.go`, `router.go`, `applications.sql`, `applications_test.go`) + 1 regen (`applications.sql.go`). No migration.
+
+**Why add counts now rather than in Phase 4?** You asked for the 80-20 call. Adding a second sqlc query with two subqueries is ~15 lines of SQL and ~20 lines of handler code. The alternative (ship N+1 first, refactor later) costs roughly the same work twice plus a frontend refactor to swap fetching strategy. Doing it upfront is strictly cheaper.
 
 ### Phase 2 — Frontend: "New App" wizard
 
@@ -128,10 +146,11 @@ Four phases, each independently shippable. Phase 1 is the smallest backend chang
 
 5. **`frontend/src/components/app-wizard/steps/StepConfirm.vue`** *(new)* — "You're all set. Go to dashboard." Calls `app.selectApp(draftAppId)` + router.push('/dashboard') on finish. Clears `draftAppId` so `discard()` becomes a no-op.
 
-6. **`frontend/src/components/common/AppSidebar.vue`** — modify the `BaseSelect` block to add a "+ New App" row. Two implementation options:
-   - **(A)** Add a synthetic `{ value: '__new__', label: '+ New application' }` option to `appOptions`. Intercept in `handleSelectApp`: if value === `'__new__'`, open the wizard instead of calling `selectApp`. Fast but abuses the select component.
-   - **(B)** Add a small `+` icon button next to the select. Cleaner UX, more markup.
-   - **Recommendation: (B)** — the dropdown is already narrow and a "+" icon button is the industry-standard affordance. Similar to how most IDEs separate "switch workspace" from "new workspace".
+6. **`frontend/src/components/common/AppSidebar.vue`** — modify the `BaseSelect` block to add a "+ New App" row as the **last entry** in the dropdown, beneath all existing apps. Implementation:
+   - Append `{ value: '__new_app__', label: '+ New application' }` to the `appOptions` computed property after mapping the user's apps.
+   - In `handleSelectApp`, intercept the sentinel: if `value === '__new_app__'`, open the `AppWizard` modal via a local `wizardOpen` ref **without** calling `selectApp` (so the user's current app context is preserved if they discard).
+   - Check `BaseSelect`'s implementation to ensure the sentinel option can be visually distinguished (e.g. via a divider above it or custom styling). If `BaseSelect` doesn't support option groups, it's fine to rely on the `+` prefix — users parse that cue quickly.
+   - **Note on `BaseSelect` coupling:** if the component resets its internal selection state to the chosen value after an option is clicked, intercept the event *before* it commits so `currentAppId` isn't momentarily set to `__new_app__`. Inspect `BaseSelect.vue` before writing the handler to confirm the event flow.
 
 7. **`frontend/src/stores/app.ts`** — add a `deleteApp(appId: string)` action that calls `DELETE /api/apps/{appId}`, removes from `applications`, and if `currentAppId === appId`, calls `selectApp(applications[0].id)`. Used by both the wizard's discard path and the Settings page.
 
@@ -151,20 +170,21 @@ Four phases, each independently shippable. Phase 1 is the smallest backend chang
 
 3. **`frontend/src/components/settings/OrganisationSection.vue`** *(new)* — renders `app.organization.name`, `app.organization.slug`, and the member count. Member management is out of scope for this feature — just show the data.
 
-4. **`frontend/src/components/settings/ApplicationsSection.vue`** *(new)* — lists `app.applications`. Per-row:
+4. **`frontend/src/components/settings/ApplicationsSection.vue`** *(new)* — fetches `GET /api/apps?include=counts` on mount (single request, no N+1) and lists the result. Per-row:
    - Name, status badge, created-at
-   - Connection count — fetched from existing `GET /api/apps/{appId}/connections` (already wired, just call it per row)
-   - Schedule count — fetched from existing `GET /api/apps/{appId}/schedules`
-   - "Delete" button → opens confirmation modal showing **exactly what will be deleted** ("This will permanently delete *My App*, its 3 connections, 2 schedules, and all associated logs and reports. This cannot be undone.")
+   - `connection_count` with a click-through link to `/connections` (pre-filtered by appId via `selectApp`)
+   - `schedule_count` with a click-through link to `/schedules` (same pattern)
+   - **"Delete" button with last-app handling:** if `applications.length === 1`, the button is rendered **disabled** with an inline tooltip / helper text explaining *"Your organisation must have at least one application. Create another app before deleting this one."* This matches the backend 409 guard. The disabled state must be visually obvious, not just a greyed button — use the existing disabled styling plus an explicit helper line below the button.
    - A "+ New Application" button at the bottom that opens the same `AppWizard` component from Phase 2.
 
-5. **`frontend/src/components/settings/DeleteAppModal.vue`** *(new)* — typed-to-confirm pattern (user must type the app name to enable the delete button). Common UX for destructive org-level actions. Calls `app.deleteApp(appId)` on confirm.
+5. **`frontend/src/components/settings/DeleteAppModal.vue`** *(new)* — **two-stage UX**:
+   - **Stage 1 — Confirmation:** Typed-to-confirm pattern. Modal shows an explicit, itemised preview of what will be deleted: *"This will permanently delete **{app name}** and all of its data: **{n} connections**, **{m} schedules**, **all logs**, **all reports**, and **all conversation history**. This cannot be undone."* Delete button stays disabled until the user types the exact app name. The counts come from the already-fetched `?include=counts` payload — no extra request.
+   - **Stage 2 — Post-delete confirmation:** After `app.deleteApp(appId)` resolves successfully, the modal transitions to a success state showing *"**{app name}** has been deleted."* with a single "Close" button. This gives the user clear, explicit feedback that the destructive action completed. The modal then closes and the list refreshes.
+   - **Error handling:** if the backend returns 409 with `code: "last_app"` (defensive — the button should already be disabled), surface the backend error text inline in the modal rather than closing it. Any other error shows a generic "Failed to delete — please try again" with the raw error message in a collapsible details block.
 
 6. **`frontend/src/router/index.ts`** — add `{ path: '/settings', component: () => import('@/pages/SettingsPage.vue'), meta: { requiresAuth: true } }`. Lazy-loaded, gated by the same guard as other app routes.
 
 7. **`frontend/src/components/common/AppSidebar.vue`** — add a "Settings" link in the footer block, above the org/email display. Uses the existing nav-link styling.
-
-**Open question baked into this phase:** connection & schedule counts on every page render means N+1 API calls where N = number of apps. With a typical user on 1-5 apps this is fine. If we expect more, add a `GET /api/apps?include=counts` query param later. **Not blocking — flag for Phase 4.**
 
 **Files changed:** ~6 new, 2 edited (`router/index.ts`, `AppSidebar.vue`).
 
@@ -173,11 +193,9 @@ Four phases, each independently shippable. Phase 1 is the smallest backend chang
 These are nice-to-haves that don't block the core feature.
 
 1. **Keyboard support** — Esc closes the wizard (with discard confirmation), Enter advances. Matches existing modal conventions.
-2. **Empty state** — if Applications section has 0 apps (only possible if we relax the "cannot delete last app" rule), show a prominent "Create your first app" CTA. If we keep the last-app guard, this is dead code.
-3. **Toast notifications** — success toasts on create/delete. Find the existing toast system first; don't add one if none exists.
-4. **Batch `?include=counts`** for the Applications section if the N+1 becomes real.
-5. **Telemetry** — log app-create and app-delete events to the Activity feed (similar to how connection changes are logged). Lets users see "app created" entries in their own audit trail.
-6. **Update vision.md** — the Platform Sections list currently implies a single-app experience. Clarify that apps are first-class and that Heimdall is multi-tenant at the app level within an org.
+2. **Toast notifications** — non-blocking success toasts on create (the DeleteAppModal already handles its own post-delete confirmation in-place, so it doesn't need a toast). Find the existing toast system first; don't add one if none exists.
+3. **Telemetry** — log app-create and app-delete events to the Activity feed (similar to how connection changes are logged). Lets users see "app created" entries in their own audit trail.
+4. **Update vision.md** — the Platform Sections list currently implies a single-app experience. Clarify that apps are first-class and that Heimdall is multi-tenant at the app level within an org.
 
 ---
 
@@ -193,23 +211,28 @@ These are nice-to-haves that don't block the core feature.
 
 ---
 
-## Questions for review
+## Decisions (resolved)
 
-1. **Last-app deletion.** Do you want to block deletion of the user's only app (my recommendation, returns 409), or allow it and redirect to the onboarding flow? The former is safer; the latter is more flexible.
+Original open questions have been answered. Recorded here so implementation follows the agreed path.
 
-2. **App deletion confirmation UX.** Is "type the app name to confirm" the right level of friction, or is a simple "Yes, delete" button fine? I lean toward typed-to-confirm given cascade behaviour.
+1. **Last-app deletion → BLOCKED.** Backend returns 409 with `code: "last_app"`; frontend renders the Delete button as disabled with explicit helper text when it's the only app. No redirect-to-onboarding fallback.
+2. **Delete confirmation UX → typed-to-confirm + explicit post-delete confirmation.** The `DeleteAppModal` is two-stage: typed-to-confirm stage, then a success-state stage after the API call resolves, before closing. Intuitive and explicit both before *and* after the destructive action.
+3. **`ConnectionWizard.vue` refactor → APPROVED.** The component will accept an optional `appId` prop (defaulting to `useAppStore().currentAppId` for backwards compatibility) so the new `AppWizard` can embed it directly for the optional connector step. No need to extract a `ConnectionWizardCore` subcomponent.
+4. **"+ New App" affordance → dropdown last option.** Appended as a sentinel `{ value: '__new_app__', label: '+ New application' }` row beneath all existing apps in the `BaseSelect`. Click is intercepted before `currentAppId` is mutated, opening the `AppWizard` modal.
+5. **Settings route granularity → single `/settings` page with sections.** No sub-routes; vertical scroll. Sub-routes can be added later if the surface grows.
+6. **Counts endpoint → shipped in Phase 1.** Adding `?include=counts` upfront costs roughly the same as shipping N+1 then refactoring later, so it's pulled forward into the backend phase. Applied the 80-20 rule: small additional effort for a meaningfully better architecture.
+7. **Onboarding vs. new-app wizard → two separate components.** `OnboardingPage.vue` stays as-is for first-run; the new `AppWizard` handles all subsequent app creation. Unifying them is an option for a later refactor pass, not this one.
+8. **Wizard surface → fullscreen modal overlay.** Not a route. Preserves the user's current app/route context if they discard mid-wizard.
 
-3. **Connection wizard coupling.** Are you OK with me refactoring `ConnectionWizard.vue` to accept an `appId` prop (defaulting to `useAppStore().currentAppId` for backwards compatibility) so the new app wizard can embed it? This is the crux of Phase 2 reuse — the alternative is duplicating the connection-wizard flow, which I want to avoid.
+---
 
-4. **"+ New App" affordance placement.** Dropdown-inline option (A) vs separate "+" icon button (B)? I recommended (B) but the sidebar is tight on horizontal space — worth a gut check from you.
+## Ready-to-execute summary
 
-5. **Settings route granularity.** Single `/settings` page with sections (my plan), or split into `/settings/profile`, `/settings/apps`, `/settings/org` sub-routes? Sub-routes are more structured but overkill for the current data volume.
+The plan is fully specified. Implementation order:
 
-6. **Connection/schedule counts on the Settings page.** Is N+1 fetching acceptable for v1 (1-5 apps per user typical), or should I add `?include=counts` to `GET /api/apps` upfront?
+1. **Phase 1 (backend)** — `DELETE /api/apps/{id}` with last-app guard, `?include=counts` on `GET /api/apps`, full test coverage including cascade verification. No migration, no sqlc schema changes (just a new query). Shippable standalone.
+2. **Phase 2 (frontend — wizard)** — `AppWizard` modal, sidebar dropdown sentinel, `ConnectionWizard` appId-prop refactor, `app.deleteApp()` store action, discard-rollback flow.
+3. **Phase 3 (frontend — settings)** — `/settings` route, sidebar footer link, three sections (Profile / Organisation / Applications), two-stage `DeleteAppModal`, last-app disabled state.
+4. **Phase 4 (polish)** — keyboard handling, toasts for create, activity-feed telemetry, vision.md update.
 
-7. **Onboarding vs. new-app wizard — one component or two?** The existing `OnboardingPage.vue` is a single-form flow creating org + first app. The new wizard creates apps within an existing org. These have *mostly* different shapes but overlapping steps. Do you want me to:
-   - (a) Leave `OnboardingPage.vue` alone and build a separate wizard for adding subsequent apps (my current plan), or
-   - (b) Replace `OnboardingPage.vue` with the new wizard, conditionally showing an "org setup" step when the user has no org yet?
-   - (a) is safer; (b) is more unified but risks destabilising the first-run flow.
-
-8. **Wizard as modal vs. route.** I'm proposing a fullscreen modal overlay rather than a `/apps/new` route so the user's current app context isn't lost if they discard. Do you prefer a route-based wizard instead (cleaner URLs, bookmarkable, but loses context on cancel)?
+All decisions locked. Awaiting green light to start Phase 1.

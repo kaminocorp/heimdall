@@ -1,14 +1,24 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useAppStore } from '@/stores/app'
 import BaseSelect from '@/components/common/BaseSelect.vue'
+import AppWizard from '@/components/app-wizard/AppWizard.vue'
+
+// Sentinel value used to represent the "+ New App" row inside the BaseSelect
+// dropdown. It's a string that can't collide with a real UUID. When the
+// selector emits this value we intercept it in handleSelectApp and open the
+// wizard modal *without* committing it as the current app — the user's
+// previously-selected app stays live in case they discard mid-wizard.
+const NEW_APP_SENTINEL = '__new_app__'
 
 const auth = useAuthStore()
 const app = useAppStore()
 const route = useRoute()
 const router = useRouter()
+
+const wizardOpen = ref(false)
 
 const emit = defineEmits<{
   close: []
@@ -56,12 +66,30 @@ function isActive(routeName: string): boolean {
 }
 
 function handleSelectApp(value: string | number) {
-  app.selectApp(String(value))
+  const v = String(value)
+  if (v === NEW_APP_SENTINEL) {
+    // Intercept: open the wizard but DON'T commit the sentinel as the
+    // current app. Because BaseSelect is one-way (reads modelValue from
+    // props), not calling selectApp means the dropdown re-reads the old
+    // currentAppId on its next render and visually snaps back — no glitch.
+    wizardOpen.value = true
+    return
+  }
+  app.selectApp(v)
 }
 
-const appOptions = computed(() =>
-  app.applications.map(a => ({ value: a.id, label: a.name }))
-)
+function closeWizard() {
+  wizardOpen.value = false
+}
+
+// Appends the "+ New application" sentinel as the last option so users
+// always see it at the bottom of the list regardless of how many apps
+// they have. `BaseSelect` renders options in order, so appending here
+// is the same as ordering visually.
+const appOptions = computed(() => [
+  ...app.applications.map(a => ({ value: a.id, label: a.name })),
+  { value: NEW_APP_SENTINEL, label: '+ New application' },
+])
 
 async function handleLogout() {
   app.reset()
@@ -138,6 +166,19 @@ function handleNav() {
 
     <!-- User footer -->
     <div class="mt-auto border-t border-border px-6 py-5">
+      <!-- Settings link — placed above the org/email block so account-
+           level actions feel grouped with account identity, rather than
+           mixed into the per-app navigation above. -->
+      <RouterLink
+        :to="{ name: 'settings' }"
+        class="block mb-3 font-mono text-xs uppercase tracking-wider transition-colors cursor-pointer"
+        :class="isActive('settings')
+          ? 'text-text-primary'
+          : 'text-text-muted hover:text-text-primary'"
+        @click="handleNav"
+      >
+        Settings
+      </RouterLink>
       <div v-if="app.organization" class="font-mono text-xs uppercase tracking-wider text-text-muted mb-1.5">
         {{ app.organization.name }}
       </div>
@@ -151,5 +192,11 @@ function handleNav() {
         Sign Out
       </button>
     </div>
+
+    <!-- New-app wizard, rendered at the sidebar level so it's reachable
+         from any route. Teleporting to <body> would be cleaner long-term,
+         but the wizard is fixed-positioned with z-50 so it escapes the
+         sidebar's flow regardless. -->
+    <AppWizard v-if="wizardOpen" @close="closeWizard" />
   </nav>
 </template>

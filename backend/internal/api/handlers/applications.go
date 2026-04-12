@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -24,6 +25,21 @@ func (s *Server) ListApplications(w http.ResponseWriter, r *http.Request) {
 	org, err := s.Queries.GetOrganizationByUser(r.Context(), userID)
 	if err != nil {
 		jsonError(w, "organization not found", http.StatusNotFound)
+		return
+	}
+
+	// Opt-in counts mode. The Settings page uses `?include=counts` to render
+	// per-app connection/schedule summaries in a single request. Default
+	// callers (sidebar selector, etc.) get the lean shape to keep the common
+	// path cheap and avoid breaking existing frontends.
+	if r.URL.Query().Get("include") == "counts" {
+		rows, err := s.Queries.ListApplicationsByOrgWithCounts(r.Context(), org.ID)
+		if err != nil {
+			jsonServerError(w, "failed to list applications", err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(rows)
 		return
 	}
 
@@ -88,9 +104,101 @@ func (s *Server) CreateApplication(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Fire-and-forget activity-feed entry. The agent_log table is keyed by
+	// user_id (not app_id), so we stash the app identity in the detail
+	// JSONB column — the row survives app deletion and remains meaningful
+	// as audit history. Nil-check matches the pattern used elsewhere: the
+	// test harness leaves s.Agent nil to avoid pulling in the full agent
+	// stack, and we don't want handler coverage to blow up for that reason.
+	if s.Agent != nil {
+		s.Agent.EmitLog(
+			r.Context(), userID, nil,
+			"application_created",
+			fmt.Sprintf("Application %q created", app.Name),
+			map[string]any{
+				"app_id":   app.ID.String(),
+				"app_name": app.Name,
+			},
+		)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(app)
+}
+
+// DeleteApplication removes an application and cascade-deletes every row
+// that references it: connections, app_agent_config, monitoring_state,
+// notification_*, investigation_schedules. The cascade relationships are
+// defined in the FK constraints (migrations 014–019, 023), so this handler
+// is intentionally thin — it only enforces authorization and the last-app
+// guard. If a future migration drops a cascade, the handler-level cascade
+// test will fail loudly rather than silently leaking orphaned rows.
+func (s *Server) DeleteApplication(w http.ResponseWriter, r *http.Request) {
+	userID, ok := middleware.UserIDFromContext(r.Context())
+	if !ok {
+		jsonError(w, "missing user context", http.StatusUnauthorized)
+		return
+	}
+
+	appID, err := uuid.Parse(chi.URLParam(r, "appId"))
+	if err != nil {
+		jsonError(w, "invalid application id", http.StatusBadRequest)
+		return
+	}
+
+	// Org-scope authorization: resolve the app through the user→org→app
+	// join so a caller can't delete an app in a different org. 404 instead of
+	// 403 matches the pattern used by every other /api/apps/{appId}/* route —
+	// we don't leak existence of resources the caller can't see.
+	app, err := s.Queries.GetApplicationByOrgUser(r.Context(), db.GetApplicationByOrgUserParams{
+		AppID:  appID,
+		UserID: userID,
+	})
+	if err != nil {
+		jsonError(w, "application not found", http.StatusNotFound)
+		return
+	}
+
+	// Last-app guard. Deleting the only remaining app would leave the user in
+	// a first-run state with an empty sidebar selector and no valid currentAppId.
+	// We block it here rather than allowing-and-redirecting so the UX stays
+	// predictable. The `code` field is what the frontend keys off to render
+	// the specific "create another app first" helper line instead of a
+	// generic toast.
+	count, err := s.Queries.CountApplicationsByOrg(r.Context(), app.OrgID)
+	if err != nil {
+		jsonServerError(w, "failed to count applications", err)
+		return
+	}
+	if count <= 1 {
+		jsonErrorWithCode(w, "cannot delete last application", "last_app", http.StatusConflict)
+		return
+	}
+
+	if err := s.Queries.DeleteApplication(r.Context(), app.ID); err != nil {
+		jsonServerError(w, "failed to delete application", err)
+		return
+	}
+
+	// Fire-and-forget activity-feed entry. Emitted *after* the delete
+	// succeeds so we never record a deletion that didn't happen. The row
+	// is user-scoped, not app-scoped, so it survives the cascade delete
+	// of everything under the app — which is the whole point: the audit
+	// entry must outlive the thing it audits.
+	if s.Agent != nil {
+		s.Agent.EmitLog(
+			r.Context(), userID, nil,
+			"application_deleted",
+			fmt.Sprintf("Application %q deleted", app.Name),
+			map[string]any{
+				"app_id":   app.ID.String(),
+				"app_name": app.Name,
+			},
+		)
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // authorizeApp verifies the app belongs to the authenticated user's org.

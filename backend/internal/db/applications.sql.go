@@ -7,9 +7,23 @@ package db
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 )
+
+const countApplicationsByOrg = `-- name: CountApplicationsByOrg :one
+SELECT COUNT(*) FROM applications WHERE org_id = $1
+`
+
+// Used by the delete-app handler to enforce the "can't delete the last app"
+// guard without pulling back every row.
+func (q *Queries) CountApplicationsByOrg(ctx context.Context, orgID uuid.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countApplicationsByOrg, orgID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
 
 const createApplication = `-- name: CreateApplication :one
 INSERT INTO applications (org_id, name, status)
@@ -112,6 +126,61 @@ func (q *Queries) ListApplicationsByOrg(ctx context.Context, orgID uuid.UUID) ([
 			&i.Status,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listApplicationsByOrgWithCounts = `-- name: ListApplicationsByOrgWithCounts :many
+SELECT
+  a.id, a.org_id, a.name, a.status, a.created_at, a.updated_at,
+  (SELECT COUNT(*) FROM connections WHERE app_id = a.id) AS connection_count,
+  (SELECT COUNT(*) FROM investigation_schedules WHERE app_id = a.id) AS schedule_count
+FROM applications a
+WHERE a.org_id = $1
+ORDER BY a.created_at DESC
+`
+
+type ListApplicationsByOrgWithCountsRow struct {
+	ID              uuid.UUID `json:"id"`
+	OrgID           uuid.UUID `json:"org_id"`
+	Name            string    `json:"name"`
+	Status          string    `json:"status"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
+	ConnectionCount int64     `json:"connection_count"`
+	ScheduleCount   int64     `json:"schedule_count"`
+}
+
+// Same as ListApplicationsByOrg but augments each row with connection/schedule
+// counts so the Settings page can render per-app summaries in a single request
+// instead of N+1. Subqueries keep the cost linear in #apps — the counts never
+// join across connections/schedules rows, so adding more data to either table
+// has no multiplicative effect on the query plan.
+func (q *Queries) ListApplicationsByOrgWithCounts(ctx context.Context, orgID uuid.UUID) ([]ListApplicationsByOrgWithCountsRow, error) {
+	rows, err := q.db.Query(ctx, listApplicationsByOrgWithCounts, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListApplicationsByOrgWithCountsRow{}
+	for rows.Next() {
+		var i ListApplicationsByOrgWithCountsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrgID,
+			&i.Name,
+			&i.Status,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.ConnectionCount,
+			&i.ScheduleCount,
 		); err != nil {
 			return nil, err
 		}

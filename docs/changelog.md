@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.32.0 — Multi-App Setup & Settings](#0320--multi-app-setup--settings-2026-04-12)
 - [0.31.0 — Scheduled Investigations](#0310--scheduled-investigations-2026-04-11)
 - [0.30.3 — Activity Feed Rename & Log Retention](#0303--activity-feed-rename--log-retention-2026-04-11)
 - [0.30.2 — Production Schema Drift Fix](#0302--production-schema-drift-fix-2026-04-10)
@@ -75,6 +76,151 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.32.0 — Multi-App Setup & Settings (2026-04-12)
+
+Heimdall now treats applications as first-class citizens that users can create and manage without touching the API directly. Previously the sidebar app selector was read-only after onboarding — adding or removing apps required backend calls. This release ships the full create/delete lifecycle across four phases: a backend surface, a frontend wizard, a Settings page, and a polish pass.
+
+### Backend — delete handler, counts endpoint, activity telemetry
+
+**`DELETE /api/apps/{appId}`** — new handler wrapping the existing `DeleteApplication` sqlc query. Enforces three things:
+
+1. **Org-scope authorization** via `GetApplicationByOrgUser` — cross-org attempts get `404` (existence-hiding, matching every other `/api/apps/{appId}/*` route).
+2. **Last-app guard** — `CountApplicationsByOrg` checks the org has more than one app. If not, returns `409 Conflict` with `{"error": "cannot delete last application", "code": "last_app"}`. The `code` field gives the frontend a stable key to render specific helper text instead of string-matching on the message.
+3. **Cascade delete** — the handler stays thin because every child table (`connections`, `app_agent_config`, `monitoring_state`, `notification_*`, `investigation_schedules`) was already declared `ON DELETE CASCADE` in migrations 014–019 and 023.
+
+**`GET /api/apps?include=counts`** — opt-in enriched shape. When the query param is set, the handler routes to `ListApplicationsByOrgWithCounts`, which augments each row with `connection_count` and `schedule_count` via two correlated subqueries. The default shape (no param) is unchanged — sidebar selector and other lean consumers keep their cheap path. Only the Settings page opts in.
+
+**`jsonErrorWithCode` helper** — new function in `helpers.go` alongside the existing `jsonError`. Writes `{"error": "...", "code": "..."}` so the frontend can key off a stable machine-readable identifier for any guarded failure that needs specific UI rendering.
+
+**Activity-feed telemetry** — both `CreateApplication` and `DeleteApplication` now fire-and-forget `application_created` / `application_deleted` entries into `agent_log` via `agent.EmitLog`. The delete event is emitted *after* the query succeeds so we never record a deletion that didn't happen. Entries are user-scoped (not app-scoped) with the app identity in the `detail` JSONB column, so `application_deleted` audit rows survive the cascade that destroys their own app — the whole point of an audit trail.
+
+### Backend — new sqlc queries
+
+Two new queries in `backend/internal/db/queries/applications.sql`:
+
+- **`ListApplicationsByOrgWithCounts`** — `SELECT a.*, (SELECT COUNT(*) FROM connections WHERE app_id = a.id) AS connection_count, (SELECT COUNT(*) FROM investigation_schedules WHERE app_id = a.id) AS schedule_count` — cost linear in `#apps`, never fanning out across joins.
+- **`CountApplicationsByOrg`** — `SELECT COUNT(*) FROM applications WHERE org_id = $1` — O(1) on an indexed `org_id`, used by the last-app guard without pulling every row back to Go.
+
+No migration. Every schema dependency was already live.
+
+### Backend tests
+
+Six new handler integration tests in `applications_test.go`:
+
+| Test | Guards |
+|------|--------|
+| `TestDeleteApplication` | Happy path: two apps → delete one → 204, list returns one |
+| `TestDeleteApplication_LastAppGuard` | Only app → 409 with `code: "last_app"`, app still exists |
+| `TestDeleteApplication_WrongOrg` | Cross-org delete → 404, foreign app untouched |
+| `TestDeleteApplication_CascadesToConnections` | Create app + connection → delete app → connection row gone via FK cascade. **Regression tripwire** — catches future migrations that accidentally drop CASCADE |
+| `TestListApplications_WithCounts` | `?include=counts` returns `connection_count` and `schedule_count` |
+| `TestListApplications_DefaultShapeUnchanged` | Default call must not include count fields |
+
+All tests run against real Postgres (skip cleanly without `DATABASE_URL`).
+
+### Frontend — App Wizard
+
+A new `AppWizard` component (`frontend/src/components/app-wizard/`) accessible from the sidebar app selector's "+ New application" sentinel row. Three visible steps:
+
+1. **Details** — name (required) and optional description. The app is created eagerly at the end of this step via `app.createApp(name, { select: false })` — the `select: false` flag means the draft app doesn't mutate `currentAppId`, so the user's previously-active app stays live if they discard.
+2. **Connector** — binary fork: "Add a connector" (hands off to the embedded `ConnectionWizard`) or "Skip for now" (advances to confirmation). The `ConnectionWizard` was refactored to accept an optional `appId` prop (`ConnectionWizard.vue`), with a `targetAppId` computed that resolves `props.appId ?? appStore.currentAppId`. Existing callers pass nothing and inherit zero behaviour change.
+3. **Confirm** — success screen with "Go to Dashboard" button that commits the selection (`app.selectApp`) and routes away. A toast surfaces "Application created" via the existing `useToast` composable.
+
+**Discard semantics:** if a draft exists, closing shows a confirmation overlay. On confirm, `app.deleteApp(draftAppId)` rolls back the eager-created row (best-effort — if the API call fails, the wizard still closes and the orphan shows up in Settings). Closing on step 1 (no draft) is a clean no-op.
+
+**Nested-modal handling:** when the connector sub-flow is active, the AppWizard shell hides via `v-else` and `ConnectionWizard` takes over the screen — no stacked backdrops. Keyboard handling: AppWizard's Esc listener explicitly bails during `stepId === 'connector'` so the two wizards don't fight for the same key.
+
+**Sidebar integration** (`AppSidebar.vue`): the app selector appends a `{ value: '__new_app__', label: '+ New application' }` sentinel. `handleSelectApp` intercepts the sentinel *before* calling `selectApp`, so the dropdown visually snaps back to the current app on the next render. `BaseSelect` is one-way (reads `modelValue` from props), so there's no intermediate state flicker.
+
+**Store changes** (`stores/app.ts`):
+- `createApp(name, { select })` — new optional flag. Defaults to `true` (existing behaviour preserved); AppWizard passes `false`.
+- `deleteApp(appId)` — calls `DELETE /api/apps/{appId}`, filters the row out of `applications`, reconciles `currentAppId` by falling back to the first remaining app (or clearing it entirely if the list is empty).
+
+### Frontend — Settings page
+
+New `/settings` route (`frontend/src/pages/SettingsPage.vue`) linked from the sidebar footer, containing three sections:
+
+**Profile** (`ProfileSection.vue`) — email and joined date from the existing Supabase session (no extra fetch), plus a duplicated "Sign out" button (users looking for account actions naturally visit Settings first).
+
+**Organisation** (`OrganisationSection.vue`) — org name, slug, and created date. Member count deliberately skipped: no members table exists yet, and displaying a hardcoded "1" would be misleading. Inline comment explains the deferral.
+
+**Applications** (`ApplicationsSection.vue`) — the interaction core. Fetches `GET /api/apps?include=counts` on mount into a **local ref** (not the app store — the store's `applications` list is the lean variant every other consumer uses). Per-row:
+
+- Name, status badge, formatted created date.
+- **Click-through counts** — "N connections" and "M schedules" are buttons that select the target app and route to the corresponding per-app page. Selecting first ensures the destination renders data for the row the user clicked, not whatever was selected before.
+- **Delete button** — disabled when `rows.length <= 1`, with an explicit visible helper line: *"Your organisation must have at least one application. Create another first."* Not a tooltip — tooltips are invisible on touch.
+- **"+ New application"** button opens the same `AppWizard` from the sidebar. On wizard close the section refetches unconditionally.
+
+**DeleteAppModal** (`DeleteAppModal.vue`) — two-stage destructive action:
+
+- **Stage 1 (confirm):** itemised list of what will cascade-delete (N connections, M schedules, all logs, all reports, all conversation history). User must type the exact app name (case-sensitive, no trimming) before the Delete button enables. Auto-focused input via `useTemplateRef` + `nextTick`. Errors surface inline without closing the modal.
+- **Stage 2 (deleted):** calm success screen with a single "Close" button. The user sees explicit feedback that the destructive action landed. Parent refetches on close.
+
+### Frontend — keyboard & toast polish
+
+- **Enter advances** in both `StepAppDetails` (emits a semantic `submit` event with its own validity check) and `DeleteAppModal` (fires `handleDelete`, which guards on `canDelete && !deleting`).
+- **Toast on app creation** via the existing `useToast` composable. The wizard captures `committedName` before clearing state so there's no stale-closure hazard. Delete flow intentionally does *not* toast — the `DeleteAppModal` has its own stage-2 acknowledgement, which is more explicit.
+
+### Frontend tests
+
+Six new vitest store tests in `stores/__tests__/app.test.ts`:
+
+| Test | Guards |
+|------|--------|
+| `createApp selects the new app by default` | Pre-wizard behaviour preserved |
+| `createApp with { select: false } leaves currentAppId untouched` | Eager-create contract |
+| `deleteApp removes the row from the list` | Happy path |
+| `deleteApp falls back to the first remaining app when current is deleted` | Sidebar never points at a dead row |
+| `deleteApp clears currentAppId when no apps remain` | Defined state on edge case |
+| `deleteApp propagates backend errors without touching local state` | No half-applied mutation on failure |
+
+### Files changed
+
+| File | Kind | Change |
+|------|------|--------|
+| `backend/internal/api/handlers/applications.go` | Edit | +`DeleteApplication`, `ListApplications` branches on `?include=counts`, +`EmitLog` telemetry |
+| `backend/internal/api/handlers/helpers.go` | Edit | +`jsonErrorWithCode` |
+| `backend/internal/api/router.go` | Edit | +`r.Delete("/", s.DeleteApplication)` |
+| `backend/internal/api/handlers/testhelpers_test.go` | Edit | +mirrored DELETE route in test router |
+| `backend/internal/api/handlers/applications_test.go` | Edit | +6 integration tests |
+| `backend/internal/db/queries/applications.sql` | Edit | +`ListApplicationsByOrgWithCounts`, +`CountApplicationsByOrg` |
+| `backend/internal/db/applications.sql.go` | **Regen** | sqlc regenerated |
+| `frontend/src/types/organization.ts` | Edit | +`ApplicationWithCounts` interface |
+| `frontend/src/api/applications.ts` | Edit | +`deleteApplication`, +`listApplicationsWithCounts` |
+| `frontend/src/stores/app.ts` | Edit | `createApp` gains `{ select }` option, +`deleteApp`, -unused imports |
+| `frontend/src/stores/__tests__/app.test.ts` | **New** | 6 store tests |
+| `frontend/src/components/app-wizard/AppWizard.vue` | **New** | Root wizard, step orchestration, discard-rollback, toast |
+| `frontend/src/components/app-wizard/steps/StepAppDetails.vue` | **New** | Step 1 — name + description |
+| `frontend/src/components/app-wizard/steps/StepConnectorChoice.vue` | **New** | Step 2 — add/skip fork |
+| `frontend/src/components/app-wizard/steps/StepConfirm.vue` | **New** | Step 3 — success screen |
+| `frontend/src/pages/SettingsPage.vue` | **New** | Page shell with three sections |
+| `frontend/src/components/settings/ProfileSection.vue` | **New** | Email, joined, sign-out |
+| `frontend/src/components/settings/OrganisationSection.vue` | **New** | Org name, slug, created |
+| `frontend/src/components/settings/ApplicationsSection.vue` | **New** | App list + counts + delete + wizard |
+| `frontend/src/components/settings/DeleteAppModal.vue` | **New** | Two-stage typed-to-confirm |
+| `frontend/src/components/common/AppSidebar.vue` | Edit | +sentinel option, +wizard mount, +Settings footer link |
+| `frontend/src/components/connections/wizard/ConnectionWizard.vue` | Edit | +optional `appId` prop, `targetAppId` computed, -unused `isFirstStep` |
+| `frontend/src/router/index.ts` | Edit | +`/settings` route |
+| `docs/vision.md` | Edit | +Applications section, +Settings platform section |
+
+### Validation
+
+- `go vet ./...` — clean
+- `go build ./...` — clean
+- `go test -count=1 ./internal/api/handlers ./internal/agent` — all pass uncached against real Postgres
+- `vue-tsc -b --noEmit` — clean
+- `npm run test -- --run` — 35/35 pass across 6 suites
+- `eslint` on all touched files — zero issues
+- `npm run build` — clean, 990ms. `SettingsPage` chunk: 13.37 kB (3.99 kB gzipped)
+
+### Deployment notes
+
+**No migration required.** Every schema dependency (CASCADE FKs, `applications` table, `investigation_schedules.app_id`) was already live from migrations 014–023. This release is a pure code deployment.
+
+**Existing applications** continue to work unchanged. The sidebar selector gains the "+ New application" sentinel row; the `/settings` route is additive. No breaking changes to any API shape — the default `GET /api/apps` response is unchanged, and the enriched `?include=counts` variant is opt-in.
 
 ---
 
