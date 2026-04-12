@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.33.1 — Code Quality & Structural Cleanup](#0331--code-quality--structural-cleanup-2026-04-12)
 - [0.33.0 — Expanded Model Catalogue & Picker](#0330--expanded-model-catalogue--picker-2026-04-12)
 - [0.32.0 — Multi-App Setup & Settings](#0320--multi-app-setup--settings-2026-04-12)
 - [0.31.0 — Scheduled Investigations](#0310--scheduled-investigations-2026-04-11)
@@ -77,6 +78,77 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.33.1 — Code Quality & Structural Cleanup (2026-04-12)
+
+A code assessment flagged eight issues across the codebase. This release addresses six of them — the structural and correctness fixes that carry zero behavioural change but reduce maintenance risk and improve observability.
+
+### Backend — connections handler refactor
+
+**`connections.go` split into three files** — the handler file had grown to 693 lines by mixing CRUD, validation, and connectivity testing. It's now three cohesive files:
+
+| File | Lines | Responsibility |
+|------|-------|----------------|
+| `connections.go` | 404 | CRUD handlers (List, Get, Create, Update, Delete) |
+| `connections_validate.go` | 80 | `validateConnectorConfig()` + input validation helpers |
+| `connections_test_handler.go` | 190 | `TestConnection` handler (real I/O with timeouts) |
+
+**Unified validation** — `CreateConnection` and `UpdateConnection` both inlined ~60 lines of identical connector validation (6 types + syslog TLS cert injection). Both now call a single `s.validateConnectorConfig(type, config)` method. The method lives on `*Server` because it needs `s.Config` for syslog TLS certs.
+
+**Silenced DB errors now logged** — four `_ = queries.UpdateConnectionStatus(...)` calls in the syslog listener error paths (Create and Update) were silently discarding database errors. Replaced with `slog.Error` calls including `connection_id` for traceability.
+
+### Backend — missing FK index
+
+**Migration 024** — `notification_log.agent_log_id` had a foreign key constraint (`REFERENCES agent_log(id) ON DELETE SET NULL`) but no supporting index. Migration 021 added FK indexes for `notification_log(channel_id)` and `agent_log(conversation_id)` but missed this one. Without the index, every `DELETE` on `agent_log` triggered a sequential scan on `notification_log` — increasingly expensive during log retention cleanup. `IF NOT EXISTS` / `IF EXISTS` guards for idempotency.
+
+### Frontend — NotificationsPage decomposition
+
+**541 → 102 lines** — the page mixed preferences, channels (full CRUD + test), and notification history in a single component with 15 refs and 8 API imports. Now decomposed into three sub-components:
+
+| Component | Lines | Responsibility |
+|-----------|-------|----------------|
+| `NotificationPreferences.vue` | 151 | Display/edit form, save logic |
+| `NotificationChannels.vue` | 294 | Channel list, add/edit/delete, test button |
+| `NotificationHistory.vue` | 58 | Read-only log with severity/status indicators |
+
+The page remains the data-fetching shell — `Promise.all` parallel fetch preserved, app-switch state reset via `defineExpose` + template refs.
+
+### Frontend — shared `extractApiError` utility
+
+**2 duplicate definitions removed, 13 catch blocks fixed** — the same error-extraction logic existed independently in `stores/schedules.ts` and `pages/SchedulesPage.vue`, with inline variants across 15+ files. A single `extractApiError(e, fallback)` utility now handles all cases, checking `response.data.error` → `response.data.message` → `error.message` → fallback.
+
+Every `catch (e: any)` in the frontend (11 occurrences across stores, pages, and components) was replaced with `catch (e: unknown)` + the shared utility — restoring TypeScript's type safety at error boundaries.
+
+### Frontend — store encapsulation
+
+**`ConnectionsPage.vue` no longer mutates store state directly** — the page was setting `store.loading`, `store.error`, and `store.connections` inline instead of calling a store action. A new `fetchConnectionsByApp(appId)` action on the connections store encapsulates the loading/error/fetch cycle.
+
+### Files changed
+
+| File | Kind | Change |
+|------|------|--------|
+| `backend/internal/api/handlers/connections.go` | Edit | Extracted validation, logged silent errors (693→404 lines) |
+| `backend/internal/api/handlers/connections_validate.go` | New | `validateConnectorConfig` + validation helpers (80 lines) |
+| `backend/internal/api/handlers/connections_test_handler.go` | New | `TestConnection` handler (190 lines) |
+| `backend/migrations/024_notification_log_agent_log_idx.up.sql` | New | FK index on `notification_log(agent_log_id)` |
+| `backend/migrations/024_notification_log_agent_log_idx.down.sql` | New | Rollback |
+| `frontend/src/utils/apiError.ts` | New | Shared `extractApiError` utility |
+| `frontend/src/stores/connections.ts` | Edit | +`fetchConnectionsByApp` action, `catch (e: unknown)` |
+| `frontend/src/stores/logs.ts` | Edit | `catch (e: unknown)` + `extractApiError` |
+| `frontend/src/stores/schedules.ts` | Edit | Removed local duplicate, imported shared utility |
+| `frontend/src/pages/NotificationsPage.vue` | Edit | Decomposed (541→102 lines) |
+| `frontend/src/pages/ConnectionsPage.vue` | Edit | Delegates to store action, `catch (e: unknown)` |
+| `frontend/src/pages/LoginPage.vue` | Edit | `catch (e: unknown)` + `extractApiError` |
+| `frontend/src/pages/OnboardingPage.vue` | Edit | `catch (e: unknown)` + `extractApiError` |
+| `frontend/src/pages/SchedulesPage.vue` | Edit | Removed local duplicate, imported shared utility |
+| `frontend/src/components/notifications/NotificationPreferences.vue` | New | Preferences sub-component |
+| `frontend/src/components/notifications/NotificationChannels.vue` | New | Channels sub-component |
+| `frontend/src/components/notifications/NotificationHistory.vue` | New | History sub-component |
+| `frontend/src/components/connections/ConnectionTestModal.vue` | Edit | `catch (e: unknown)` + `extractApiError` |
+| `frontend/src/components/connections/ConnectionForm.vue` | Edit | `catch (e: unknown)` + `extractApiError` |
+| `frontend/src/components/connections/GitHubRepoSelector.vue` | Edit | `catch (e: unknown)` + `extractApiError` |
 
 ---
 

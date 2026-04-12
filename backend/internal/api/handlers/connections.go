@@ -1,21 +1,17 @@
 package handlers
 
 import (
-	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"net/http"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
 	"github.com/hejijunhao/heimdall/backend/internal/api/middleware"
 	"github.com/hejijunhao/heimdall/backend/internal/connectors"
-	"github.com/hejijunhao/heimdall/backend/internal/connectors/database"
 	"github.com/hejijunhao/heimdall/backend/internal/connectors/logs"
 	"github.com/hejijunhao/heimdall/backend/internal/db"
 )
@@ -136,65 +132,12 @@ func (s *Server) CreateConnection(w http.ResponseWriter, r *http.Request) {
 		config = json.RawMessage(`{}`)
 	}
 
-	// Validate Supabase config eagerly — before DB insert — to prevent
+	// Validate connector config eagerly — before DB insert — to prevent
 	// creating orphaned connections that can't start polling.
-	if req.Type == "supabase" {
-		if _, err := logs.NewSupabase(config, uuid.Nil, uuid.Nil); err != nil {
-			jsonError(w, fmt.Sprintf("Invalid Supabase config: %v", err), http.StatusBadRequest)
-			return
-		}
-	}
-
-	// Validate API poller configs eagerly.
-	if req.Type == "flyio" {
-		if _, err := logs.NewFlyio(config, uuid.Nil, uuid.Nil); err != nil {
-			jsonError(w, fmt.Sprintf("Invalid Fly.io config: %v", err), http.StatusBadRequest)
-			return
-		}
-	}
-	if req.Type == "vercel" {
-		if _, err := logs.NewVercel(config, uuid.Nil, uuid.Nil); err != nil {
-			jsonError(w, fmt.Sprintf("Invalid Vercel config: %v", err), http.StatusBadRequest)
-			return
-		}
-	}
-	if req.Type == "railway" {
-		if _, err := logs.NewRailway(config, uuid.Nil, uuid.Nil); err != nil {
-			jsonError(w, fmt.Sprintf("Invalid Railway config: %v", err), http.StatusBadRequest)
-			return
-		}
-	}
-	if req.Type == "mongodb" {
-		if _, err := logs.NewMongoDB(config, uuid.Nil, uuid.Nil); err != nil {
-			jsonError(w, fmt.Sprintf("Invalid MongoDB Atlas config: %v", err), http.StatusBadRequest)
-			return
-		}
-	}
-
-	// Validate syslog config eagerly.
-	if req.Type == "syslog" {
-		if _, err := logs.NewSyslog(config, uuid.Nil, uuid.Nil, nil); err != nil {
-			jsonError(w, fmt.Sprintf("Invalid syslog config: %v", err), http.StatusBadRequest)
-			return
-		}
-		// Inject server-level TLS cert/key if not provided in config and available globally.
-		if s.Config.SyslogTLSCert != "" && s.Config.SyslogTLSKey != "" {
-			var cfgMap map[string]interface{}
-			if err := json.Unmarshal(config, &cfgMap); err == nil {
-				if cfgMap == nil {
-					cfgMap = make(map[string]interface{})
-				}
-				if _, ok := cfgMap["tls_cert"]; !ok {
-					cfgMap["tls_cert"] = s.Config.SyslogTLSCert
-					cfgMap["tls_key"] = s.Config.SyslogTLSKey
-					var marshalErr error
-					if config, marshalErr = json.Marshal(cfgMap); marshalErr != nil {
-						jsonError(w, "failed to marshal syslog config", http.StatusInternalServerError)
-						return
-					}
-				}
-			}
-		}
+	config, err = s.validateConnectorConfig(req.Type, config)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 
 	// Auto-generate a webhook token for webhook_logs and OTLP connections.
@@ -255,11 +198,15 @@ func (s *Server) CreateConnection(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			slog.Error("syslog listener init failed", "connection_id", conn.ID, "err", err)
 			conn.Status = "error"
-			_ = queries.UpdateConnectionStatus(r.Context(), db.UpdateConnectionStatusParams{ID: conn.ID, Status: "error"})
+			if err := queries.UpdateConnectionStatus(r.Context(), db.UpdateConnectionStatusParams{ID: conn.ID, Status: "error"}); err != nil {
+				slog.Error("failed to persist listener error status", "connection_id", conn.ID, "err", err)
+			}
 		} else if err := s.Listener.Start(r.Context(), sl, conn.ID); err != nil {
 			slog.Error("syslog listener start failed", "connection_id", conn.ID, "err", err)
 			conn.Status = "error"
-			_ = queries.UpdateConnectionStatus(r.Context(), db.UpdateConnectionStatusParams{ID: conn.ID, Status: "error"})
+			if err := queries.UpdateConnectionStatus(r.Context(), db.UpdateConnectionStatusParams{ID: conn.ID, Status: "error"}); err != nil {
+				slog.Error("failed to persist listener error status", "connection_id", conn.ID, "err", err)
+			}
 		}
 	}
 
@@ -325,61 +272,11 @@ func (s *Server) UpdateConnection(w http.ResponseWriter, r *http.Request) {
 		status = "inactive"
 	}
 
-	// --- Config validation (mirrors CreateConnection) ---
-
-	if req.Type == "supabase" {
-		if _, err := logs.NewSupabase(config, uuid.Nil, uuid.Nil); err != nil {
-			jsonError(w, fmt.Sprintf("Invalid Supabase config: %v", err), http.StatusBadRequest)
-			return
-		}
-	}
-	if req.Type == "flyio" {
-		if _, err := logs.NewFlyio(config, uuid.Nil, uuid.Nil); err != nil {
-			jsonError(w, fmt.Sprintf("Invalid Fly.io config: %v", err), http.StatusBadRequest)
-			return
-		}
-	}
-	if req.Type == "vercel" {
-		if _, err := logs.NewVercel(config, uuid.Nil, uuid.Nil); err != nil {
-			jsonError(w, fmt.Sprintf("Invalid Vercel config: %v", err), http.StatusBadRequest)
-			return
-		}
-	}
-	if req.Type == "railway" {
-		if _, err := logs.NewRailway(config, uuid.Nil, uuid.Nil); err != nil {
-			jsonError(w, fmt.Sprintf("Invalid Railway config: %v", err), http.StatusBadRequest)
-			return
-		}
-	}
-	if req.Type == "mongodb" {
-		if _, err := logs.NewMongoDB(config, uuid.Nil, uuid.Nil); err != nil {
-			jsonError(w, fmt.Sprintf("Invalid MongoDB Atlas config: %v", err), http.StatusBadRequest)
-			return
-		}
-	}
-	if req.Type == "syslog" {
-		if _, err := logs.NewSyslog(config, uuid.Nil, uuid.Nil, nil); err != nil {
-			jsonError(w, fmt.Sprintf("Invalid syslog config: %v", err), http.StatusBadRequest)
-			return
-		}
-		// Inject server-level TLS cert/key if not provided in config and available globally.
-		if s.Config.SyslogTLSCert != "" && s.Config.SyslogTLSKey != "" {
-			var cfgMap map[string]interface{}
-			if err := json.Unmarshal(config, &cfgMap); err == nil {
-				if cfgMap == nil {
-					cfgMap = make(map[string]interface{})
-				}
-				if _, ok := cfgMap["tls_cert"]; !ok {
-					cfgMap["tls_cert"] = s.Config.SyslogTLSCert
-					cfgMap["tls_key"] = s.Config.SyslogTLSKey
-					var marshalErr error
-					if config, marshalErr = json.Marshal(cfgMap); marshalErr != nil {
-						jsonError(w, "failed to marshal syslog config", http.StatusInternalServerError)
-						return
-					}
-				}
-			}
-		}
+	// Validate connector config eagerly — before DB update.
+	config, err = s.validateConnectorConfig(req.Type, config)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 
 	// Preserve webhook token for webhook_logs/otlp connections.
@@ -453,208 +350,21 @@ func (s *Server) UpdateConnection(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			slog.Error("syslog listener init failed", "connection_id", conn.ID, "err", err)
 			conn.Status = "error"
-			_ = queries.UpdateConnectionStatus(r.Context(), db.UpdateConnectionStatusParams{ID: conn.ID, Status: "error"})
+			if err := queries.UpdateConnectionStatus(r.Context(), db.UpdateConnectionStatusParams{ID: conn.ID, Status: "error"}); err != nil {
+				slog.Error("failed to persist listener error status", "connection_id", conn.ID, "err", err)
+			}
 		} else if err := s.Listener.Start(r.Context(), sl, conn.ID); err != nil {
 			slog.Error("syslog listener start failed", "connection_id", conn.ID, "err", err)
 			conn.Status = "error"
-			_ = queries.UpdateConnectionStatus(r.Context(), db.UpdateConnectionStatusParams{ID: conn.ID, Status: "error"})
+			if err := queries.UpdateConnectionStatus(r.Context(), db.UpdateConnectionStatusParams{ID: conn.ID, Status: "error"}); err != nil {
+				slog.Error("failed to persist listener error status", "connection_id", conn.ID, "err", err)
+			}
 		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(conn)
 }
-
-func (s *Server) TestConnection(w http.ResponseWriter, r *http.Request) {
-	userID, ok := middleware.UserIDFromContext(r.Context())
-	if !ok {
-		jsonError(w, "missing user context", http.StatusUnauthorized)
-		return
-	}
-
-	queries, done, err := s.UserQueries(r.Context(), userID)
-	if err != nil {
-		jsonServerError(w, "database error", err)
-		return
-	}
-	defer done()
-
-	connID, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		jsonError(w, "invalid connection id", http.StatusBadRequest)
-		return
-	}
-
-	conn, err := queries.GetConnectionByUser(r.Context(), db.GetConnectionByUserParams{
-		ID:     connID,
-		UserID: userID,
-	})
-	if err != nil {
-		jsonError(w, "connection not found", http.StatusNotFound)
-		return
-	}
-
-	type testResult struct {
-		Success bool   `json:"success"`
-		Message string `json:"message"`
-	}
-
-	var result testResult
-
-	switch conn.Type {
-	case "postgres":
-		pg, err := database.New(conn.Config)
-		if err != nil {
-			slog.Error("connection test failed", "connection_id", connID, "err", err)
-			result = testResult{Success: false, Message: fmt.Sprintf("Failed to initialize database connector: %v", err)}
-			break
-		}
-		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-		defer cancel()
-		if err := pg.Connect(ctx); err != nil {
-			slog.Error("connection test failed", "connection_id", connID, "err", err)
-			result = testResult{Success: false, Message: fmt.Sprintf("Failed to connect to database: %v", err)}
-		} else {
-			defer pg.Close()
-			result = testResult{Success: true, Message: "Connection established"}
-		}
-	case "supabase":
-		sb, err := logs.NewSupabase(conn.Config, conn.ID, userID)
-		if err != nil {
-			slog.Error("connection test failed", "connection_id", connID, "err", err)
-			result = testResult{Success: false, Message: fmt.Sprintf("Invalid config: %v", err)}
-			break
-		}
-		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-		defer cancel()
-		if err := sb.Connect(ctx); err != nil {
-			slog.Error("connection test failed", "connection_id", connID, "err", err)
-			result = testResult{Success: false, Message: fmt.Sprintf("Failed to connect to Supabase API: %v", err)}
-		} else {
-			defer sb.Close()
-			result = testResult{Success: true, Message: "Connected to Supabase Management API"}
-		}
-	case "github":
-		if s.GitHub != nil {
-			success, msg := s.TestGitHubConnection(r.Context(), conn.Config)
-			result = testResult{Success: success, Message: msg}
-		} else {
-			result = testResult{Success: false, Message: "GitHub App not configured on server"}
-		}
-	case "flyio":
-		f, err := logs.NewFlyio(conn.Config, conn.ID, userID)
-		if err != nil {
-			slog.Error("connection test failed", "connection_id", connID, "err", err)
-			result = testResult{Success: false, Message: fmt.Sprintf("Invalid config: %v", err)}
-			break
-		}
-		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-		defer cancel()
-		if err := f.Connect(ctx); err != nil {
-			slog.Error("connection test failed", "connection_id", connID, "err", err)
-			result = testResult{Success: false, Message: fmt.Sprintf("Failed to connect to Fly.io API: %v", err)}
-		} else {
-			defer f.Close()
-			result = testResult{Success: true, Message: "Connected to Fly.io Machines API"}
-		}
-	case "vercel":
-		v, err := logs.NewVercel(conn.Config, conn.ID, userID)
-		if err != nil {
-			slog.Error("connection test failed", "connection_id", connID, "err", err)
-			result = testResult{Success: false, Message: fmt.Sprintf("Invalid config: %v", err)}
-			break
-		}
-		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-		defer cancel()
-		if err := v.Connect(ctx); err != nil {
-			slog.Error("connection test failed", "connection_id", connID, "err", err)
-			result = testResult{Success: false, Message: fmt.Sprintf("Failed to connect to Vercel API: %v", err)}
-		} else {
-			defer v.Close()
-			result = testResult{Success: true, Message: "Connected to Vercel API"}
-		}
-	case "railway":
-		rl, err := logs.NewRailway(conn.Config, conn.ID, userID)
-		if err != nil {
-			slog.Error("connection test failed", "connection_id", connID, "err", err)
-			result = testResult{Success: false, Message: fmt.Sprintf("Invalid config: %v", err)}
-			break
-		}
-		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-		defer cancel()
-		if err := rl.Connect(ctx); err != nil {
-			slog.Error("connection test failed", "connection_id", connID, "err", err)
-			result = testResult{Success: false, Message: fmt.Sprintf("Failed to connect to Railway API: %v", err)}
-		} else {
-			defer rl.Close()
-			result = testResult{Success: true, Message: "Connected to Railway GraphQL API"}
-		}
-	case "mongodb":
-		mg, err := logs.NewMongoDB(conn.Config, conn.ID, userID)
-		if err != nil {
-			slog.Error("connection test failed", "connection_id", connID, "err", err)
-			result = testResult{Success: false, Message: fmt.Sprintf("Invalid config: %v", err)}
-			break
-		}
-		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-		defer cancel()
-		if err := mg.Connect(ctx); err != nil {
-			slog.Error("connection test failed", "connection_id", connID, "err", err)
-			result = testResult{Success: false, Message: fmt.Sprintf("Failed to connect to MongoDB Atlas API: %v", err)}
-		} else {
-			defer mg.Close()
-			result = testResult{Success: true, Message: "Connected to MongoDB Atlas API"}
-		}
-	case "syslog":
-		sl, err := logs.NewSyslog(conn.Config, conn.ID, userID, s.Queries)
-		if err != nil {
-			slog.Error("connection test failed", "connection_id", connID, "err", err)
-			result = testResult{Success: false, Message: fmt.Sprintf("Invalid config: %v", err)}
-			break
-		}
-		cfg := sl.ParsedConfig()
-		result = testResult{
-			Success: true,
-			Message: fmt.Sprintf("Syslog listener configured on port %d (%s)", cfg.Port, cfg.Protocol),
-		}
-	default:
-		// webhook_logs, otlp — no remote target to test, auto-pass.
-		result = testResult{Success: true, Message: "Connection established"}
-	}
-
-	newStatus := "active"
-	if !result.Success {
-		newStatus = "error"
-	}
-	if err := queries.UpdateConnectionStatus(r.Context(), db.UpdateConnectionStatusParams{
-		ID:     connID,
-		Status: newStatus,
-	}); err != nil {
-		slog.Error("failed to update connection status", "connection_id", connID, "err", err)
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(result)
-}
-
-// --- Input validation helpers ---
-
-var validConnectionTypes = map[string]bool{
-	"webhook_logs": true,
-	"postgres":     true,
-	"supabase":     true,
-	"github":       true,
-	"syslog":       true,
-	"otlp":         true,
-	"flyio":        true,
-	"vercel":       true,
-	"railway":      true,
-	"mongodb":      true,
-}
-
-func isValidConnectionType(t string) bool  { return validConnectionTypes[t] }
-func isValidDirection(d string) bool        { return d == "one_way" || d == "two_way" }
-func isValidConnectionStatus(s string) bool { return s == "active" || s == "inactive" || s == "error" }
 
 func (s *Server) DeleteConnection(w http.ResponseWriter, r *http.Request) {
 	userID, ok := middleware.UserIDFromContext(r.Context())

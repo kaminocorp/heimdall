@@ -3,6 +3,7 @@ import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 import { useToast } from '@/composables/useToast'
+import { extractApiError } from '@/utils/apiError'
 
 const app = useAppStore()
 const router = useRouter()
@@ -26,8 +27,8 @@ async function handleSubmit() {
   try {
     await app.onboard(orgName.value, orgSlug.value, appName.value || 'My Application')
     router.push({ name: 'dashboard' })
-  } catch (e: any) {
-    toast.show(e.response?.data?.error ?? 'Failed to create organization', 'error')
+  } catch (e: unknown) {
+    toast.show(extractApiError(e, 'Failed to create organization'), 'error')
   } finally {
     submitting.value = false
   }

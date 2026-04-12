@@ -3,6 +3,7 @@ import { ref, computed, watch } from 'vue'
 import type { Connection, CreateConnectionPayload } from '@/types/connection'
 import { useAppStore } from '@/stores/app'
 import { getGitHubInstallURL } from '@/api/github'
+import { extractApiError } from '@/utils/apiError'
 import BaseSelect from '@/components/common/BaseSelect.vue'
 import { supabaseLogTables } from '@/components/connections/wizard/flows'
 
@@ -65,8 +66,8 @@ async function installGitHubApp() {
   try {
     const { url } = await getGitHubInstallURL(appStore.currentAppId)
     window.location.href = url
-  } catch (e: any) {
-    githubError.value = e.response?.data?.error ?? 'Failed to start GitHub App installation'
+  } catch (e: unknown) {
+    githubError.value = extractApiError(e, 'Failed to start GitHub App installation')
     githubInstalling.value = false
   }
 }

@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type { InvestigationSchedule, ScheduleInput } from '@/types/schedule'
 import * as schedulesApi from '@/api/schedules'
+import { extractApiError } from '@/utils/apiError'
 
 // Pinia setup-style store for investigation schedules.
 //
@@ -30,17 +31,6 @@ export const useSchedulesStore = defineStore('schedules', () => {
     } finally {
       loading.value = false
     }
-  }
-
-  // extractApiError walks an axios-style rejection and pulls the JSON error
-  // field out if it exists, falling back to the supplied default. Kept local
-  // so it doesn't collide with other stores' error-handling conventions.
-  function extractApiError(e: unknown, fallback: string): string {
-    if (typeof e === 'object' && e !== null) {
-      const resp = (e as { response?: { data?: { error?: string } } }).response
-      if (resp?.data?.error) return resp.data.error
-    }
-    return fallback
   }
 
   async function createSchedule(appId: string, input: ScheduleInput) {

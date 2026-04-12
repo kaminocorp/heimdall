@@ -2,6 +2,7 @@
 import { ref, onMounted } from 'vue'
 import type { GitHubRepo } from '@/types/github'
 import { listGitHubRepos, updateGitHubRepos } from '@/api/github'
+import { extractApiError } from '@/utils/apiError'
 
 const props = defineProps<{
   connectionId: string
@@ -19,8 +20,8 @@ const error = ref<string | null>(null)
 onMounted(async () => {
   try {
     repos.value = await listGitHubRepos(props.connectionId)
-  } catch (e: any) {
-    error.value = e.response?.data?.error ?? 'Failed to load repositories'
+  } catch (e: unknown) {
+    error.value = extractApiError(e, 'Failed to load repositories')
   } finally {
     loading.value = false
   }
@@ -36,8 +37,8 @@ async function save() {
   try {
     await updateGitHubRepos(props.connectionId, repos.value)
     emit('close')
-  } catch (e: any) {
-    error.value = e.response?.data?.error ?? 'Failed to save repository selection'
+  } catch (e: unknown) {
+    error.value = extractApiError(e, 'Failed to save repository selection')
   } finally {
     saving.value = false
   }

@@ -171,7 +171,12 @@ func resumeSyslogListeners(ctx context.Context, queries *db.Queries, lm *connect
 				if _, ok := cfgMap["tls_cert"]; !ok {
 					cfgMap["tls_cert"] = cfg.SyslogTLSCert
 					cfgMap["tls_key"] = cfg.SyslogTLSKey
-					configJSON, _ = json.Marshal(cfgMap)
+					if marshaled, err := json.Marshal(cfgMap); err != nil {
+						slog.Error("failed to marshal syslog config for resume", "connection_id", conn.ID, "err", err)
+						continue
+					} else {
+						configJSON = marshaled
+					}
 				}
 			}
 		}

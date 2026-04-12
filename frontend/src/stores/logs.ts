@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type { LogEntry } from '@/types/log'
 import * as logsApi from '@/api/logs'
+import { extractApiError } from '@/utils/apiError'
 
 export const useLogsStore = defineStore('logs', () => {
   const entries = ref<LogEntry[]>([])
@@ -24,8 +25,8 @@ export const useLogsStore = defineStore('logs', () => {
       })
       entries.value = data.data ?? []
       total.value = data.total
-    } catch (e: any) {
-      error.value = e.response?.data?.error ?? 'Failed to load logs'
+    } catch (e: unknown) {
+      error.value = extractApiError(e, 'Failed to load logs')
     } finally {
       loading.value = false
     }

@@ -3,6 +3,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useAppStore } from '@/stores/app'
 import { useSchedulesStore } from '@/stores/schedules'
 import { useToast } from '@/composables/useToast'
+import { extractApiError } from '@/utils/apiError'
 import type { InvestigationSchedule, ScheduleInput } from '@/types/schedule'
 import ScheduleCard from '@/components/schedules/ScheduleCard.vue'
 import ScheduleModal from '@/components/schedules/ScheduleModal.vue'
@@ -48,18 +49,7 @@ function closeModal() {
   editingSchedule.value = null
 }
 
-// extractApiError pulls a backend JSON error field out of an axios rejection,
-// falling back to a generic message. Handlers for Create/Update/Delete/Run
-// all share this so users see actual validation text ("invalid cron_expr: ...")
-// instead of generic "Failed to save".
-function extractApiError(e: unknown, fallback: string): string {
-  if (typeof e === 'object' && e !== null) {
-    const err = e as { response?: { data?: { error?: string } }; message?: string }
-    if (err.response?.data?.error) return err.response.data.error
-    if (err.message) return err.message
-  }
-  return fallback
-}
+
 
 async function handleSubmit(input: ScheduleInput) {
   const appId = appStore.currentAppId

@@ -2,6 +2,7 @@
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { extractApiError } from '@/utils/apiError'
 
 const router = useRouter()
 const auth = useAuthStore()
@@ -17,8 +18,8 @@ async function handleSubmit() {
   try {
     await auth.login(email.value, password.value)
     router.push('/dashboard')
-  } catch (e: any) {
-    error.value = e.message ?? 'Authentication failed'
+  } catch (e: unknown) {
+    error.value = extractApiError(e, 'Authentication failed')
   } finally {
     loading.value = false
   }

@@ -1,0 +1,11 @@
+-- Add missing foreign-key index on notification_log.agent_log_id.
+--
+-- Migration 019 created the FK constraint (REFERENCES agent_log(id) ON DELETE
+-- SET NULL) but omitted the supporting index. Migration 021 added indexes for
+-- notification_log(channel_id) and agent_log(conversation_id) but missed this
+-- one. Without an index, every DELETE on agent_log triggers a sequential scan
+-- on notification_log to verify FK integrity — increasingly expensive as the
+-- table grows.
+--
+-- IF NOT EXISTS guards against manual hotfixes.
+CREATE INDEX IF NOT EXISTS idx_notification_log_agent_log_id ON notification_log(agent_log_id);

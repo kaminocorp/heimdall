@@ -2,6 +2,8 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type { Connection, CreateConnectionPayload, UpdateConnectionPayload } from '@/types/connection'
 import * as connectionsApi from '@/api/connections'
+import { listConnectionsByApp } from '@/api/applications'
+import { extractApiError } from '@/utils/apiError'
 
 export const useConnectionsStore = defineStore('connections', () => {
   const connections = ref<Connection[]>([])
@@ -15,8 +17,20 @@ export const useConnectionsStore = defineStore('connections', () => {
     try {
       const { data } = await connectionsApi.listConnections()
       connections.value = data
-    } catch (e: any) {
-      error.value = e.response?.data?.error ?? 'Failed to load connections'
+    } catch (e: unknown) {
+      error.value = extractApiError(e, 'Failed to load connections')
+    } finally {
+      loading.value = false
+    }
+  }
+
+  async function fetchConnectionsByApp(appId: string) {
+    loading.value = true
+    error.value = null
+    try {
+      connections.value = await listConnectionsByApp(appId)
+    } catch (e: unknown) {
+      error.value = extractApiError(e, 'Failed to load connections')
     } finally {
       loading.value = false
     }
@@ -54,5 +68,5 @@ export const useConnectionsStore = defineStore('connections', () => {
     connections.value = connections.value.filter((c) => c.id !== id)
   }
 
-  return { connections, loading, error, testingId, fetchConnections, createConnection, updateConnection, testConnection, deleteConnection }
+  return { connections, loading, error, testingId, fetchConnections, fetchConnectionsByApp, createConnection, updateConnection, testConnection, deleteConnection }
 })

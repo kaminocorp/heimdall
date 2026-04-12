@@ -2,6 +2,7 @@
 import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
 import type { Connection } from '@/types/connection'
 import { useConnectionsStore } from '@/stores/connections'
+import { extractApiError } from '@/utils/apiError'
 
 const props = defineProps<{
   connection: Connection
@@ -53,9 +54,9 @@ onMounted(async () => {
       phase.value = 'error'
       message.value = result.message
     }
-  } catch (e: any) {
+  } catch (e: unknown) {
     phase.value = 'error'
-    message.value = e.response?.data?.message ?? e.message ?? 'Unexpected error during connection test'
+    message.value = extractApiError(e, 'Unexpected error during connection test')
   } finally {
     if (timer) clearInterval(timer)
   }

@@ -3,7 +3,7 @@ import { onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useConnectionsStore } from '@/stores/connections'
 import { useAppStore } from '@/stores/app'
-import { listConnectionsByApp } from '@/api/applications'
+import { extractApiError } from '@/utils/apiError'
 import type { Connection, CreateConnectionPayload } from '@/types/connection'
 import ConnectionList from '@/components/connections/ConnectionList.vue'
 import ConnectionForm from '@/components/connections/ConnectionForm.vue'
@@ -33,15 +33,7 @@ watch(viewMode, (v) => localStorage.setItem('heimdall_connections_view', v))
 async function fetchAppConnections() {
   const appId = appStore.currentAppId
   if (!appId) return
-  store.loading = true
-  store.error = null
-  try {
-    store.connections = await listConnectionsByApp(appId)
-  } catch (e: any) {
-    store.error = e.response?.data?.error ?? 'Failed to load connections'
-  } finally {
-    store.loading = false
-  }
+  await store.fetchConnectionsByApp(appId)
 }
 
 onMounted(async () => {
@@ -93,9 +85,9 @@ async function handleSubmit(payload: Omit<CreateConnectionPayload, 'app_id'>) {
     }
     closeForm()
     testModalConnection.value = conn
-  } catch (e: any) {
+  } catch (e: unknown) {
     const isEdit = !!editingConnection.value
-    actionError.value = e.response?.data?.error ?? `Failed to ${isEdit ? 'update' : 'create'} connection`
+    actionError.value = extractApiError(e, `Failed to ${isEdit ? 'update' : 'create'} connection`)
   }
 }
 
@@ -119,8 +111,8 @@ async function handleDelete(id: string) {
   actionError.value = null
   try {
     await store.deleteConnection(id)
-  } catch (e: any) {
-    actionError.value = e.response?.data?.error ?? 'Failed to delete connection'
+  } catch (e: unknown) {
+    actionError.value = extractApiError(e, 'Failed to delete connection')
   }
 }
 
