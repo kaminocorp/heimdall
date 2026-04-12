@@ -366,6 +366,96 @@ func TestListApplications_DefaultShapeUnchanged(t *testing.T) {
 	assert.False(t, hasSchedCount, "default list must not include schedule_count")
 }
 
+func TestUpdateAppAgentConfig_RejectsUnknownModel(t *testing.T) {
+	env := testSetup(t)
+
+	body := map[string]interface{}{
+		"model":    "anthropic/claude-sonnet-99",
+		"provider": "anthropic",
+		"mode":     "off",
+	}
+
+	rr := env.request(t, http.MethodPut, fmt.Sprintf("/api/apps/%s/agent/config", env.AppID), body)
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
+
+	var resp map[string]interface{}
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&resp))
+	assert.Contains(t, resp["error"], "unknown model")
+}
+
+func TestUpdateAppAgentConfig_RejectsProviderModelMismatch(t *testing.T) {
+	env := testSetup(t)
+
+	// Claude Opus 4.6 (direct) is provider "anthropic" — requesting it via
+	// "openrouter" should be rejected as a mismatch.
+	body := map[string]interface{}{
+		"model":    "claude-opus-4-6",
+		"provider": "openrouter",
+		"mode":     "off",
+	}
+
+	rr := env.request(t, http.MethodPut, fmt.Sprintf("/api/apps/%s/agent/config", env.AppID), body)
+	// This hits the "openrouter provider not enabled" check first (no key in
+	// test config), which is correct — but let's test a mismatch that gets past
+	// the provider gate. An anthropic-direct model sent with provider "anthropic"
+	// but actually there's no mismatch. Let's test with a model that resolves
+	// to openrouter but provider says anthropic — but we can't because the
+	// provider gate blocks openrouter. So we test the symmetric case: an
+	// openrouter-provider model with provider "anthropic". Since the model's
+	// catalogue entry says provider "openrouter" but the request says "anthropic",
+	// validation should catch it.
+	//
+	// But wait — the request provider is "anthropic" (passes provider gate),
+	// and the model resolves to provider "openrouter" → mismatch → 400.
+	body2 := map[string]interface{}{
+		"model":    "openai/gpt-5.4",
+		"provider": "anthropic",
+		"mode":     "off",
+	}
+
+	rr = env.request(t, http.MethodPut, fmt.Sprintf("/api/apps/%s/agent/config", env.AppID), body2)
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
+
+	var resp map[string]interface{}
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&resp))
+	assert.Contains(t, resp["error"], "belongs to provider")
+}
+
+func TestUpdateAppAgentConfig_AcceptsFlagshipModel(t *testing.T) {
+	env := testSetup(t)
+
+	body := map[string]interface{}{
+		"model":    "claude-opus-4-6",
+		"provider": "anthropic",
+		"mode":     "continuous",
+	}
+
+	rr := env.request(t, http.MethodPut, fmt.Sprintf("/api/apps/%s/agent/config", env.AppID), body)
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var cfg map[string]interface{}
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&cfg))
+	assert.Equal(t, "claude-opus-4-6", cfg["model"])
+	assert.Equal(t, "anthropic", cfg["provider"])
+}
+
+func TestUpdateAppAgentConfig_AcceptsEconomyModel(t *testing.T) {
+	env := testSetup(t)
+
+	body := map[string]interface{}{
+		"model":    "claude-haiku-4-5-20251001",
+		"provider": "anthropic",
+		"mode":     "off",
+	}
+
+	rr := env.request(t, http.MethodPut, fmt.Sprintf("/api/apps/%s/agent/config", env.AppID), body)
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var cfg map[string]interface{}
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&cfg))
+	assert.Equal(t, "claude-haiku-4-5-20251001", cfg["model"])
+}
+
 func TestListConnectionsByApp(t *testing.T) {
 	env := testSetup(t)
 

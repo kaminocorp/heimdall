@@ -8,6 +8,7 @@ import type { AppAgentConfig } from '@/types/organization'
 import type { ModelOption } from '@/types/models'
 import SkeletonBlock from '@/components/common/SkeletonBlock.vue'
 import BaseSelect from '@/components/common/BaseSelect.vue'
+import ModelPicker from '@/components/agent/ModelPicker.vue'
 
 const appStore = useAppStore()
 const toast = useToast()
@@ -23,10 +24,15 @@ const formMode = ref<'continuous' | 'periodic' | 'off'>('off')
 const formInterval = ref(60)
 const formPrompt = ref('')
 
-// Available models — fetched alongside config; grouped by provider in template
+// Available models — fetched alongside config; ModelPicker handles grouping
 const models = ref<ModelOption[]>([])
-const anthropicModels = computed(() => models.value.filter(m => m.provider === 'anthropic'))
-const openrouterModels = computed(() => models.value.filter(m => m.provider === 'openrouter'))
+
+// selectedModelDisplay resolves the stored config model to its catalogue entry
+// for the display-mode row (name, tier badge). Falls back to null for legacy
+// models not in the catalogue — the template shows config.model raw in that case.
+const selectedModelDisplay = computed(() =>
+  models.value.find(m => m.id === config.value?.model) ?? null
+)
 
 // formProvider is *derived* from formModel — there is one source of truth
 // (the selected model ID) and the provider follows from the model's catalogue
@@ -37,15 +43,6 @@ const formProvider = computed<'anthropic' | 'openrouter'>(() => {
   if (selected) return selected.provider
   return config.value?.provider ?? 'anthropic'
 })
-
-function formatContext(tokens: number): string {
-  if (tokens >= 1_000_000) return `${tokens / 1_000_000}M`
-  return `${tokens / 1_000}k`
-}
-
-function formatModelLabel(m: ModelOption): string {
-  return `${m.name} — ${formatContext(m.context_length)} · $${m.pricing.prompt}/$${m.pricing.completion}`
-}
 
 const intervalPresets = [
   { label: '30s', value: 30 },
@@ -152,25 +149,7 @@ watch(() => appStore.currentAppId, () => {
     <form v-else-if="editing" @submit.prevent="saveConfig" class="border border-border rounded-lg bg-bg-surface p-6 space-y-6">
       <div>
         <label class="block font-mono text-xs font-medium uppercase tracking-wider text-text-secondary mb-1.5">Model</label>
-        <select
-          v-model="formModel"
-          required
-          class="block w-full bg-bg-elevated/80 border border-border rounded px-3 py-2 text-text-primary font-mono text-sm focus:border-accent focus:ring-1 focus:ring-accent/30 focus:outline-none transition-colors appearance-none cursor-pointer"
-        >
-          <optgroup label="Anthropic (Direct)">
-            <option v-for="m in anthropicModels" :key="m.id" :value="m.id">
-              {{ formatModelLabel(m) }}
-            </option>
-          </optgroup>
-          <optgroup v-if="openrouterModels.length" label="OpenRouter">
-            <option v-for="m in openrouterModels" :key="m.id" :value="m.id">
-              {{ formatModelLabel(m) }}
-            </option>
-          </optgroup>
-        </select>
-        <p class="mt-1 font-mono text-xs text-text-muted">
-          Context window · prompt $/M · completion $/M
-        </p>
+        <ModelPicker v-model="formModel" :models="models" />
       </div>
 
       <div>
@@ -246,9 +225,15 @@ watch(() => appStore.currentAppId, () => {
       <div class="space-y-4">
         <div class="flex items-baseline justify-between py-2 border-b border-border">
           <span class="font-mono text-xs font-medium uppercase tracking-wider text-text-muted">Model</span>
-          <div class="text-right">
-            <span class="font-mono text-sm text-text-primary">{{ config.model }}</span>
-            <span class="font-mono text-xs text-text-muted ml-2">via {{ config.provider ?? 'anthropic' }}</span>
+          <div class="text-right flex items-center gap-2">
+            <span class="font-mono text-sm text-text-primary">{{ selectedModelDisplay?.name ?? config.model }}</span>
+            <span
+              v-if="selectedModelDisplay"
+              class="font-mono text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full border border-accent-bright/30 text-accent-bright bg-accent-bright/10"
+            >{{ selectedModelDisplay.tier }}</span>
+            <span class="font-mono text-xs text-text-muted">
+              {{ config.provider === 'openrouter' ? 'via OR' : 'direct' }}
+            </span>
           </div>
         </div>
         <div class="flex items-baseline justify-between py-2 border-b border-border">

@@ -325,6 +325,21 @@ func (s *Server) UpdateAppAgentConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Model validation. The catalogue (models.go) is the single source of
+	// truth — any ID not in it is rejected so typos surface immediately
+	// instead of silently failing at the first agent invocation.
+	resolved, ok := agent.ResolveModel(req.Model)
+	if !ok {
+		jsonError(w, fmt.Sprintf("unknown model: %s", req.Model), http.StatusBadRequest)
+		return
+	}
+	// Cross-check: the model's provider must match the request's provider.
+	// Catches mismatches like {provider: "anthropic", model: "openai/gpt-5.4"}.
+	if resolved.Provider != req.Provider {
+		jsonError(w, fmt.Sprintf("model %s belongs to provider %q, not %q", req.Model, resolved.Provider, req.Provider), http.StatusBadRequest)
+		return
+	}
+
 	cfg, err := s.Queries.UpsertAppAgentConfig(r.Context(), db.UpsertAppAgentConfigParams{
 		AppID:                app.ID,
 		Model:                req.Model,

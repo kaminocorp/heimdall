@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.33.0 — Expanded Model Catalogue & Picker](#0330--expanded-model-catalogue--picker-2026-04-12)
 - [0.32.0 — Multi-App Setup & Settings](#0320--multi-app-setup--settings-2026-04-12)
 - [0.31.0 — Scheduled Investigations](#0310--scheduled-investigations-2026-04-11)
 - [0.30.3 — Activity Feed Rename & Log Retention](#0303--activity-feed-rename--log-retention-2026-04-11)
@@ -76,6 +77,60 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.33.0 — Expanded Model Catalogue & Picker (2026-04-12)
+
+The model selection experience has been completely rethought. Previously, Agent Configuration showed 9 models in a native `<select>` dropdown with names crammed into single-line labels. This release expands the catalogue to 22 curated models across 10 vendors and 4 tiers, replaces the dropdown with a rich combobox picker, and adds server-side validation so typos are caught at the API boundary.
+
+### Backend — enriched catalogue, validation, refresh tooling
+
+**`ModelOption` struct enrichment** — four new fields: `vendor` (who made the model), `tier` (flagship/balanced/economy/specialist), `strengths` (short tags like "reasoning", "coding"), and `description` (one sentence). All additive — the API response shape is backwards-compatible.
+
+**Expanded catalogue** — 3 Anthropic-direct + 19 OpenRouter = 22 models, covering Anthropic, OpenAI, Google, xAI, Qwen, Z.ai (GLM), MiniMax, Xiaomi, Moonshot, and Mistral. Each entry has a `tool_use_verified_at` date comment. DeepSeek models were proposed but dropped — not available on OpenRouter as of April 2026.
+
+**`agent.ResolveModel(id)` helper** — scans both catalogues. Returns the full `ModelOption` and true if found.
+
+**Server-side model validation** — `UpdateAppAgentConfig` now rejects unknown model IDs (`400 "unknown model: <id>"`) and provider/model mismatches (`400 "model <id> belongs to provider <x>, not <y>"`). Legacy config rows are unaffected on read — validation only fires on save.
+
+**Catalogue refresh tool** — new `backend/cmd/refresh-models/` CLI. `--diff` compares curated prices/context against live OpenRouter data. `--suggest` lists uncurated models by vendor. Not wired into CI — developer-operated.
+
+### Frontend — ModelPicker combobox
+
+**`ModelPicker.vue`** replaces the native `<select>` with a custom combobox:
+- **Search** — substring match across model name, ID, vendor, and strength tags
+- **Tier filter chips** — All / Flagship / Balanced / Economy / Specialist
+- **Vendor grouping** — collapsible section headers, sticky during scroll
+- **Model cards** — three lines per entry: name + tier badge + provider badge, description, pricing + strength tags
+- **Keyboard** — arrow keys navigate, Enter selects, Escape closes
+- **Layout safety** — trigger width fixed (long names truncate), panel capped at `min(70vh, 32rem)`, no page overflow
+
+**Display-mode enrichment** — the read-only config row now shows the model's human name and tier badge instead of just the raw ID.
+
+### Tests
+
+**Backend:** `TestCatalogueConsistency` (22 models × all-fields-populated), `TestCatalogueSize`, `TestDefaultModelInCatalogue`, `TestResolveModel` (4 cases), 4 new handler validation tests. Build-tagged `tool_use_vet_test.go` for live API vetting.
+
+**Frontend:** 15 vitest cases for ModelPicker — rendering, search filtering, tier filtering, selection, keyboard navigation, empty state, overflow.
+
+### Files changed
+
+| File | Kind | Change |
+|------|------|--------|
+| `backend/internal/agent/models.go` | Edit | Enriched struct, vendor/tier constants, 9→22 models, `ResolveModel` helper |
+| `backend/internal/agent/models_test.go` | New | Catalogue consistency + ResolveModel tests |
+| `backend/internal/agent/tool_use_vet_test.go` | New | Build-tagged tool-use vetting test |
+| `backend/internal/api/handlers/applications.go` | Edit | Model + provider/model validation |
+| `backend/internal/api/handlers/applications_test.go` | Edit | +4 validation tests |
+| `backend/cmd/refresh-models/main.go` | New | Catalogue drift detector CLI |
+| `backend/cmd/refresh-models/README.md` | New | Usage notes |
+| `frontend/src/types/models.ts` | Edit | +4 enriched fields |
+| `frontend/src/components/agent/ModelPicker.vue` | New | Combobox picker |
+| `frontend/src/components/agent/ModelCard.vue` | New | Per-model card |
+| `frontend/src/components/agent/__tests__/ModelPicker.test.ts` | New | 15 vitest cases |
+| `frontend/src/pages/AgentConfigPage.vue` | Edit | Swapped `<select>` for `<ModelPicker>`, enriched display row |
+| `docs/archive/openrouter-models-2026-04-12.json` | New | Frozen API snapshot |
 
 ---
 
