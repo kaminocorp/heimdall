@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useConnectionsStore } from '@/stores/connections'
 import { useAppStore } from '@/stores/app'
 import { extractApiError } from '@/utils/apiError'
 import type { Connection, CreateConnectionPayload } from '@/types/connection'
+import { typeToCategory, type ConnectionCategory } from '@/components/connections/wizard/flows'
 import ConnectionForm from '@/components/connections/ConnectionForm.vue'
 import ConnectionTestModal from '@/components/connections/ConnectionTestModal.vue'
 import ConnectionWizard from '@/components/connections/wizard/ConnectionWizard.vue'
@@ -29,6 +30,40 @@ const testModalConnection = ref<Connection | null>(null)
 const selectedConnection = ref<Connection | null>(null)
 const bubbleEls = ref<(HTMLElement | null)[]>([])
 const nebulaEl = ref<HTMLElement | null>(null)
+
+// Group connections by category for three-lane layout
+const ingestionConns = computed(() => store.connections.filter(c => typeToCategory(c.type) === 'ingestion'))
+const enrichmentConns = computed(() => store.connections.filter(c => typeToCategory(c.type) === 'enrichment'))
+const outboundConns = computed(() => store.connections.filter(c => typeToCategory(c.type) === 'outbound'))
+
+// Category metadata for rendering lane headers
+const categories: { key: ConnectionCategory; label: string; sublabel: string; icon: string }[] = [
+  { key: 'ingestion', label: 'Ingestion', sublabel: 'Data flowing in', icon: 'down' },
+  { key: 'enrichment', label: 'Enrichment', sublabel: 'Agent tools', icon: 'bidirectional' },
+  { key: 'outbound', label: 'Outbound', sublabel: 'Alerts flowing out', icon: 'up' },
+]
+
+function connectionsForCategory(cat: ConnectionCategory): Connection[] {
+  switch (cat) {
+    case 'ingestion': return ingestionConns.value
+    case 'enrichment': return enrichmentConns.value
+    case 'outbound': return outboundConns.value
+  }
+}
+
+// Build a flat list of all bubble elements with their category, preserving order for FlowLines
+function setBubbleRef(el: any, globalIndex: number) {
+  bubbleEls.value[globalIndex] = el?.$el ?? el
+}
+
+// Ordered list of categories per global bubble index — used by FlowLines
+const bubbleCategories = computed<ConnectionCategory[]>(() => {
+  const cats: ConnectionCategory[] = []
+  for (const conn of ingestionConns.value) cats.push('ingestion')
+  for (const conn of enrichmentConns.value) cats.push('enrichment')
+  for (const conn of outboundConns.value) cats.push('outbound')
+  return cats
+})
 
 async function fetchAppConnections() {
   const appId = appStore.currentAppId
@@ -179,19 +214,60 @@ function closeRepoSelector() {
     </div>
     <div v-else-if="store.error" class="text-status-critical text-sm font-mono">{{ store.error }}</div>
     <template v-else>
-      <!-- Ingestion view: Bubbles → Flow Lines → Nebula -->
+      <!-- Three-lane layout: categorised bubbles → flow lines → nebula -->
       <div class="relative">
-        <!-- Connection bubbles -->
-        <div class="flex flex-wrap justify-center gap-4 relative z-10">
-          <ConnectionBubble
-            v-for="(conn, i) in store.connections"
-            :key="conn.id"
-            :ref="(el: any) => { bubbleEls[i] = el?.$el ?? el }"
-            :connection="conn"
-            :testing="store.testingId === conn.id"
-            :index="i"
-            @click="selectedConnection = conn"
-          />
+        <!-- Category lanes -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 relative z-10">
+          <div v-for="cat in categories" :key="cat.key" class="category-lane">
+            <!-- Lane header -->
+            <div class="flex items-center gap-2 mb-3 px-1">
+              <!-- Direction icon -->
+              <svg v-if="cat.icon === 'down'" class="w-3.5 h-3.5 text-text-muted shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 5v14" /><path d="m19 12-7 7-7-7" />
+              </svg>
+              <svg v-else-if="cat.icon === 'bidirectional'" class="w-3.5 h-3.5 text-text-muted shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M8 3 4 7l4 4" /><path d="M4 7h16" /><path d="m16 21 4-4-4-4" /><path d="M20 17H4" />
+              </svg>
+              <svg v-else class="w-3.5 h-3.5 text-text-muted shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 19V5" /><path d="m5 12 7-7 7 7" />
+              </svg>
+              <div>
+                <h3 class="font-mono text-sm font-bold uppercase tracking-widest text-text-primary leading-tight">
+                  {{ cat.label }}
+                </h3>
+                <p class="font-mono text-[11px] uppercase tracking-wider text-text-muted leading-tight">
+                  {{ cat.sublabel }}
+                </p>
+              </div>
+            </div>
+
+            <!-- Bubbles in this category — 2-column grid for consistent alignment -->
+            <div class="grid grid-cols-2 gap-3 min-h-[80px]">
+              <ConnectionBubble
+                v-for="(conn, i) in connectionsForCategory(cat.key)"
+                :key="conn.id"
+                :ref="(el: any) => {
+                  const offset = cat.key === 'ingestion' ? 0
+                    : cat.key === 'enrichment' ? ingestionConns.length
+                    : ingestionConns.length + enrichmentConns.length
+                  setBubbleRef(el, offset + i)
+                }"
+                :connection="conn"
+                :testing="store.testingId === conn.id"
+                :index="i"
+                @click="selectedConnection = conn"
+              />
+              <!-- Empty lane hint -->
+              <div
+                v-if="connectionsForCategory(cat.key).length === 0"
+                class="col-span-2 flex items-center justify-center text-center py-4"
+              >
+                <span class="font-mono text-[10px] uppercase tracking-wider text-text-muted/50">
+                  No {{ cat.label.toLowerCase() }} connections
+                </span>
+              </div>
+            </div>
+          </div>
         </div>
 
         <!-- Spacer between bubbles and nebula -->
@@ -203,6 +279,7 @@ function closeRepoSelector() {
           :bubble-els="bubbleEls"
           :nebula-el="nebulaEl"
           :count="store.connections.length"
+          :categories="bubbleCategories"
         />
 
         <!-- Agent nebula -->

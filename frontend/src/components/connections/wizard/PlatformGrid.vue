@@ -10,6 +10,7 @@ const emit = defineEmits<{
 const platformLogs = computed(() => flows.filter(f => f.section === 'platform_log'))
 const directProtocols = computed(() => flows.filter(f => f.section === 'direct_protocol'))
 const agentTools = computed(() => flows.filter(f => f.section === 'agent_tool'))
+const outbound = computed(() => flows.filter(f => f.section === 'outbound'))
 </script>
 
 <template>
@@ -81,6 +82,32 @@ const agentTools = computed(() => flows.filter(f => f.section === 'agent_tool'))
       <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <PlatformCard
           v-for="flow in agentTools"
+          :key="flow.id"
+          :flow="flow"
+          @select="emit('select', $event)"
+        />
+      </div>
+    </div>
+
+    <!-- Strong divider — outbound channels -->
+    <div class="border-t border-border pt-2">
+      <div class="flex items-center gap-2 mb-4">
+        <svg class="w-3.5 h-3.5 text-text-muted shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M22 2 11 13" />
+          <path d="m22 2-7 20-4-9-9-4 20-7z" />
+        </svg>
+        <div>
+          <h3 class="font-mono text-xs font-bold uppercase tracking-widest text-text-primary">
+            Outbound channels
+          </h3>
+          <p class="font-sans text-xs text-text-muted mt-0.5">
+            Where the agent delivers alerts, reports, and tickets when it finds something.
+          </p>
+        </div>
+      </div>
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <PlatformCard
+          v-for="flow in outbound"
           :key="flow.id"
           :flow="flow"
           @select="emit('select', $event)"

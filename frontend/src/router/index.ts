@@ -45,16 +45,9 @@ const router = createRouter({
       name: 'connections',
       component: () => import('@/pages/ConnectionsPage.vue'),
     },
-    {
-      path: '/enrichment',
-      name: 'enrichment',
-      component: () => import('@/pages/EnrichmentPage.vue'),
-    },
-    {
-      path: '/outbound',
-      name: 'outbound',
-      component: () => import('@/pages/OutboundPage.vue'),
-    },
+    // Legacy paths — redirect to unified Connections page
+    { path: '/enrichment', redirect: '/connections' },
+    { path: '/outbound', redirect: '/connections' },
     {
       path: '/agent/config',
       name: 'agent-config',

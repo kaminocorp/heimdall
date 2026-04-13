@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.41.1 — Unified Connections Page: Three-Lane Layout](#0411--unified-connections-page-three-lane-layout-2026-04-13)
 - [0.41.0 — Neutral Canvas Colour Rebalance](#0410--neutral-canvas-colour-rebalance-2026-04-13)
 - [0.40.0 — Connection Wizard: Platform-First Redesign](#0400--connection-wizard-platform-first-redesign-2026-04-13)
 - [0.39.0 — Ingestion Page Redesign: 3D Agent Nebula](#0390--ingestion-page-redesign-3d-agent-nebula-2026-04-13)
@@ -87,6 +88,94 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.41.1 — Unified Connections Page: Three-Lane Layout (2026-04-13)
+
+The three separate Infrastructure pages (Ingestion, Enrichment, Outbound) have been consolidated into a single **Connections** page with a three-lane visual layout. Each lane groups connections by their data-flow role — what flows in, what the agent queries, and where it sends results — all rendered above the shared 3D agent nebula.
+
+### The problem with three separate pages
+
+Splitting connections across three tabs fragmented the visual metaphor. Most deployments have 3–8 total connections; distributing them across three pages meant each page showed 1–2 lonely bubbles above an identical nebula. The connection wizard already categorised connectors at creation time — repeating that taxonomy as top-level navigation added clicks without adding clarity.
+
+### The approach — one page, three visual lanes
+
+All connections live on a single page. A three-column grid groups them by category, each with a header showing the lane name, a directional icon, and a sublabel:
+
+| Lane | Icon | Sublabel | What belongs here |
+|------|------|----------|-------------------|
+| **Ingestion** | ↓ arrow | Data flowing in | Supabase, Webhook, Syslog, OTLP, platform log sources |
+| **Enrichment** | ↔ bidirectional | Agent tools | PostgreSQL, GitHub, MySQL — things the agent queries during investigations |
+| **Outbound** | ↑ arrow | Alerts flowing out | Slack, Telegram, Linear, Trajan — where the agent delivers results |
+
+Connections within each lane are arranged in a consistent **2-column grid** for clean alignment regardless of count.
+
+### Category derivation
+
+A new `typeToCategory()` utility in `flows.ts` maps each connection type string to its visual category (`'ingestion' | 'enrichment' | 'outbound'`). This is a pure frontend concern — no database schema changes, no new API fields. The category is derived from the connection type at render time.
+
+### Curved arrow flow lines
+
+The flow lines connecting bubbles to the nebula have been redesigned:
+
+- **Geometry**: Quadratic beziers (`Q`, one control point) replaced with **cubic beziers** (`C`, two control points). CP1 drops the line straight down from the bubble for a clean vertical departure; CP2 sweeps it horizontally into the nebula centre for a smooth arrival. The curvature scales with horizontal distance — bubbles directly above get gentle arcs, side-column bubbles get dramatic S-curves.
+
+- **Arrowheads**: SVG `<marker>` elements render small triangular arrowheads that auto-orient along the path:
+  - Ingestion: arrow at nebula end (data flows in)
+  - Outbound: arrow at bubble end (data flows out)
+  - Enrichment: arrows on both ends (bidirectional)
+
+- **Animation per category**:
+  - Ingestion: `flow-down` — dashes animate top-to-bottom (2.5s linear)
+  - Outbound: `flow-up` — dashes animate bottom-to-top (reversed)
+  - Enrichment: `flow-bidir` — dashes pulse back and forth (3s ease-in-out), with shorter dash pattern (`2 6` vs `4 8`)
+
+### Outbound connectors added to wizard
+
+Four new outbound connector types added to the connection wizard (all coming soon):
+
+| Connector | Description |
+|-----------|-------------|
+| **Slack** | Send alerts and reports to Slack channels |
+| **Telegram** | Send alerts to Telegram chats and groups |
+| **Linear** | Create issues from incidents automatically |
+| **Trajan** | Create tickets in Trajan project management |
+
+The wizard's `PlatformGrid` now has a fourth section — "Outbound channels" — with a send icon and descriptive copy explaining the purpose.
+
+### Connector logos
+
+SVG brand marks added to `ConnectorLogo.vue` for all four outbound types: Slack (hash mark, sourced from Simple Icons), Telegram (paper plane), Linear (official mark), and Trajan (custom "T" in rounded rectangle).
+
+### Navigation changes
+
+- **Sidebar**: Three items (Ingestion / Enrichment / Outbound) under "Infrastructure" replaced with single **Connections** item
+- **Router**: `/enrichment` and `/outbound` now redirect to `/connections` (preserves existing bookmarks)
+- **Deleted**: `EnrichmentPage.vue` and `OutboundPage.vue` stub pages removed
+
+### Files changed
+
+| File | Kind | Change |
+|------|------|--------|
+| `frontend/src/components/common/AppSidebar.vue` | Edit | Three nav items → one "Connections" item |
+| `frontend/src/router/index.ts` | Edit | Enrichment/Outbound routes → redirects |
+| `frontend/src/pages/EnrichmentPage.vue` | Delete | Stub removed |
+| `frontend/src/pages/OutboundPage.vue` | Delete | Stub removed |
+| `frontend/src/pages/ConnectionsPage.vue` | Edit | Three-lane grid layout with category headers |
+| `frontend/src/components/connections/ConnectionBubble.vue` | Edit | Removed max-width for grid-cell fill |
+| `frontend/src/components/connections/FlowLines.vue` | Edit | Cubic S-curves, SVG arrowheads, per-category animation |
+| `frontend/src/components/connections/wizard/flows.ts` | Edit | `ConnectionCategory` type, `typeToCategory()`, `'outbound'` section, 4 outbound connectors |
+| `frontend/src/components/connections/wizard/PlatformGrid.vue` | Edit | New "Outbound channels" section |
+| `frontend/src/components/icons/ConnectorLogo.vue` | Edit | Slack, Telegram, Linear, Trajan SVG logos |
+
+### Verification
+
+| Check | Result |
+|-------|--------|
+| `vue-tsc --noEmit` | Clean |
+| `vite build` | Clean |
+| `vitest run` | 52/52 tests pass |
 
 ---
 

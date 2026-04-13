@@ -23,9 +23,7 @@ const sections = [
   {
     label: 'Infrastructure',
     items: [
-      { name: 'Ingestion', to: '/connections', routeName: 'connections' },
-      { name: 'Enrichment', to: '/enrichment', routeName: 'enrichment' },
-      { name: 'Outbound', to: '/outbound', routeName: 'outbound' },
+      { name: 'Connections', to: '/connections', routeName: 'connections' },
     ],
   },
   {

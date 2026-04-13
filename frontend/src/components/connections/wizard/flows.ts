@@ -6,17 +6,36 @@ export interface FlowStep {
   component: Component
 }
 
+export type ConnectionCategory = 'ingestion' | 'enrichment' | 'outbound'
+
 export interface PlatformFlow {
   id: string
   name: string
   icon: string
   description: string
-  section: 'platform_log' | 'direct_protocol' | 'agent_tool'
+  section: 'platform_log' | 'direct_protocol' | 'agent_tool' | 'outbound'
   subtitle: string
   connectorType: string
   direction: 'one_way' | 'two_way'
   available: boolean
   steps: FlowStep[]
+}
+
+/** Map a connection type string to its visual category on the Connections page. */
+export function typeToCategory(type: string): ConnectionCategory {
+  switch (type) {
+    case 'postgres':
+    case 'mysql':
+    case 'github':
+      return 'enrichment'
+    case 'slack':
+    case 'telegram':
+    case 'linear':
+    case 'trajan':
+      return 'outbound'
+    default:
+      return 'ingestion'
+  }
 }
 
 export interface WizardState {
@@ -242,6 +261,57 @@ export const flows: PlatformFlow[] = [
     subtitle: 'Query during investigations',
     connectorType: 'mysql',
     direction: 'two_way',
+    available: false,
+    steps: [],
+  },
+
+  // ── Outbound channels ──────────────────────────────────
+  // "Where should the agent send alerts and reports?"
+  {
+    id: 'slack',
+    name: 'Slack',
+    icon: 'SK',
+    description: 'Send alerts and reports to Slack channels',
+    section: 'outbound',
+    subtitle: 'Channel notifications',
+    connectorType: 'slack',
+    direction: 'one_way',
+    available: false,
+    steps: [],
+  },
+  {
+    id: 'telegram',
+    name: 'Telegram',
+    icon: 'TG',
+    description: 'Send alerts to Telegram chats and groups',
+    section: 'outbound',
+    subtitle: 'Bot notifications',
+    connectorType: 'telegram',
+    direction: 'one_way',
+    available: false,
+    steps: [],
+  },
+  {
+    id: 'linear',
+    name: 'Linear',
+    icon: 'LN',
+    description: 'Create issues from incidents automatically',
+    section: 'outbound',
+    subtitle: 'Issue tracking',
+    connectorType: 'linear',
+    direction: 'one_way',
+    available: false,
+    steps: [],
+  },
+  {
+    id: 'trajan',
+    name: 'Trajan',
+    icon: 'TJ',
+    description: 'Create tickets in Trajan project management',
+    section: 'outbound',
+    subtitle: 'Ticket management',
+    connectorType: 'trajan',
+    direction: 'one_way',
     available: false,
     steps: [],
   },
