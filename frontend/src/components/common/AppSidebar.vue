@@ -23,22 +23,23 @@ const sections = [
   {
     label: 'Infrastructure',
     items: [
-      { name: 'Connections', to: '/connections', routeName: 'connections' },
+      { name: 'Ingestion', to: '/connections', routeName: 'connections' },
+      { name: 'Enrichment', to: '/enrichment', routeName: 'enrichment' },
+      { name: 'Outbound', to: '/outbound', routeName: 'outbound' },
     ],
   },
   {
     label: 'Agent',
     items: [
       { name: 'Configuration', to: '/agent/config', routeName: 'agent-config' },
-      { name: 'Chat', to: '/agent/chat', routeName: 'agent-chat' },
       { name: 'Schedules', to: '/schedules', routeName: 'schedules' },
-      { name: 'Notifications', to: '/notifications', routeName: 'notifications' },
     ],
   },
   {
     label: 'Intelligence',
     items: [
       { name: 'Reports', to: '/reports', routeName: 'reports' },
+      { name: 'Notifications', to: '/notifications', routeName: 'notifications' },
     ],
   },
 ]

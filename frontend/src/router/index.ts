@@ -46,6 +46,16 @@ const router = createRouter({
       component: () => import('@/pages/ConnectionsPage.vue'),
     },
     {
+      path: '/enrichment',
+      name: 'enrichment',
+      component: () => import('@/pages/EnrichmentPage.vue'),
+    },
+    {
+      path: '/outbound',
+      name: 'outbound',
+      component: () => import('@/pages/OutboundPage.vue'),
+    },
+    {
       path: '/agent/config',
       name: 'agent-config',
       component: () => import('@/pages/AgentConfigPage.vue'),

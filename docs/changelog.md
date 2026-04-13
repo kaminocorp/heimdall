@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.38.0 — Navigation Restructure & Infrastructure Triptych](#0380--navigation-restructure--infrastructure-triptych-2026-04-13)
 - [0.37.0 — Activity Feed App-Scoping](#0370--activity-feed-app-scoping-2026-04-13)
 - [0.36.0 — Top Header Nav Bar & Sidebar Slim-Down](#0360--top-header-nav-bar--sidebar-slim-down-2026-04-13)
 - [0.35.0 — Technical Retro-Futurism UI Refresh](#0350--technical-retro-futurism-ui-refresh-2026-04-13)
@@ -83,6 +84,79 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.38.0 — Navigation Restructure & Infrastructure Triptych (2026-04-13)
+
+The sidebar and header navigation have been restructured around clearer mental models. The previous layout grouped items by implementation origin (what was built when), but as the platform matures the navigation should reflect how users think about the system — not how it was assembled. This release reorganises the sidebar into four intentional sections, introduces an infrastructure triptych (Ingestion / Enrichment / Outbound), and promotes Agent Chat from a sidebar link to a persistent header icon.
+
+### The three changes
+
+**1. Notifications moves from AGENT → INTELLIGENCE**
+
+Notifications are outputs of the agent's analytical work — assessment results, escalations, threshold breaches. They belong alongside Reports under Intelligence, not next to Configuration and Schedules under Agent. The Agent section is now purely about *configuring and scheduling* the agent's behaviour; Intelligence is where you *consume its output*.
+
+**2. Agent Chat promoted to header icon**
+
+Chat was a sidebar navigation item under Agent, which buried the most interactive surface in a list of configuration pages. This release removes it from the sidebar and adds a persistent icon button in the top-right header bar, immediately left of the Profile avatar. The icon is a hexagon with a centre dot — a symmetrical, technical shape that evokes a node or hub without resorting to speech-bubble clichés. It links to the existing `/agent/chat` route with no URL change. On hover, the icon highlights to the accent green and the border picks up the accent glow, consistent with the retro-futurism palette.
+
+**3. Infrastructure triptych: Ingestion / Enrichment / Outbound**
+
+The single "Connections" item under Infrastructure has been expanded into three items that map to a data-flow mental model:
+
+| Item | Purpose | Status |
+|------|---------|--------|
+| **Ingestion** | Log sources and data pipelines flowing into Heimdall — webhooks, syslog, OTLP, API pollers | Live (renamed from Connections, same `/connections` route) |
+| **Enrichment** | Context sources that help the agent understand the application — GitHub repos/codebases, manual system descriptions, architecture documentation | Placeholder (`/enrichment`, "Coming soon") |
+| **Outbound** | Delivery channels for alerts and reports — Slack, Telegram, and future third-party integrations (Linear, Trajan, etc.) | Placeholder (`/outbound`, "Coming soon") |
+
+The distinction matters for onboarding: Ingestion answers "where does data come from?", Enrichment answers "what context does the agent need?", and Outbound answers "where should findings go?". Keeping them separate makes each concept self-explanatory without requiring users to understand a single overloaded "Connections" page.
+
+**Ingestion** reuses the existing Connections page and route (`/connections`, route name `connections`) — only the sidebar label changed, so no URLs break and no backend changes are needed.
+
+**Enrichment** and **Outbound** are new Vue pages (`EnrichmentPage.vue`, `OutboundPage.vue`) with matching routes. Both render a page header with a descriptive subtitle and a "Coming soon" placeholder, following the same page-header pattern used by Reports and other pages.
+
+### Resulting sidebar structure
+
+```
+OVERVIEW
+  Dashboard
+  Activity
+
+INFRASTRUCTURE
+  Ingestion          ← renamed from "Connections"
+  Enrichment         ← new placeholder
+  Outbound           ← new placeholder
+
+AGENT
+  Configuration
+  Schedules
+                     ← Chat removed (now in header)
+                     ← Notifications removed (moved to Intelligence)
+
+INTELLIGENCE
+  Reports
+  Notifications      ← moved from Agent
+```
+
+### Files changed
+
+| File | Kind | Change |
+|------|------|--------|
+| `frontend/src/components/common/AppSidebar.vue` | Edit | Restructured sections array: renamed Connections → Ingestion, added Enrichment + Outbound, removed Chat, moved Notifications to Intelligence |
+| `frontend/src/components/common/AppHeader.vue` | Edit | Added agent chat hexagon icon button in header right section, left of Profile avatar |
+| `frontend/src/router/index.ts` | Edit | Added `/enrichment` and `/outbound` routes with lazy-loaded page components |
+| `frontend/src/pages/EnrichmentPage.vue` | **New** | Placeholder page with header and "Coming soon" |
+| `frontend/src/pages/OutboundPage.vue` | **New** | Placeholder page with header and "Coming soon" |
+
+### Verification
+
+| Check | Result |
+|-------|--------|
+| `vue-tsc --noEmit` | Clean |
+| `vite build` | Clean — both new pages appear as separate chunks |
+| Existing routes | Unchanged — `/connections`, `/agent/chat`, `/notifications`, `/reports` all resolve to the same components |
 
 ---
 

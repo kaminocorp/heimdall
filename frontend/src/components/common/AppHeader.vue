@@ -207,8 +207,21 @@ const userInitial = computed(() => {
       </div>
     </div>
 
-    <!-- Right: Profile -->
-    <div class="ml-auto flex items-center">
+    <!-- Right: Agent chat + Profile -->
+    <div class="ml-auto flex items-center gap-2">
+      <!-- Agent chat button -->
+      <RouterLink
+        to="/agent/chat"
+        class="flex items-center justify-center w-7 h-7 rounded-full border border-border bg-bg-surface text-text-secondary hover:text-accent hover:border-accent/40 transition-colors"
+        title="Agent Chat"
+      >
+        <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <!-- Hexagon node shape — symmetrical, technical, non-cringey -->
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 2L3 7v10l9 5 9-5V7l-9-5z" />
+          <circle cx="12" cy="12" r="2.5" fill="currentColor" stroke="none" />
+        </svg>
+      </RouterLink>
+
       <div ref="profileRef" class="relative">
         <button
           @click="toggleProfile"
