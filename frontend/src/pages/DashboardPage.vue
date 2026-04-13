@@ -43,7 +43,7 @@ watch(() => appStore.currentAppId, loadData)
 const agentStatus = computed(() => {
   if (!agentConfig.value) return { label: '...', color: 'text-text-muted', dot: 'bg-text-muted' }
   switch (agentConfig.value.mode) {
-    case 'continuous': return { label: 'Continuous', color: 'text-accent', dot: 'bg-status-ok animate-pulse' }
+    case 'continuous': return { label: 'Continuous', color: 'text-accent', dot: 'bg-status-ok glow-pulse' }
     case 'periodic': return { label: 'Periodic', color: 'text-status-info', dot: 'bg-status-info' }
     case 'off': return { label: 'Inactive', color: 'text-text-muted', dot: 'bg-text-muted' }
     default: return { label: agentConfig.value.mode, color: 'text-text-muted', dot: 'bg-text-muted' }
@@ -80,7 +80,7 @@ function formatInterval(secs: number): string {
     <!-- Status cards row -->
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5 mb-10">
       <!-- Monitoring Status -->
-      <div class="border border-border rounded-lg bg-bg-surface p-6 animate-fade-in" :style="{ '--stagger-index': 0 }">
+      <div class="border border-border rounded-lg bg-bg-surface p-6 animate-fade-in chrome-brackets" :style="{ '--stagger-index': 0 }">
         <div class="font-mono text-xs font-medium uppercase tracking-widest text-text-muted mb-4">Monitoring</div>
         <div class="space-y-3">
           <div class="flex items-center justify-between">
@@ -102,7 +102,7 @@ function formatInterval(secs: number): string {
       </div>
 
       <!-- System Status -->
-      <div class="border border-border rounded-lg bg-bg-surface p-6 animate-fade-in" :style="{ '--stagger-index': 1 }">
+      <div class="border border-border rounded-lg bg-bg-surface p-6 animate-fade-in chrome-brackets" :style="{ '--stagger-index': 1 }">
         <div class="font-mono text-xs font-medium uppercase tracking-widest text-text-muted mb-4">Agent</div>
         <div class="space-y-3">
           <div v-if="agentConfig" class="flex items-center justify-between">
@@ -113,7 +113,7 @@ function formatInterval(secs: number): string {
       </div>
 
       <!-- Connections -->
-      <div class="border border-border rounded-lg bg-bg-surface p-6 animate-fade-in" :style="{ '--stagger-index': 2 }">
+      <div class="border border-border rounded-lg bg-bg-surface p-6 animate-fade-in chrome-brackets" :style="{ '--stagger-index': 2 }">
         <div class="font-mono text-xs font-medium uppercase tracking-widest text-text-muted mb-4">Connections</div>
         <div class="font-mono text-xs text-text-secondary mb-3">
           {{ activeCount }} active<span v-if="inactiveCount"> · {{ inactiveCount }} inactive</span>
@@ -134,7 +134,7 @@ function formatInterval(secs: number): string {
       </div>
 
       <!-- Log Ingestion -->
-      <div class="border border-border rounded-lg bg-bg-surface p-6 animate-fade-in" :style="{ '--stagger-index': 3 }">
+      <div class="border border-border rounded-lg bg-bg-surface p-6 animate-fade-in chrome-brackets" :style="{ '--stagger-index': 3 }">
         <div class="font-mono text-xs font-medium uppercase tracking-widest text-text-muted mb-4">Log Ingestion</div>
         <div v-if="statsError" class="font-mono text-xs text-status-critical">{{ statsError }}</div>
         <div v-else-if="stats" class="space-y-3">

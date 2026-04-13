@@ -29,7 +29,7 @@ watch(() => props.isThinking, scrollToBottom)
 </script>
 
 <template>
-  <div class="flex flex-col flex-1 min-h-0 border border-border rounded-lg bg-bg-surface overflow-hidden">
+  <div class="flex flex-col flex-1 min-h-0 border border-border rounded-lg bg-bg-surface overflow-hidden surface-scanlines">
     <div ref="scrollContainer" class="flex-1 overflow-y-auto space-y-4 p-4">
       <ChatMessage v-for="msg in messages" :key="msg.id" :message="msg" />
 
@@ -40,7 +40,7 @@ watch(() => props.isThinking, scrollToBottom)
             Heimdall
           </div>
           <div class="border border-border rounded-lg px-4 py-3 bg-bg-surface overflow-hidden relative">
-            <span class="font-mono text-xs text-text-muted uppercase tracking-wider">Processing</span>
+            <span class="font-mono text-xs text-text-muted uppercase tracking-wider brand-glow">Processing</span>
             <div class="scanning-line" />
           </div>
         </div>

@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.35.0 — Technical Retro-Futurism UI Refresh](#0350--technical-retro-futurism-ui-refresh-2026-04-13)
 - [0.34.1 — Dev-Mode Background Job Kill-Switch](#0341--dev-mode-background-job-kill-switch-2026-04-13)
 - [0.34.0 — Activity Detail Modal & Supabase Poller Tuning](#0340--activity-detail-modal--supabase-poller-tuning-2026-04-13)
 - [0.33.1 — Code Quality & Structural Cleanup](#0331--code-quality--structural-cleanup-2026-04-12)
@@ -80,6 +81,86 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.35.0 — Technical Retro-Futurism UI Refresh (2026-04-13)
+
+Heimdall's visual identity has been muted since v0.14.4's feldgrau colour theme — the near-black backgrounds and 12%-saturation accent produced a cohesive but flat visual field where nothing truly "popped." This release evolves the aesthetic from techno-brutalist to **technical retro-futurism**: richer phosphor-green accents, mission-control glow effects, and atmospheric textures that make the interface feel like a powered-on control panel rather than a static dark page. No layout, font, or structural changes — the same bones, substantially more visual authority.
+
+### Design tokens — colour palette evolution
+
+**Accent saturation: ~12% → ~25%.** The core identity shift. Feldgrau (`#4d5d53`) becomes phosphor-feldgrau (`#4a7a5c`) — still grey-green, still military, but with enough chroma to register as a deliberate colour signal. The accent now reads as "operational green" rather than "grey that happens to lean green."
+
+**Backgrounds: deeper tier separation.** The four background tiers (`--bg-primary` through `--bg-elevated`) shift to a cool blue-black undertone (`#06080a` base) with wider luminance steps between tiers. Cards and modals now visibly separate from the page canvas.
+
+**Borders: 14% → 18% opacity.** The most impactful single-token change. Structural lines — card edges, dividers, panel borders — are now clearly legible. The grid of panels reads as an instrument rack rather than floating elements.
+
+**Status colours: richer signal.** Warning amber shifts from `#c4a84a` to `#d4a832`, critical red from `#c45a4a` to `#d44a3a`, info blue from `#4a8aae` to `#4a92c4`. Each status colour also gains a matching `--status-*-glow` token at 20% opacity for box-shadow halos on active indicators.
+
+**Action buttons: brighter CTA.** `--action` moves from `#3b8a5a` to `#38a85c` with a brighter hover state (`#42be68`) to maintain separation from the now-richer accent range.
+
+**Text: crisper contrast.** Primary text brightens slightly (`#e8ede9`), secondary text picks up a green undertone (`#8a9e92`), and muted text becomes more saturated (`#4e6556`).
+
+**New token: `--accent-glow`** (`rgba(74,122,92,0.15)`) — the phosphor halo colour used across all glow effects below.
+
+### Glow & luminance effects
+
+**`.glow-pulse`** — a 3-second breathing glow cycle that replaces `animate-pulse` on status indicators. The slower cadence (vs the standard 2s) suits a monitoring interface — systems breathe slowly. Status-specific variants `.glow-pulse-warn` and `.glow-pulse-critical` use their matching status glow tokens.
+
+**`.brand-glow`** — a `text-shadow` that makes the "HEIMDALL" wordmark in the sidebar appear to emit faint phosphor light. Applied alongside the existing pulsing dot, now also using `glow-pulse`.
+
+**`.glow-active` upgrade** — the existing class jumps from `box-shadow: 0 0 15px rgba(77,93,83,0.06)` (barely perceptible) to a visible double-layer phosphor halo using the new `--accent-glow` token.
+
+**Focus ring enhancement** — `:focus-visible` gains a `box-shadow: 0 0 8px var(--accent-glow)` behind the existing outline, making focused elements glow.
+
+**Scrollbar active state** — dragging the scrollbar now shows a brighter thumb with a subtle glow shadow.
+
+### Animation enrichment
+
+**`@keyframes fadeIn` — border flash.** Cards now briefly flash their borders at full accent colour on entry, then fade to the structural border colour — like instruments coming online on a control panel.
+
+**`@keyframes reveal` — phosphor flash.** Agent chat messages "flare" green via `text-shadow` as they appear (0–70% of the animation), then settle to normal — simulating a CRT character being written to screen.
+
+### Atmospheric textures
+
+**`.surface-grid`** — a CSS-only 24×24px coordinate grid via `linear-gradient` at 6% opacity. Applied to the four Dashboard overview cards where there's enough whitespace for the texture to read as atmosphere rather than noise. Intentionally *not* applied to data-dense surfaces like the Activity feed — an earlier iteration used `var(--border)` opacity on the feed and it competed with the log entries.
+
+**`.surface-scanlines`** — a `::after` pseudo-element overlay with 2% opacity horizontal banding (4px pitch), evoking CRT scan lines. Applied to the Agent Chat window. Uses `pointer-events: none` and `border-radius: inherit` to avoid interfering with content or breaking container rounding.
+
+**`.chrome-brackets`** — `::before`/`::after` corner bracket decorations (12×12px, 60% opacity) using the accent colour. Applied to the four Dashboard overview cards. These are the visual grammar of HUD overlays and targeting reticles — two corner marks that frame each panel as a "viewport."
+
+### Component application
+
+**AppSidebar** — brand dot uses `glow-pulse` instead of `animate-pulse`; wordmark gains `.brand-glow`; section labels ("OVERVIEW", "INFRASTRUCTURE", etc.) shift from `text-text-muted` to `text-accent` so they carry the phosphor-green cast; active nav indicator bar changes to `bg-accent-bright` with an inline glow shadow.
+
+**StatusBadge** — each state (active, error, warning) gains a `box-shadow` halo using the matching `--status-*-glow` token. Status dots use `glow-pulse`, `glow-pulse-critical`, or `glow-pulse-warn` instead of static fills.
+
+**LogEntry** — agent entries gain a glow shadow on hover (`hover:shadow-[0_0_12px_var(--accent-glow)]`); `transition-colors` upgraded to `transition-all` to animate the shadow.
+
+**DashboardPage** — four overview cards gain `.chrome-brackets`; monitoring continuous-mode dot uses `glow-pulse`; Recent Activity container no longer uses grid texture (removed after testing — too dense for data rows).
+
+**AgentChatPage** — WebSocket connection status dots use status-specific glow-pulse variants; tool-progress indicator dot uses `glow-pulse`.
+
+**ChatWindow** — container gains `.surface-scanlines`; "Processing" thinking indicator gains `.brand-glow` text-shadow.
+
+### Brand guidelines update
+
+`docs/brand-guidelines.md` updated to reflect the evolved aesthetic: identity description changed from "techno-brutalist" to "technical retro-futurism"; colour philosophy section renamed from "Feldgrau" to "Phosphor-Feldgrau" with saturation evolution explanation; all colour tables updated with new hex values; design principles table replaces "Brutalist restraint" with "Information emits light" (data glows, chrome doesn't) and "Atmospheric depth" (subtle textures create immersion through accumulation).
+
+### Files changed
+
+| File | Kind | Change |
+|------|------|--------|
+| `frontend/src/assets/styles/main.css` | Edit | Token update, glow effects, atmospheric textures (~120 lines) |
+| `frontend/src/components/common/AppSidebar.vue` | Edit | Brand glow, section labels, nav indicator |
+| `frontend/src/components/common/StatusBadge.vue` | Edit | Status glow shadows, pulse animations |
+| `frontend/src/components/log/LogEntry.vue` | Edit | Hover glow, transition-all |
+| `frontend/src/components/log/LogFeed.vue` | Edit | Reverted grid texture (too noisy on data rows) |
+| `frontend/src/pages/DashboardPage.vue` | Edit | Chrome brackets, glow-pulse on monitoring dot |
+| `frontend/src/pages/AgentChatPage.vue` | Edit | Status glow-pulse variants |
+| `frontend/src/components/agent/ChatWindow.vue` | Edit | Scanlines overlay, brand-glow on thinking state |
+| `docs/brand-guidelines.md` | Edit | Palette, principles, identity description |
 
 ---
 

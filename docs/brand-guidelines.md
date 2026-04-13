@@ -2,7 +2,7 @@
 
 ## Identity
 
-Heimdall is an autonomous AI monitoring agent for production systems. The brand evokes **surveillance**, **precision**, and **quiet authority** — an all-seeing eye that watches without blinking. The aesthetic is **techno-brutalist**: stark, monochromatic, typographic, with a single desaturated accent.
+Heimdall is an autonomous AI monitoring agent for production systems. The brand evokes **surveillance**, **precision**, and **quiet authority** — an all-seeing eye that watches without blinking. The aesthetic is **technical retro-futurism**: mission-control interfaces, phosphor-green CRT readouts, and aerospace engineering visuals. Dark-first, typographic, with a single accent colour family (phosphor-feldgrau) and atmospheric textures (grid overlays, scan-lines, glow halos) that make the interface feel alive.
 
 The name comes from Norse mythology — Heimdall, the watchman of the gods, who guards the Bifrost bridge and sees all.
 
@@ -47,7 +47,7 @@ H E I M D A L L
 
 ### Philosophy
 
-**Feldgrau** — a desaturated, military grey-green inspired by German field uniforms. Saturation sits around 12%, producing a steely tone that avoids the organic feel of brighter greens. Everything lives in a narrow band between near-black and muted grey-green.
+**Phosphor-Feldgrau** — evolved from the original feldgrau (12% saturation) to a richer phosphor-green (~25% saturation) inspired by CRT readouts, mission-control displays, and radar screens. The military grey-green heritage remains, but the accent now carries enough chroma to register as a deliberate colour signal — like a powered-on instrument panel rather than a powered-off one. Backgrounds stay near-black with a cool blue-black undertone.
 
 ### Palette
 
@@ -55,44 +55,47 @@ H E I M D A L L
 
 | Token | Hex | Use |
 |-------|-----|-----|
-| `--bg-primary` | `#070808` | Page background, default canvas |
-| `--bg-surface` | `rgba(11, 13, 12, 0.5)` | Cards, panels (translucent) |
-| `--bg-surface-hover` | `rgba(11, 13, 12, 0.7)` | Hovered cards/panels |
-| `--bg-elevated` | `#0a0c0b` | Modals, dropdowns, raised surfaces |
+| `--bg-primary` | `#06080a` | Page background, default canvas (cool blue-black) |
+| `--bg-surface` | `rgba(12, 16, 14, 0.55)` | Cards, panels (translucent) |
+| `--bg-surface-hover` | `rgba(14, 20, 17, 0.75)` | Hovered cards/panels |
+| `--bg-elevated` | `#0c100e` | Modals, dropdowns, raised surfaces |
 
 #### Text
 
 | Token | Hex | Use |
 |-------|-----|-----|
-| `--text-primary` | `#e6eae8` | Headings, body text |
-| `--text-secondary` | `#8a938e` | Supporting text, labels |
-| `--text-muted` | `#576058` | Captions, disabled text |
+| `--text-primary` | `#e8ede9` | Headings, body text (cool phosphor white) |
+| `--text-secondary` | `#8a9e92` | Supporting text, labels (green-cast secondary) |
+| `--text-muted` | `#4e6556` | Captions, disabled text |
 
-#### Accent (Feldgrau)
+#### Accent (Phosphor-Feldgrau)
 
 | Token | Value | Use |
 |-------|-------|-----|
-| `--accent` | `#4d5d53` | Primary accent — buttons, links, active states |
-| `--accent-hover` | `#5a6e62` | Hover state for accent elements |
-| `--accent-bright` | `#6e8578` | Emphasis, highlights, high-contrast accent |
-| `--accent-subtle` | `rgba(77, 93, 83, 0.1)` | Tinted backgrounds, selected rows |
-| `--accent-border` | `rgba(77, 93, 83, 0.3)` | Accent-tinted borders |
+| `--accent` | `#4a7a5c` | Primary accent — buttons, links, active states |
+| `--accent-hover` | `#5a9068` | Hover state for accent elements |
+| `--accent-bright` | `#6aad7a` | Emphasis, highlights, high-contrast accent |
+| `--accent-subtle` | `rgba(74, 122, 92, 0.12)` | Tinted backgrounds, selected rows |
+| `--accent-border` | `rgba(74, 122, 92, 0.25)` | Accent-tinted borders |
+| `--accent-glow` | `rgba(74, 122, 92, 0.15)` | Box-shadow / drop-shadow for active elements, phosphor halos |
 
 #### Borders
 
 | Token | Value | Use |
 |-------|-------|-----|
-| `--border` | `rgba(77, 93, 83, 0.14)` | Structural dividers, card edges |
-| `--border-hover` | `rgba(77, 93, 83, 0.25)` | Hovered borders |
+| `--border` | `rgba(74, 122, 92, 0.18)` | Structural dividers, card edges (visible control-panel chrome) |
+| `--border-hover` | `rgba(74, 122, 92, 0.32)` | Hovered borders |
 
 #### Status
 
 | Token | Hex | Use |
 |-------|-----|-----|
-| `--status-ok` | `#4d5d53` | Healthy, connected, passing |
-| `--status-warn` | `#c4a84a` | Warnings, degraded |
-| `--status-critical` | `#c45a4a` | Errors, outages, failures |
-| `--status-info` | `#4a8aae` | Informational, neutral alerts |
+| `--status-ok` | `#4a7a5c` | Healthy, connected, passing (aligned with accent) |
+| `--status-warn` | `#d4a832` | Warnings, degraded (rich amber caution light) |
+| `--status-critical` | `#d44a3a` | Errors, outages, failures (hot red) |
+| `--status-info` | `#4a92c4` | Informational, neutral alerts (CRT-cyan) |
+
+Each status colour has a matching glow token (`--status-*-glow`) at 20% opacity for box-shadow halos on active indicators.
 
 ### External Contexts
 
@@ -100,10 +103,10 @@ When the full token set isn't available (Stripe checkout, email templates, socia
 
 | Context | Background | Foreground | Accent |
 |---------|-----------|------------|--------|
-| Dark background | `#000000` or `#070808` | `#ffffff` or `#e6eae8` | `#6e8578` (bright) |
-| Light background | `#ffffff` | `#070808` | `#4d5d53` (base) |
+| Dark background | `#000000` or `#06080a` | `#ffffff` or `#e8ede9` | `#6aad7a` (bright) |
+| Light background | `#ffffff` | `#06080a` | `#4a7a5c` (base) |
 
-Use `--accent-bright` (`#6e8578`) against pure black for better contrast on interactive elements.
+Use `--accent-bright` (`#6aad7a`) against pure black for better contrast on interactive elements.
 
 ---
 
@@ -210,7 +213,7 @@ All text inputs, selects, and textareas use the same focus treatment:
 focus:border-accent focus:ring-1 focus:ring-accent/30 focus:outline-none
 ```
 
-The border shifts to full accent colour on focus, with a 30% opacity ring for reinforcement. The global `:focus-visible` outline is `2px solid var(--accent)` with `2px` offset.
+The border shifts to full accent colour on focus, with a 30% opacity ring for reinforcement. The global `:focus-visible` outline is `2px solid var(--accent)` with `2px` offset and an `8px` phosphor glow halo (`box-shadow: 0 0 8px var(--accent-glow)`).
 
 ---
 
@@ -219,7 +222,8 @@ The border shifts to full accent colour on focus, with a 30% opacity ring for re
 | Principle | Meaning |
 |-----------|---------|
 | **Dark-first** | Everything starts on near-black. Light backgrounds are exceptions, not defaults. |
-| **Monochrome + one accent** | The entire UI lives in greyscale with feldgrau as the sole colour. No secondary colours outside status indicators. |
+| **Monochrome + one accent** | The entire UI lives in greyscale with phosphor-feldgrau as the sole colour family. No secondary colours outside status indicators. |
 | **Typography over ornament** | Spaced uppercase, monospace type, and structural whitespace do the visual work. No icons where a label suffices. |
-| **Brutalist restraint** | No rounded corners on primary surfaces. No gradients. No shadows except for elevation. Borders are subtle but visible — not decorative, but structurally present. |
+| **Information emits light** | Active data and status indicators glow (phosphor halos, glow-pulse animations). Structural chrome stays muted. The interface reads like a powered-on control panel — instruments bright, housing dark. |
+| **Atmospheric depth** | Subtle textures (grid overlays, scan-lines, corner brackets) create mission-control atmosphere through accumulation, not spectacle. Each effect is individually barely perceptible; together they create immersion. |
 | **Confident spacing** | Components have enough internal padding and external margin to feel substantial. The interface should feel like a well-built instrument panel — precise and weighty, not cramped or fragile. Minimum font size is 12px; minimum card padding is 24px. |

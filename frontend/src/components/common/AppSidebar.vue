@@ -110,8 +110,8 @@ function handleNav() {
     <!-- Brand header -->
     <div class="px-6 py-6 border-b border-border">
       <div class="flex items-center gap-2.5">
-        <div class="w-2 h-2 rounded-full bg-accent animate-pulse" />
-        <span class="font-mono text-sm font-bold uppercase tracking-wider text-text-primary">
+        <div class="w-2 h-2 rounded-full bg-accent glow-pulse" />
+        <span class="font-mono text-sm font-bold uppercase tracking-wider text-text-primary brand-glow">
           Heimdall
         </span>
       </div>
@@ -137,7 +137,7 @@ function handleNav() {
     <div class="flex-1 overflow-y-auto py-4 px-3">
       <div v-for="section in sections" :key="section.label" class="mb-5">
         <!-- Section label -->
-        <div class="px-2 mb-2 font-mono text-xs font-medium uppercase tracking-widest text-text-muted">
+        <div class="px-2 mb-2 font-mono text-xs font-medium uppercase tracking-widest text-accent">
           {{ section.label }}
         </div>
 
@@ -157,7 +157,8 @@ function handleNav() {
           <!-- Active indicator bar -->
           <div
             v-if="isActive(item.routeName)"
-            class="absolute left-0 top-1 bottom-1 w-0.5 rounded-full bg-accent"
+            class="absolute left-0 top-1 bottom-1 w-0.5 rounded-full bg-accent-bright"
+            style="box-shadow: 0 0 6px var(--accent-glow)"
           />
           <span class="pl-1">{{ item.name }}</span>
         </RouterLink>

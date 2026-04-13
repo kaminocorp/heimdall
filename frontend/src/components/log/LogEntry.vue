@@ -35,9 +35,9 @@ const entryTypeLabel = computed(() => {
 
 <template>
   <div
-    class="border rounded p-3 text-sm font-mono transition-colors cursor-pointer"
+    class="border rounded p-3 text-sm font-mono transition-all cursor-pointer"
     :class="isAgent
-      ? 'border-l-2 border-l-accent border-t-border border-r-border border-b-border bg-accent-subtle hover:bg-accent-subtle/80'
+      ? 'border-l-2 border-l-accent border-t-border border-r-border border-b-border bg-accent-subtle hover:bg-accent-subtle hover:shadow-[0_0_12px_var(--accent-glow)]'
       : 'border-border bg-bg-surface hover:border-border-hover'
     "
     @click="emit('select', entry)"

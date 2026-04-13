@@ -41,9 +41,9 @@ onMounted(async () => {
         <span
           class="w-2 h-2 rounded-full"
           :class="{
-            'bg-status-warn animate-pulse': status === 'connecting',
-            'bg-status-ok': status === 'open',
-            'bg-status-critical': status === 'closed',
+            'bg-status-warn glow-pulse-warn': status === 'connecting',
+            'bg-status-ok glow-pulse': status === 'open',
+            'bg-status-critical glow-pulse-critical': status === 'closed',
           }"
         />
         <span class="text-text-muted">{{ status === 'open' ? 'Connected' : status === 'connecting' ? 'Connecting' : 'Disconnected' }}</span>
@@ -60,7 +60,7 @@ onMounted(async () => {
       v-if="activeTools.length"
       class="mb-3 flex items-center gap-2 rounded border border-accent-border/30 bg-accent-subtle/40 px-4 py-2 font-mono text-xs uppercase tracking-wider text-text-secondary"
     >
-      <span class="w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
+      <span class="w-1.5 h-1.5 rounded-full bg-accent glow-pulse" />
       <span>{{ activeTools.map(formatTool).join(' · ') }}</span>
     </div>
 
