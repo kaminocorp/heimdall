@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.40.0 — Connection Wizard: Platform-First Redesign](#0400--connection-wizard-platform-first-redesign-2026-04-13)
 - [0.39.0 — Ingestion Page Redesign: 3D Agent Nebula](#0390--ingestion-page-redesign-3d-agent-nebula-2026-04-13)
 - [0.38.0 — Navigation Restructure & Infrastructure Triptych](#0380--navigation-restructure--infrastructure-triptych-2026-04-13)
 - [0.37.0 — Activity Feed App-Scoping](#0370--activity-feed-app-scoping-2026-04-13)
@@ -85,6 +86,124 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.40.0 — Connection Wizard: Platform-First Redesign (2026-04-13)
+
+The "New Connection" wizard has been redesigned from a flat technical list into a structured, purpose-driven layout. The previous grid grouped connectors by implementation type (Log Sources / Databases / Generic) — categories that require the user to already know what protocol their platform uses. The new layout asks "where does your stuff run?" and communicates the *consequence* of each connection type.
+
+### The problem with the old layout
+
+The old wizard opened with three categories: **Log Sources** (Supabase, Webhook, Syslog, OTLP, Datadog), **Databases** (PostgreSQL, MySQL), and **Generic** (GitHub). This grouping was technically accurate but failed users in two ways:
+
+1. **Platform-blind.** A developer on Fly.io had to know that Fly.io uses syslog drains, then find "Syslog" in the Log Sources section. The wizard forced users to translate from "where my stuff runs" to "what protocol Heimdall supports."
+
+2. **No consequence labelling.** Adding PostgreSQL doesn't make logs flow — it gives the agent a queryable tool for investigations. Adding Supabase *does* make logs flow. The old grid treated both as equivalent items with no indication that one feeds the monitoring loop and the other doesn't.
+
+### The new three-section layout
+
+```
+WHERE DO YOUR LOGS COME FROM?
+Pick your platform — we'll handle the wiring.
+
+  [Supabase]  [Fly.io]  [Vercel]   [Render]
+  [Railway]   [Heroku]  [AWS]      [DigitalOcean]
+
+──────────────── or ────────────────
+
+CONNECT DIRECTLY
+Already know the protocol? Skip the platform.
+
+  [Webhook HTTP]  [Syslog TCP/TLS]  [OpenTelemetry OTLP]
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🔍 AGENT INVESTIGATION TOOLS
+These don't send logs — they let the agent query
+your systems during investigations and chat.
+
+  [PostgreSQL]  [GitHub]  [MySQL]
+```
+
+**Section 1 — Platform log sources.** The primary question: "where does your app run?" Each platform card shows the underlying transport in its subtitle ("via Syslog drain", "via Log Drain", "via CloudWatch + OTLP"). Currently only Supabase is live; the remaining 7 platforms are "Coming soon" placeholders. Each maps to an existing connector type — when enabled, they'll start the appropriate flow (syslog, webhook, or OTLP) with platform-specific setup instructions. No backend work required.
+
+**Section 2 — Direct protocols.** The escape hatch for engineers who already know the transport they want. Webhook (HTTP endpoint), Syslog (TCP/TLS listener), and OpenTelemetry (OTLP HTTP). All three are live and use the same wizard steps as before.
+
+**Section 3 — Agent investigation tools.** Visually separated with a stronger border and a search icon. The subtitle "These don't send logs — they let the agent query your systems during investigations and chat" prevents the most common onboarding confusion: adding PostgreSQL alone and expecting monitoring to start. PostgreSQL and GitHub are live; MySQL is coming soon.
+
+### Visual separation between sections
+
+The three sections use intentionally different visual weights:
+
+| Transition | Visual | Why |
+|-----------|--------|-----|
+| Sections 1 → 2 | Soft "or" divider (horizontal line with centred text) | Both sections achieve the same outcome (logs flowing in) — different paths based on user expertise |
+| Sections 2 → 3 | Strong `border-t` + search icon in header | Fundamentally different category with different consequences — user should notice the break |
+
+### Platform → connector mapping
+
+Each coming-soon platform stores a `connectorType` that maps to an existing backend connector:
+
+| Platform | Underlying connector | Transport |
+|----------|---------------------|-----------|
+| Fly.io | `syslog` | TCP/TLS drain |
+| Vercel | `webhook_logs` | HTTP log drain |
+| Render | `syslog` | TCP/TLS drain |
+| Railway | `webhook_logs` | HTTP log drain |
+| Heroku | `syslog` | Syslog drain |
+| AWS | `otlp` | CloudWatch → OTLP |
+| DigitalOcean | `syslog` | Log forwarding |
+
+When a platform becomes available, it only needs `available: true` and wizard steps — the backend already handles the underlying protocol.
+
+### Card redesign
+
+Cards switched from a horizontal layout with 2-letter abbreviation badges to a vertical, centre-aligned layout with native brand logos (via `ConnectorLogo`) and a short subtitle instead of the longer description. This fits the denser 4-column grid needed for the platform section.
+
+### Brand logos added
+
+Official SVG marks from Simple Icons for: **Fly.io** (bird mark), **Vercel** (triangle), **Render** (stylised R), **Railway** (rail mark), **Heroku** (H mark), **AWS** (smile arrow), **DigitalOcean** (droplet). All mono-colour, `currentColor`-based.
+
+### Data model change
+
+The `PlatformFlow` interface in `flows.ts` was updated:
+
+| Field | Before | After |
+|-------|--------|-------|
+| `category` | `'log_source' \| 'database' \| 'generic'` | **Removed** |
+| `section` | — | **New:** `'platform_log' \| 'direct_protocol' \| 'agent_tool'` |
+| `subtitle` | — | **New:** Short label shown on card (e.g. "via Syslog drain") |
+
+The old `datadog` entry was removed (never wired up, doesn't fit the new taxonomy). Can be re-added as `platform_log` when built.
+
+### What didn't change
+
+The wizard state machine (`ConnectionWizard.vue`), all 8 step components (`StepName`, `StepSupabaseAuth`, `StepSupabaseTables`, `StepPostgresConfig`, `StepWebhookSetup`, `StepGitHubInstall`, `StepSyslogConfig`, `StepOTLPSetup`, `StepTest`), the step indicator (`WizardStepIndicator.vue`), the edit form (`ConnectionForm.vue`), and the entire backend are untouched. The redesign lives entirely in 4 frontend files.
+
+### Files changed
+
+| File | Kind | Change |
+|------|------|--------|
+| `frontend/src/components/connections/wizard/flows.ts` | Edit | `section` + `subtitle` replace `category`, 7 new platform entries, removed `datadog` |
+| `frontend/src/components/icons/ConnectorLogo.vue` | Edit | Added 7 platform logos (Fly.io, Vercel, Render, Railway, Heroku, AWS, DigitalOcean) |
+| `frontend/src/components/connections/wizard/PlatformGrid.vue` | Rewrite | 3-section layout with headers, subtitles, "or" divider, strong separator |
+| `frontend/src/components/connections/wizard/PlatformCard.vue` | Rewrite | ConnectorLogo + subtitle, vertical centre layout, `cursor-default` for coming-soon |
+
+### Verification
+
+| Check | Result |
+|-------|--------|
+| `vue-tsc --noEmit` | Clean |
+| `vite build` | Clean |
+| `vitest run` | 52/52 tests pass |
+| Supabase flow | select → Name → Auth → Tables → Test → created |
+| Webhook flow | select → Name → Setup → created |
+| Syslog flow | select → Name → Config → Test → created |
+| OTLP flow | select → Name → Setup → created |
+| PostgreSQL flow | select → Name → Config → Test → created |
+| GitHub flow | select → Name → Install → redirect |
+| Coming-soon platforms | Render with logo, name, subtitle, "Soon" badge; click does nothing; default cursor |
 
 ---
 

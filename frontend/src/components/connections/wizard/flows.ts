@@ -11,7 +11,8 @@ export interface PlatformFlow {
   name: string
   icon: string
   description: string
-  category: 'log_source' | 'database' | 'generic'
+  section: 'platform_log' | 'direct_protocol' | 'agent_tool'
+  subtitle: string
   connectorType: string
   direction: 'one_way' | 'two_way'
   available: boolean
@@ -46,13 +47,15 @@ const StepSyslogConfig = defineAsyncComponent(() => import('./steps/StepSyslogCo
 const StepOTLPSetup = defineAsyncComponent(() => import('./steps/StepOTLPSetup.vue'))
 
 export const flows: PlatformFlow[] = [
-  // — Log Sources —
+  // ── Platform log sources ─────────────────────────────
+  // "Where do your logs come from?" — platform-first selection
   {
     id: 'supabase',
     name: 'Supabase',
     icon: 'SB',
     description: 'Database logs, auth events, edge functions',
-    category: 'log_source',
+    section: 'platform_log',
+    subtitle: 'Log polling + API',
     connectorType: 'supabase',
     direction: 'one_way',
     available: true,
@@ -64,11 +67,99 @@ export const flows: PlatformFlow[] = [
     ],
   },
   {
+    id: 'flyio',
+    name: 'Fly.io',
+    icon: 'FI',
+    description: 'Ship logs from Fly.io apps via syslog drain',
+    section: 'platform_log',
+    subtitle: 'via Syslog drain',
+    connectorType: 'syslog',
+    direction: 'one_way',
+    available: false,
+    steps: [],
+  },
+  {
+    id: 'vercel',
+    name: 'Vercel',
+    icon: 'VC',
+    description: 'Ship logs from Vercel deployments via log drain',
+    section: 'platform_log',
+    subtitle: 'via Log Drain',
+    connectorType: 'webhook_logs',
+    direction: 'one_way',
+    available: false,
+    steps: [],
+  },
+  {
+    id: 'render',
+    name: 'Render',
+    icon: 'RN',
+    description: 'Ship logs from Render services via syslog drain',
+    section: 'platform_log',
+    subtitle: 'via Syslog drain',
+    connectorType: 'syslog',
+    direction: 'one_way',
+    available: false,
+    steps: [],
+  },
+  {
+    id: 'railway',
+    name: 'Railway',
+    icon: 'RW',
+    description: 'Ship logs from Railway services via HTTP drain',
+    section: 'platform_log',
+    subtitle: 'via HTTP Log Drain',
+    connectorType: 'webhook_logs',
+    direction: 'one_way',
+    available: false,
+    steps: [],
+  },
+  {
+    id: 'heroku',
+    name: 'Heroku',
+    icon: 'HK',
+    description: 'Ship logs from Heroku dynos via log drain',
+    section: 'platform_log',
+    subtitle: 'via Syslog drain',
+    connectorType: 'syslog',
+    direction: 'one_way',
+    available: false,
+    steps: [],
+  },
+  {
+    id: 'aws',
+    name: 'AWS',
+    icon: 'AW',
+    description: 'Ship logs from AWS services via CloudWatch',
+    section: 'platform_log',
+    subtitle: 'via CloudWatch + OTLP',
+    connectorType: 'otlp',
+    direction: 'one_way',
+    available: false,
+    steps: [],
+  },
+  {
+    id: 'digitalocean',
+    name: 'DigitalOcean',
+    icon: 'DO',
+    description: 'Ship logs from DigitalOcean apps via log forwarding',
+    section: 'platform_log',
+    subtitle: 'via Log Forwarding',
+    connectorType: 'syslog',
+    direction: 'one_way',
+    available: false,
+    steps: [],
+  },
+
+  // ── Direct protocols ─────────────────────────────────
+  // "Or connect directly" — for engineers who know the protocol
+  {
     id: 'webhook_logs',
     name: 'Webhook',
     icon: 'WH',
     description: 'HTTP endpoint for log ingestion',
-    category: 'log_source',
+    section: 'direct_protocol',
+    subtitle: 'HTTP endpoint',
     connectorType: 'webhook_logs',
     direction: 'one_way',
     available: true,
@@ -77,69 +168,13 @@ export const flows: PlatformFlow[] = [
       { id: 'setup', label: 'Setup', component: StepWebhookSetup },
     ],
   },
-  // — Databases —
-  {
-    id: 'postgres',
-    name: 'PostgreSQL',
-    icon: 'PG',
-    description: 'Query your database during investigations',
-    category: 'database',
-    connectorType: 'postgres',
-    direction: 'two_way',
-    available: true,
-    steps: [
-      { id: 'name', label: 'Name', component: StepName },
-      { id: 'config', label: 'Config', component: StepPostgresConfig },
-      { id: 'test', label: 'Test', component: StepTest },
-    ],
-  },
-  // — Generic —
-  {
-    id: 'github',
-    name: 'GitHub',
-    icon: 'GH',
-    description: 'Repository access for code investigation',
-    category: 'generic',
-    connectorType: 'github',
-    direction: 'one_way',
-    available: true,
-    steps: [
-      { id: 'name', label: 'Name', component: StepName },
-      { id: 'install', label: 'Install', component: StepGitHubInstall },
-    ],
-  },
-  {
-    id: 'otlp',
-    name: 'OpenTelemetry',
-    icon: 'OT',
-    description: 'OTLP HTTP endpoint for logs',
-    category: 'log_source',
-    connectorType: 'otlp',
-    direction: 'one_way',
-    available: true,
-    steps: [
-      { id: 'name', label: 'Name', component: StepName },
-      { id: 'setup', label: 'Setup', component: StepOTLPSetup },
-    ],
-  },
-  // — Coming soon —
-  {
-    id: 'datadog',
-    name: 'Datadog',
-    icon: 'DD',
-    description: 'Ingest logs from Datadog',
-    category: 'log_source',
-    connectorType: 'datadog',
-    direction: 'one_way',
-    available: false,
-    steps: [],
-  },
   {
     id: 'syslog',
     name: 'Syslog',
     icon: 'SL',
     description: 'TCP/TLS listener for syslog protocol',
-    category: 'log_source',
+    section: 'direct_protocol',
+    subtitle: 'TCP / TLS listener',
     connectorType: 'syslog',
     direction: 'one_way',
     available: true,
@@ -150,11 +185,61 @@ export const flows: PlatformFlow[] = [
     ],
   },
   {
+    id: 'otlp',
+    name: 'OpenTelemetry',
+    icon: 'OT',
+    description: 'OTLP HTTP endpoint for logs',
+    section: 'direct_protocol',
+    subtitle: 'OTLP HTTP endpoint',
+    connectorType: 'otlp',
+    direction: 'one_way',
+    available: true,
+    steps: [
+      { id: 'name', label: 'Name', component: StepName },
+      { id: 'setup', label: 'Setup', component: StepOTLPSetup },
+    ],
+  },
+
+  // ── Agent investigation tools ────────────────────────
+  // "Give the agent investigation tools" — on-demand query access
+  {
+    id: 'postgres',
+    name: 'PostgreSQL',
+    icon: 'PG',
+    description: 'Query your database during investigations',
+    section: 'agent_tool',
+    subtitle: 'Query during investigations',
+    connectorType: 'postgres',
+    direction: 'two_way',
+    available: true,
+    steps: [
+      { id: 'name', label: 'Name', component: StepName },
+      { id: 'config', label: 'Config', component: StepPostgresConfig },
+      { id: 'test', label: 'Test', component: StepTest },
+    ],
+  },
+  {
+    id: 'github',
+    name: 'GitHub',
+    icon: 'GH',
+    description: 'Repository access for code investigation',
+    section: 'agent_tool',
+    subtitle: 'Code search + context',
+    connectorType: 'github',
+    direction: 'one_way',
+    available: true,
+    steps: [
+      { id: 'name', label: 'Name', component: StepName },
+      { id: 'install', label: 'Install', component: StepGitHubInstall },
+    ],
+  },
+  {
     id: 'mysql',
     name: 'MySQL',
     icon: 'MY',
     description: 'Query MySQL databases during investigations',
-    category: 'database',
+    section: 'agent_tool',
+    subtitle: 'Query during investigations',
     connectorType: 'mysql',
     direction: 'two_way',
     available: false,
