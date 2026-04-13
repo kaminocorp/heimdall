@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.34.0 — Activity Detail Modal & Supabase Poller Tuning](#0340--activity-detail-modal--supabase-poller-tuning-2026-04-13)
 - [0.33.1 — Code Quality & Structural Cleanup](#0331--code-quality--structural-cleanup-2026-04-12)
 - [0.33.0 — Expanded Model Catalogue & Picker](#0330--expanded-model-catalogue--picker-2026-04-12)
 - [0.32.0 — Multi-App Setup & Settings](#0320--multi-app-setup--settings-2026-04-12)
@@ -78,6 +79,42 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.34.0 — Activity Detail Modal & Supabase Poller Tuning (2026-04-13)
+
+The Activity feed previously truncated long entries at ~200 characters, hiding critical detail — agent assessments, root-cause analysis, and structured payload data were cut off with no way to expand them. This release adds a click-to-expand detail modal and reduces the Supabase poller frequency to avoid Management API rate limiting.
+
+### Frontend — Activity detail modal
+
+**`LogDetailModal.vue`** — clicking any entry in the Activity feed now opens a full-screen modal showing the complete, untruncated content. The modal follows the existing design language (backdrop blur, `bg-bg-surface` panel, Escape-to-close) established by `ConnectionTestModal` and `DeleteAppModal`.
+
+**Modal sections:**
+- **Header** — source badge (Agent / Monitor / Heartbeat / Raw) and severity badge (critical / warning / info), matching the colour coding used in the feed
+- **Metadata grid** — timestamp, source type label, connection name (resolved from the connections store to a human-readable name rather than a raw UUID), and entry ID
+- **Summary** — the full untruncated summary text, rendered with `whitespace-pre-wrap` for multi-line agent assessments
+- **Detail / Payload** — iterates over the `detail` JSON object's top-level keys, rendering each as a labelled block. Scalar values display inline; nested objects are pretty-printed as JSON with scroll overflow. For raw logs this shows the full ingested payload; for agent logs it shows structured fields like `app_name`, `assessment`, `auto_severity`, `schedule_name`, etc.
+
+**`LogEntry.vue` now clickable** — added `cursor-pointer`, a hover state for agent-sourced entries (`hover:bg-accent-subtle/80`), and a `@click` → `emit('select', entry)` event. The visual affordance signals interactivity without adding explicit buttons.
+
+**`LogFeed.vue` wiring** — a `selectedEntry` ref tracks which entry is expanded. The `@select` event from `LogEntry` opens the modal; `@close` from the modal clears it. The `connections` prop (already passed from `ActivityPage`) is forwarded to the modal for name resolution.
+
+### Backend — Supabase poller interval increase
+
+**Default interval: 30s → 120s, minimum: 15s → 60s** — the Supabase Management API enforces a rate limit of ~60 requests per minute per project, shared across all consumers (Heimdall, the dashboard UI, CLI, CI scripts). With 6 log tables polled per cycle, the previous 30-second default produced 12 API calls per minute. Under concurrent dashboard usage, this consistently exhausted the quota and left the poller in a perpetual 429 loop — the Production Supabase connection for Elephantasm had been rate-limited for 2+ days with zero logs ingested.
+
+The new 120-second default produces ~3 calls per minute (5% of the quota), leaving ample headroom. The 60-second minimum prevents users from configuring intervals that would re-trigger the problem. Existing connections with `poll_interval_secs` below the new minimum are clamped to the default at startup — the `NewSupabase()` constructor enforces the floor on every instantiation, not just on creation.
+
+### Files changed
+
+| File | Kind | Change |
+|------|------|--------|
+| `frontend/src/components/log/LogDetailModal.vue` | New | Activity detail modal (148 lines) |
+| `frontend/src/components/log/LogEntry.vue` | Edit | Added click handler, cursor-pointer, hover state |
+| `frontend/src/components/log/LogFeed.vue` | Edit | Wired modal via `selectedEntry` ref, forwarded connections |
+| `backend/internal/connectors/logs/supabase.go` | Edit | Default interval 30→120s, minimum 15→60s |
+| `backend/internal/connectors/logs/supabase_test.go` | Edit | Updated test fixtures and assertions to match new intervals |
 
 ---
 

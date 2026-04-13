@@ -19,7 +19,7 @@ func validConfig() json.RawMessage {
 		"project_ref": "test-ref-123",
 		"access_token": "sbp_test_token",
 		"poll_tables": ["postgres_logs", "auth_logs"],
-		"poll_interval_secs": 30
+		"poll_interval_secs": 120
 	}`)
 }
 
@@ -31,7 +31,7 @@ func TestNewSupabase_ValidConfig(t *testing.T) {
 	assert.Equal(t, "test-ref-123", cfg.ProjectRef)
 	assert.Equal(t, "sbp_test_token", cfg.AccessToken)
 	assert.Equal(t, []string{"postgres_logs", "auth_logs"}, cfg.PollTables)
-	assert.Equal(t, 30, cfg.PollIntervalSecs)
+	assert.Equal(t, 120, cfg.PollIntervalSecs)
 }
 
 func TestNewSupabase_Defaults(t *testing.T) {
@@ -89,7 +89,7 @@ func TestNewSupabase_PollIntervalMinimum(t *testing.T) {
 
 	sb, err := NewSupabase(raw, uuid.New(), uuid.New())
 	require.NoError(t, err)
-	// Interval below minimum (15) should be clamped to default (30).
+	// Interval below minimum (60) should be clamped to default (120).
 	assert.Equal(t, supabaseDefaultInterval, sb.ParsedConfig().PollIntervalSecs)
 }
 

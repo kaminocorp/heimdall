@@ -6,6 +6,10 @@ const props = defineProps<{
   entry: LogEntry
 }>()
 
+const emit = defineEmits<{
+  select: [entry: LogEntry]
+}>()
+
 const timestamp = computed(() => {
   const d = new Date(props.entry.timestamp)
   return d.toLocaleString()
@@ -31,11 +35,12 @@ const entryTypeLabel = computed(() => {
 
 <template>
   <div
-    class="border rounded p-3 text-sm font-mono transition-colors"
+    class="border rounded p-3 text-sm font-mono transition-colors cursor-pointer"
     :class="isAgent
-      ? 'border-l-2 border-l-accent border-t-border border-r-border border-b-border bg-accent-subtle'
+      ? 'border-l-2 border-l-accent border-t-border border-r-border border-b-border bg-accent-subtle hover:bg-accent-subtle/80'
       : 'border-border bg-bg-surface hover:border-border-hover'
     "
+    @click="emit('select', entry)"
   >
     <div class="flex items-baseline gap-2 flex-wrap">
       <span class="text-text-muted text-xs shrink-0">{{ timestamp }}</span>

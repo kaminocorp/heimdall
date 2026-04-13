@@ -20,8 +20,8 @@ import (
 
 const (
 	supabaseAPIBase         = "https://api.supabase.com"
-	supabaseDefaultInterval = 30
-	supabaseMinInterval     = 15
+	supabaseDefaultInterval = 120
+	supabaseMinInterval     = 60
 	supabaseDefaultTable    = "postgres_logs"
 	supabasePollLimit       = 500
 )

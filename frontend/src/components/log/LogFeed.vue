@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import type { LogEntry as LogEntryType } from '@/types/log'
 import type { Connection } from '@/types/connection'
 import LogEntry from './LogEntry.vue'
 import LogFilters from './LogFilters.vue'
+import LogDetailModal from './LogDetailModal.vue'
 
 const props = defineProps<{
   entries: LogEntryType[]
@@ -29,6 +30,8 @@ const showing = computed(() => {
 const hasNext = computed(() => props.offset + props.limit < props.total)
 const hasPrev = computed(() => props.offset > 0)
 
+const selectedEntry = ref<LogEntryType | null>(null)
+
 const paginationBtnClasses = 'px-3 py-1 border border-border rounded font-mono text-xs uppercase tracking-wider text-text-secondary hover:border-border-hover hover:text-text-primary disabled:opacity-30 disabled:cursor-not-allowed transition-colors cursor-pointer'
 </script>
 
@@ -48,6 +51,7 @@ const paginationBtnClasses = 'px-3 py-1 border border-border rounded font-mono t
           :entry="entry"
           class="animate-fade-in"
           :style="{ '--stagger-index': i }"
+          @select="selectedEntry = $event"
         />
       </div>
 
@@ -67,5 +71,13 @@ const paginationBtnClasses = 'px-3 py-1 border border-border rounded font-mono t
         </div>
       </div>
     </div>
+
+    <!-- Detail modal -->
+    <LogDetailModal
+      v-if="selectedEntry"
+      :entry="selectedEntry"
+      :connections="connections"
+      @close="selectedEntry = null"
+    />
   </div>
 </template>
