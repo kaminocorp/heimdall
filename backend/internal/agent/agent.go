@@ -75,6 +75,11 @@ func (a *Agent) providerFor(name string) Provider {
 // multiple times: stops the previous instance first. Stop() waits on a.wg,
 // so all goroutines are joined before Stop returns.
 func (a *Agent) Start(ctx context.Context) {
+	if a.config.DisableBackgroundJobs {
+		slog.Info("background jobs disabled (DISABLE_BACKGROUND_JOBS is set), skipping monitor/pruner/scheduler")
+		return
+	}
+
 	if a.cancel != nil {
 		slog.Warn("agent already running, stopping previous instance before restart")
 		a.Stop()

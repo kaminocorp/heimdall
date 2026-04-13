@@ -26,6 +26,7 @@ type Config struct {
 	FrontendURL           string
 	SyslogTLSCert         string
 	SyslogTLSKey          string
+	DisableBackgroundJobs bool
 }
 
 func Load() *Config {
@@ -50,6 +51,7 @@ func Load() *Config {
 		FrontendURL:           getEnv("FRONTEND_URL", "http://localhost:5173"),
 		SyslogTLSCert:         getEnv("SYSLOG_TLS_CERT", ""),
 		SyslogTLSKey:          getEnv("SYSLOG_TLS_KEY", ""),
+		DisableBackgroundJobs: getEnv("DISABLE_BACKGROUND_JOBS", "") != "",
 	}
 }
 

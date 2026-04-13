@@ -94,10 +94,12 @@ func main() {
 	ag.Start(context.Background())
 
 	poller := connectors.NewPoller(queries)
-	resumePollers(context.Background(), queries, poller)
-
 	listener := connectors.NewListenerManager()
-	resumeSyslogListeners(context.Background(), queries, listener, cfg)
+
+	if !cfg.DisableBackgroundJobs {
+		resumePollers(context.Background(), queries, poller)
+		resumeSyslogListeners(context.Background(), queries, listener, cfg)
+	}
 
 	router := api.NewRouter(cfg, pool, ag, jwks, ghClient, poller, listener)
 

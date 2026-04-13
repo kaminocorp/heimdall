@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.34.1 — Dev-Mode Background Job Kill-Switch](#0341--dev-mode-background-job-kill-switch-2026-04-13)
 - [0.34.0 — Activity Detail Modal & Supabase Poller Tuning](#0340--activity-detail-modal--supabase-poller-tuning-2026-04-13)
 - [0.33.1 — Code Quality & Structural Cleanup](#0331--code-quality--structural-cleanup-2026-04-12)
 - [0.33.0 — Expanded Model Catalogue & Picker](#0330--expanded-model-catalogue--picker-2026-04-12)
@@ -79,6 +80,53 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.34.1 — Dev-Mode Background Job Kill-Switch (2026-04-13)
+
+Local development connects to the production database for convenience, but the five background systems — monitoring loop, investigation scheduler, log pruner, pollers, and syslog listeners — were firing against production data from every local `make dev-backend` run. This meant duplicate monitoring cycles, spurious scheduled investigations, and unnecessary API calls competing with the production instance. This release adds a single `DISABLE_BACKGROUND_JOBS` env var that suppresses all background work while keeping the API server, WebSocket chat, and log ingestion fully operational.
+
+### Backend — config flag
+
+**`Config.DisableBackgroundJobs`** (line 29 in `config.go`) — a new boolean field, set to `true` when the `DISABLE_BACKGROUND_JOBS` environment variable is present with any non-empty value. No value parsing or case-sensitivity — if the var exists, background jobs are off.
+
+### Backend — agent gating
+
+**`Agent.Start()` early return** (line 78 in `agent.go`) — when the flag is set, `Start()` logs an info-level message and returns immediately without spawning the three background goroutines (monitor, pruner, scheduler). The `Agent` struct is still fully constructed and registered with the router, so interactive WebSocket chat continues to work — only the autonomous background loops are suppressed.
+
+### Backend — connector gating
+
+**`main.go` conditional resume** (line 97) — `resumePollers()` and `resumeSyslogListeners()` are now wrapped in a `!cfg.DisableBackgroundJobs` guard. These functions restart polling goroutines (Supabase, Fly.io, Vercel, Railway, MongoDB) and syslog TCP listeners for all active connections on startup — skipping them prevents local dev from duplicating the production connector workload.
+
+### Environment files
+
+**`.env`** — `DISABLE_BACKGROUND_JOBS=true` added and active. Since `make dev-backend` loads this file, local runs automatically skip background jobs with no manual step required.
+
+**`.env.example`** — documented the variable (commented out) so new contributors understand the option.
+
+### What still runs locally
+
+| System | Status | Why |
+|--------|--------|-----|
+| API routes (REST) | Active | Needed for frontend development |
+| WebSocket chat | Active | Interactive agent queries are user-initiated, not autonomous |
+| Webhook log ingestion | Active | Needed for testing ingestion flows |
+| Monitoring loop | **Disabled** | Would duplicate production monitoring cycles |
+| Investigation scheduler | **Disabled** | Would fire scheduled prompts against production |
+| Log buffer pruner | **Disabled** | Would delete production log_buffer rows |
+| Pollers (Supabase, Fly, etc.) | **Disabled** | Would duplicate production polling and hit rate limits |
+| Syslog listeners | **Disabled** | Would bind ports and ingest duplicates |
+
+### Files changed
+
+| File | Kind | Change |
+|------|------|--------|
+| `backend/internal/config/config.go` | Edit | Added `DisableBackgroundJobs bool` field + env var read |
+| `backend/internal/agent/agent.go` | Edit | Early return in `Start()` when flag is set |
+| `backend/cmd/heimdall/main.go` | Edit | Gated `resumePollers` / `resumeSyslogListeners` |
+| `.env` | Edit | Added `DISABLE_BACKGROUND_JOBS=true` |
+| `.env.example` | Edit | Documented the variable (commented out) |
 
 ---
 
