@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.41.0 — Neutral Canvas Colour Rebalance](#0410--neutral-canvas-colour-rebalance-2026-04-13)
 - [0.40.0 — Connection Wizard: Platform-First Redesign](#0400--connection-wizard-platform-first-redesign-2026-04-13)
 - [0.39.0 — Ingestion Page Redesign: 3D Agent Nebula](#0390--ingestion-page-redesign-3d-agent-nebula-2026-04-13)
 - [0.38.0 — Navigation Restructure & Infrastructure Triptych](#0380--navigation-restructure--infrastructure-triptych-2026-04-13)
@@ -86,6 +87,102 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.41.0 — Neutral Canvas Colour Rebalance (2026-04-13)
+
+The UI has been rebalanced from a green-tinted-everything aesthetic to a neutral dark canvas where phosphor green appears only on intentional interactive and brand elements. The same bones, substantially less green wash.
+
+### The problem
+
+The v0.35.0 "Technical Retro-Futurism" refresh applied green tint to every visual layer — backgrounds, all three text tiers, borders, scrollbars, text selection, surface textures, scanline overlays, and fade-in animations. The cumulative effect was wearing green-tinted glasses: the brand colour lost all punch because there was nothing neutral to contrast against.
+
+Sister platform Trajan demonstrates the correct approach — orange appears only on badges, active tabs, and small interactive highlights while surfaces, borders, and text are all neutral grays. The accent colour punctuates; it doesn't permeate.
+
+### The approach — neutral canvas, surgical green
+
+Every ambient layer (backgrounds, text, borders, textures) shifted to pure cool neutrals. Green is reserved for elements where it communicates something — action buttons, active states, status indicators, brand decoration. Green coverage drops from ~80% of visual surface area to ~5–10%.
+
+### Design token changes
+
+**Backgrounds** — removed green cast from all four surface tokens:
+
+| Token | Before | After |
+|-------|--------|-------|
+| `--bg-primary` | `#06080a` (green-black) | `#08090a` (pure neutral) |
+| `--bg-surface` | `rgba(12, 16, 14, 0.55)` | `rgba(15, 16, 18, 0.55)` |
+| `--bg-surface-hover` | `rgba(14, 20, 17, 0.75)` | `rgba(20, 21, 24, 0.75)` |
+| `--bg-elevated` | `#0c100e` (green-black) | `#0e0f11` (neutral) |
+
+**Text** — all three tiers shifted from green-tinted to cool slate:
+
+| Token | Before | After |
+|-------|--------|-------|
+| `--text-primary` | `#e8ede9` (green white) | `#e2e4e8` (cool neutral) |
+| `--text-secondary` | `#8a9e92` (muted green) | `#8a8f96` (cool slate) |
+| `--text-muted` | `#4e6556` (obvious green) | `#4a4f56` (dark slate) |
+
+**Borders** — structural lines are now colourless:
+
+| Token | Before | After |
+|-------|--------|-------|
+| `--border` | `rgba(74, 122, 92, 0.18)` (green) | `rgba(140, 145, 155, 0.14)` (neutral gray) |
+| `--border-hover` | `rgba(74, 122, 92, 0.32)` (green) | `rgba(140, 145, 155, 0.26)` (neutral gray) |
+
+**Accent** — kept green, slightly tightened `--accent-subtle` (0.12 → 0.10) and `--accent-border` (0.25 → 0.22) to avoid over-bleed on the now-neutral canvas. All other accent, action, and status tokens unchanged.
+
+### Global style changes
+
+**Scrollbar thumb** — green → neutral gray at all three states (default, hover, active). Removed the green glow on active state.
+
+**Text selection** — `rgba(74, 122, 92, 0.3)` → `rgba(140, 145, 155, 0.25)`.
+
+**Surface grid texture** — green gridlines → neutral gray, opacity reduced from 0.06 to 0.04 for subtlety.
+
+**Scanline overlay** — green banding → neutral gray (same 2% opacity).
+
+**Fade-in animation** — removed the `border-color` transition that flashed green on every list item entry. Animation now handles only opacity and transform.
+
+### AgentNebula shader rebalance
+
+The 3D particle nebula on the Connections page had hardcoded GLSL colour values across three particle layers (ambient cloud, wisp tendrils, core motes). All three were rebalanced:
+
+- **Base colours** shifted from green-dominant (`vec3(0.10, 0.20, 0.14)`) to neutral slate (`vec3(0.10, 0.11, 0.13)`)
+- **Green accent mix weights** reduced (0.50 → 0.35) to prevent green from dominating the palette
+- **Teal and warm amber** given proportionally more weight for colour variety
+- **Dormant state** desaturates to neutral grey instead of green-grey
+
+The nebula now reads as a moody, multi-tonal cloud that occasionally catches green highlights — rather than a green fog.
+
+### What stays green
+
+These elements retain phosphor green because it's meaningful there:
+
+| Element | Why green |
+|---------|----------|
+| `--action` / `--action-hover` | Primary CTA — "do this" |
+| `--accent` on active nav items | "You are here" |
+| `--status-ok` | "This is healthy" |
+| Chrome brackets (`.chrome-brackets`) | Brand decoration — HUD corners |
+| Brand wordmark glow (`.brand-glow`) | Logo identity |
+| FlowLines on Connections page | Animated data-flow visualisation |
+| Glow-pulse animations | Atmospheric brand effect |
+
+### Files changed
+
+| File | Kind | Change |
+|------|------|--------|
+| `frontend/src/assets/styles/main.css` | Edit | All token + global style changes above |
+| `frontend/src/components/connections/AgentNebula.vue` | Edit | GLSL shader palette rebalance (3 layers) |
+
+### Verification
+
+| Check | Result |
+|-------|--------|
+| `vue-tsc --noEmit` | Clean |
+| `vite build` | Clean |
+| `vitest run` | 52/52 tests pass |
 
 ---
 

@@ -228,31 +228,31 @@ function createPrimaryCloud(): Points {
         // Spatial colour seed
         float spatial = vDisplaced.x * 0.8 + vDisplaced.y * 0.6 + vDepth * 0.15;
 
-        // Heimdall palette — dark base, strong mood cycling for life
-        vec3 base     = vec3(0.10, 0.20, 0.14);   // very dark feldgrau base
-        vec3 deepGrn  = vec3(0.15, 0.35, 0.22);   // deep accent
-        vec3 phosphor = vec3(0.22, 0.50, 0.30);   // phosphor bright
-        vec3 tealInfo = vec3(0.12, 0.32, 0.48);   // teal info
-        vec3 warmAmb  = vec3(0.38, 0.30, 0.10);   // warm amber muted
+        // Heimdall palette — neutral base, green appears as accent not foundation
+        vec3 base     = vec3(0.10, 0.11, 0.13);   // neutral dark slate
+        vec3 accent   = vec3(0.14, 0.30, 0.20);   // muted green accent
+        vec3 phosphor = vec3(0.18, 0.42, 0.26);   // phosphor highlight
+        vec3 tealInfo = vec3(0.12, 0.28, 0.42);   // teal info
+        vec3 warmAmb  = vec3(0.30, 0.24, 0.12);   // warm amber muted
 
-        // Stronger mood cycling — higher mix intensities, varied speeds
+        // Mood cycling — varied speeds for organic movement
         float moodA = sin(uTime * 0.037 + spatial * 1.5) * 0.5 + 0.5;
         float moodB = sin(uTime * 0.023 + spatial * 1.2 + 1.8) * 0.5 + 0.5;
         float moodC = sin(uTime * 0.053 + spatial * 1.8 + 3.5) * 0.5 + 0.5;
         float moodD = sin(uTime * 0.041 + spatial * 1.0 + 5.1) * 0.5 + 0.5;
 
         vec3 color = base;
-        color = mix(color, deepGrn,  moodA * 0.50);
-        color = mix(color, phosphor, moodB * 0.45);
-        color = mix(color, tealInfo, moodC * 0.25);
-        color = mix(color, warmAmb,  moodD * 0.15);
+        color = mix(color, accent,   moodA * 0.35);
+        color = mix(color, phosphor, moodB * 0.30);
+        color = mix(color, tealInfo, moodC * 0.30);
+        color = mix(color, warmAmb,  moodD * 0.20);
 
-        // Global brightness pulse — slow sine so the whole nebula breathes in colour
+        // Global brightness pulse — slow sine so the whole nebula breathes
         float brightPulse = 0.85 + 0.15 * sin(uTime * 0.067);
         color *= brightPulse;
 
-        // In dormant mode, desaturate toward grey-green
-        color = mix(color, vec3(0.10, 0.13, 0.11), uDormant * 0.5);
+        // In dormant mode, desaturate toward neutral grey
+        color = mix(color, vec3(0.10, 0.10, 0.11), uDormant * 0.5);
 
         gl_FragColor = vec4(color * soft, vAlpha * soft);
       }
@@ -351,22 +351,22 @@ function createWispTendrils(): Points {
 
         float spatial = vDisplaced.x * 0.8 + vDisplaced.y * 0.6 + vDepth * 0.15;
 
-        vec3 base     = vec3(0.08, 0.18, 0.12);
-        vec3 deepGrn  = vec3(0.15, 0.35, 0.22);
-        vec3 phosphor = vec3(0.22, 0.50, 0.30);
-        vec3 tealInfo = vec3(0.12, 0.32, 0.48);
+        vec3 base     = vec3(0.08, 0.09, 0.11);
+        vec3 accent   = vec3(0.12, 0.28, 0.18);
+        vec3 phosphor = vec3(0.18, 0.42, 0.26);
+        vec3 tealInfo = vec3(0.12, 0.28, 0.42);
 
-        // 3 moods for wisps — stronger cycling
+        // 3 moods for wisps — organic cycling
         float moodA = sin(uTime * 0.037 + spatial * 1.5 + 2.0) * 0.5 + 0.5;
         float moodB = sin(uTime * 0.023 + spatial * 1.2 + 3.8) * 0.5 + 0.5;
         float moodC = sin(uTime * 0.053 + spatial * 1.8 + 5.5) * 0.5 + 0.5;
 
         vec3 color = base;
-        color = mix(color, deepGrn,  moodA * 0.50);
-        color = mix(color, phosphor, moodB * 0.40);
-        color = mix(color, tealInfo, moodC * 0.30);
+        color = mix(color, accent,   moodA * 0.35);
+        color = mix(color, phosphor, moodB * 0.30);
+        color = mix(color, tealInfo, moodC * 0.35);
 
-        color = mix(color, vec3(0.06, 0.09, 0.07), uDormant * 0.5);
+        color = mix(color, vec3(0.07, 0.07, 0.08), uDormant * 0.5);
 
         gl_FragColor = vec4(color * soft, vAlpha * soft);
       }
@@ -455,16 +455,16 @@ function createCoreMotes(): Points {
         if (d > 0.5) discard;
         float soft = exp(-d * d * 10.0);
 
-        // Candlelight/moonlight cycling — more pronounced shift
+        // Candlelight/moonlight cycling — subtle organic shift
         float warmCool = sin(uTime * 0.067) * 0.5 + 0.5;
         float tealShift = sin(uTime * 0.041 + 2.0) * 0.5 + 0.5;
-        vec3 candle   = vec3(0.20, 0.40, 0.26);  // warm phosphor
-        vec3 moonlit  = vec3(0.16, 0.34, 0.30);  // cool phosphor
-        vec3 tealTint = vec3(0.14, 0.30, 0.42);  // teal accent
+        vec3 candle   = vec3(0.18, 0.32, 0.22);  // warm phosphor
+        vec3 moonlit  = vec3(0.14, 0.24, 0.30);  // cool slate
+        vec3 tealTint = vec3(0.14, 0.26, 0.38);  // teal accent
         vec3 color = mix(candle, moonlit, warmCool);
         color = mix(color, tealTint, tealShift * 0.3);
 
-        color = mix(color, vec3(0.10, 0.13, 0.11), uDormant * 0.5);
+        color = mix(color, vec3(0.08, 0.08, 0.09), uDormant * 0.5);
 
         gl_FragColor = vec4(color * soft, vAlpha * soft);
       }
