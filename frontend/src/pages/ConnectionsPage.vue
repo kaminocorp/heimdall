@@ -5,13 +5,14 @@ import { useConnectionsStore } from '@/stores/connections'
 import { useAppStore } from '@/stores/app'
 import { extractApiError } from '@/utils/apiError'
 import type { Connection, CreateConnectionPayload } from '@/types/connection'
-import ConnectionList from '@/components/connections/ConnectionList.vue'
 import ConnectionForm from '@/components/connections/ConnectionForm.vue'
 import ConnectionTestModal from '@/components/connections/ConnectionTestModal.vue'
 import ConnectionWizard from '@/components/connections/wizard/ConnectionWizard.vue'
 import GitHubRepoSelector from '@/components/connections/GitHubRepoSelector.vue'
-import BlueprintView from '@/components/connections/BlueprintView.vue'
-import ViewToggle from '@/components/connections/ViewToggle.vue'
+import AgentNebula from '@/components/connections/AgentNebula.vue'
+import ConnectionBubble from '@/components/connections/ConnectionBubble.vue'
+import ConnectionDetailModal from '@/components/connections/ConnectionDetailModal.vue'
+import FlowLines from '@/components/connections/FlowLines.vue'
 import SkeletonBlock from '@/components/common/SkeletonBlock.vue'
 
 const store = useConnectionsStore()
@@ -25,10 +26,9 @@ const actionError = ref<string | null>(null)
 const repoSelectorConnectionId = ref<string | null>(null)
 const githubInstalledMessage = ref<string | null>(null)
 const testModalConnection = ref<Connection | null>(null)
-const viewMode = ref<'blueprint' | 'list'>(
-  (localStorage.getItem('heimdall_connections_view') as 'blueprint' | 'list') || 'blueprint'
-)
-watch(viewMode, (v) => localStorage.setItem('heimdall_connections_view', v))
+const selectedConnection = ref<Connection | null>(null)
+const bubbleEls = ref<(HTMLElement | null)[]>([])
+const nebulaEl = ref<HTMLElement | null>(null)
 
 async function fetchAppConnections() {
   const appId = appStore.currentAppId
@@ -135,15 +135,13 @@ function closeRepoSelector() {
         <h2 class="font-mono text-2xl font-bold uppercase tracking-wider text-text-primary">Connections</h2>
         <p class="font-sans text-sm text-text-secondary mt-1">Manage your infrastructure integrations</p>
       </div>
-      <div v-if="!showForm" class="flex items-center gap-3">
-        <ViewToggle v-model="viewMode" />
-        <button
-          @click="openCreate"
-          class="px-5 py-2.5 bg-action text-bg-primary font-mono text-sm font-medium uppercase tracking-wider rounded hover:bg-action-hover transition-colors cursor-pointer"
-        >
-          + New Connection
-        </button>
-      </div>
+      <button
+        v-if="!showForm"
+        @click="openCreate"
+        class="px-5 py-2.5 bg-action text-bg-primary font-mono text-sm font-medium uppercase tracking-wider rounded hover:bg-action-hover transition-colors cursor-pointer"
+      >
+        + New Connection
+      </button>
     </div>
 
     <!-- GitHub installed success banner -->
@@ -172,35 +170,73 @@ function closeRepoSelector() {
     />
 
     <!-- Skeleton loader -->
-    <div v-if="store.loading" class="grid grid-cols-1 md:grid-cols-2 gap-4">
-      <div v-for="n in 3" :key="n" class="border border-border rounded-lg bg-bg-surface p-6 space-y-3">
-        <SkeletonBlock width="60%" height="1rem" />
-        <SkeletonBlock width="40%" height="0.75rem" />
-        <SkeletonBlock width="30%" height="0.75rem" />
+    <div v-if="store.loading" class="flex flex-wrap justify-center gap-4">
+      <div v-for="n in 3" :key="n" class="flex flex-col items-center gap-2 p-4 min-w-[120px] border border-border rounded-xl bg-bg-surface">
+        <SkeletonBlock width="48px" height="48px" />
+        <SkeletonBlock width="80px" height="0.7rem" />
+        <SkeletonBlock width="60px" height="0.6rem" />
       </div>
     </div>
     <div v-else-if="store.error" class="text-status-critical text-sm font-mono">{{ store.error }}</div>
     <template v-else>
-      <BlueprintView
-        v-if="viewMode === 'blueprint'"
-        :connections="store.connections"
-        :testing-id="store.testingId"
-        @delete="handleDelete"
-        @edit="openEdit"
-        @test="handleTest"
-        @manage-repos="openRepoSelector"
-        @add="openCreate"
-      />
-      <ConnectionList
-        v-else
-        :connections="store.connections"
-        :testing-id="store.testingId"
-        @delete="handleDelete"
-        @edit="openEdit"
-        @test="handleTest"
-        @manage-repos="openRepoSelector"
-      />
+      <!-- Ingestion view: Bubbles → Flow Lines → Nebula -->
+      <div class="relative">
+        <!-- Connection bubbles -->
+        <div class="flex flex-wrap justify-center gap-4 relative z-10">
+          <ConnectionBubble
+            v-for="(conn, i) in store.connections"
+            :key="conn.id"
+            :ref="(el: any) => { bubbleEls[i] = el?.$el ?? el }"
+            :connection="conn"
+            :testing="store.testingId === conn.id"
+            :index="i"
+            @click="selectedConnection = conn"
+          />
+        </div>
+
+        <!-- Spacer between bubbles and nebula -->
+        <div class="h-16" />
+
+        <!-- Flow lines (SVG overlay, hidden on mobile) -->
+        <FlowLines
+          v-if="store.connections.length > 0"
+          :bubble-els="bubbleEls"
+          :nebula-el="nebulaEl"
+          :count="store.connections.length"
+        />
+
+        <!-- Agent nebula -->
+        <div ref="nebulaEl">
+          <AgentNebula :dormant="store.connections.length === 0" />
+        </div>
+
+        <!-- Empty state overlay -->
+        <div
+          v-if="store.connections.length === 0 && !store.loading"
+          class="absolute inset-0 flex flex-col items-center justify-center z-10 pointer-events-none"
+        >
+          <p class="font-mono text-sm text-text-secondary mb-2">No connections yet</p>
+          <p class="font-sans text-xs text-text-muted mb-4">Add your first integration to start monitoring</p>
+          <button
+            @click="openCreate"
+            class="pointer-events-auto px-5 py-2 bg-action text-bg-primary font-mono text-xs font-medium uppercase tracking-wider rounded hover:bg-action-hover transition-colors cursor-pointer"
+          >
+            + New Connection
+          </button>
+        </div>
+      </div>
     </template>
+
+    <!-- Connection detail modal -->
+    <ConnectionDetailModal
+      v-if="selectedConnection"
+      :connection="selectedConnection"
+      @close="selectedConnection = null"
+      @edit="(conn) => { selectedConnection = null; openEdit(conn) }"
+      @test="(id) => { selectedConnection = null; handleTest(id) }"
+      @delete="(id) => { selectedConnection = null; handleDelete(id) }"
+      @manage-repos="(id) => { selectedConnection = null; openRepoSelector(id) }"
+    />
 
     <!-- Connection test modal -->
     <ConnectionTestModal

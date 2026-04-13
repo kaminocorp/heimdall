@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.39.0 — Ingestion Page Redesign: 3D Agent Nebula](#0390--ingestion-page-redesign-3d-agent-nebula-2026-04-13)
 - [0.38.0 — Navigation Restructure & Infrastructure Triptych](#0380--navigation-restructure--infrastructure-triptych-2026-04-13)
 - [0.37.0 — Activity Feed App-Scoping](#0370--activity-feed-app-scoping-2026-04-13)
 - [0.36.0 — Top Header Nav Bar & Sidebar Slim-Down](#0360--top-header-nav-bar--sidebar-slim-down-2026-04-13)
@@ -84,6 +85,112 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.39.0 — Ingestion Page Redesign: 3D Agent Nebula (2026-04-13)
+
+The Connections page has been rebuilt from the ground up around a new visual metaphor: data sources feed into the Heimdall agent. The previous dual-view layout (Blueprint grid + flat List, toggled via a segmented control) is replaced by a single unified view — clickable connection bubbles with native brand logos arranged above an ephemeral 3D particle nebula representing the agent, connected by animated SVG flow lines.
+
+### Why this redesign
+
+The old Blueprint view grouped connections by type in a left/centre/right column layout with a static eye icon as the "hub." It communicated structure but not the mental model that matters: **data flows from your infrastructure into an intelligent, living agent**. The new design makes the agent tangible — a breathing particle cloud that processes the data flowing into it from each connection above.
+
+### The new layout
+
+```
+┌─────────────────────────────────────────────────┐
+│  CONNECTIONS              [+ NEW CONNECTION]     │
+├─────────────────────────────────────────────────┤
+│                                                 │
+│   [🔷 GitHub]  [⚡ Supabase]  [🐘 PostgreSQL]   │  ← Connection bubbles
+│        \            |            /              │    with native brand logos
+│         ╲           │           ╱               │
+│          ▼          ▼          ▼                │  ← Animated flow lines
+│                                                 │
+│            ░░░░░░░░░░░░░░░░░░░░                │
+│            ░░ PARTICLE NEBULA ░░                │  ← 3D agent abstraction
+│            ░░░░░░░░░░░░░░░░░░░░                │    (Three.js + GLSL)
+│                                                 │
+└─────────────────────────────────────────────────┘
+```
+
+### Connection bubbles
+
+Each connection is a clickable bubble component displaying:
+- **Native brand SVG** — official logos from Simple Icons for Supabase, PostgreSQL, GitHub, OpenTelemetry, Datadog, MySQL; custom icons for Webhook and Syslog
+- **Connection name** and type label
+- **Status indicator** — green glow when active, red for error, grey for inactive
+- **Staggered mount animation** — bubbles fade in sequentially via CSS custom property delay
+
+Clicking a bubble opens the new **Connection Detail Modal** — a full-info overlay showing type-specific configuration (host, port, database, polling tables, etc.), metadata (created/updated dates, connection ID), masked sensitive fields with reveal toggles, and action buttons (Ping, Edit, Delete with two-step confirmation, Manage Repos for GitHub).
+
+### Agent nebula
+
+A 3-layer volumetric particle cloud rendered with raw Three.js and custom GLSL shaders, adapted from the Elephantasm reference architecture:
+
+| Layer | Particles | Role |
+|-------|-----------|------|
+| Primary Cloud | 4,000 | Main body — 3-octave simplex noise displacement, Gaussian distribution |
+| Wisp Tendrils | 1,000 | Atmospheric edge — radial drift with tangential noise, uniform shell |
+| Core Motes | 400 | Bright heartbeat — high-frequency micro-jitter, tight Gaussian core |
+
+The colour palette is tuned to Heimdall's retro-futurism theme: dark feldgrau base with phosphor-green, teal, and warm amber mood tints that cycle through irrational sine frequencies — the nebula never repeats within ~7 minutes. A global brightness pulse adds a slow breathing rhythm to the colour intensity.
+
+Key properties:
+- `THREE.Points` with custom `ShaderMaterial` and `AdditiveBlending`
+- Ashima 3D Simplex noise (GLSL, inlined)
+- `dormant` prop dims the nebula when no connections exist
+- `prefers-reduced-motion` renders one frame then stops
+- Full cleanup in `onBeforeUnmount` (geometries, materials, renderer disposed — no WebGL context leaks)
+
+### Flow lines
+
+Animated SVG dashed paths connect each bubble's bottom-centre to the nebula's top-centre via quadratic bezier curves. Two overlapping `<path>` elements per line: a faint static base (structural reference) and an animated flow with glow filter (continuous top-to-bottom dash movement at 2.5s period, staggered by 300ms per line). Hidden on mobile. Recomputed via `ResizeObserver` on layout changes.
+
+### Empty state
+
+When no connections exist, the nebula renders in dormant mode — dimmer, desaturated, tighter breathing — with an overlaid "No connections yet" message and "+ New Connection" CTA. The breathing dormant nebula communicates "the system is here, waiting to be activated."
+
+### Bundle optimisation
+
+Three.js is split into a separate `vendor-three` chunk via `manualChunks` in the Vite config. It loads lazily only when the user navigates to the Connections page.
+
+| Chunk | Size (gzip) |
+|-------|-------------|
+| `ConnectionsPage` | 21 KB |
+| `vendor-three` (lazy) | 122 KB |
+| `index` (main bundle) | 115 KB — unchanged |
+
+### Files changed
+
+| File | Kind | Change |
+|------|------|--------|
+| `frontend/package.json` | Edit | Added `three`, `@types/three` |
+| `frontend/vite.config.js` | Edit | Added `manualChunks` for three.js, `chunkSizeWarningLimit` |
+| `frontend/vite.config.ts` | Edit | Synced same build config |
+| `frontend/src/components/connections/AgentNebula.vue` | **New** | 3D particle nebula component |
+| `frontend/src/components/icons/ConnectorLogo.vue` | **New** | Brand logo SVGs by type |
+| `frontend/src/components/connections/ConnectionBubble.vue` | **New** | Clickable connection bubble |
+| `frontend/src/components/connections/ConnectionDetailModal.vue` | **New** | Full-info detail modal |
+| `frontend/src/components/connections/FlowLines.vue` | **New** | SVG animated connector lines |
+| `frontend/src/pages/ConnectionsPage.vue` | Rewrite | Unified ingestion view replacing Blueprint/List |
+| `frontend/src/components/connections/BlueprintView.vue` | **Deleted** | Replaced |
+| `frontend/src/components/connections/BlueprintZone.vue` | **Deleted** | Replaced |
+| `frontend/src/components/connections/BlueprintNode.vue` | **Deleted** | Replaced |
+| `frontend/src/components/connections/ViewToggle.vue` | **Deleted** | No longer two view modes |
+| `frontend/src/components/connections/ConnectionList.vue` | **Deleted** | Replaced |
+| `frontend/src/components/connections/ConnectionCard.vue` | **Deleted** | Replaced |
+
+### Verification
+
+| Check | Result |
+|-------|--------|
+| `vue-tsc --noEmit` | Clean |
+| `vite build` | Clean — three.js in separate lazy chunk |
+| `vitest run` | 52/52 tests pass |
+| Existing flows | Wizard, edit form, test modal, GitHub repo selector, error banners all preserved |
+| `prefers-reduced-motion` | Nebula freezes, flow lines static, bubble animations instant |
 
 ---
 
