@@ -204,7 +204,7 @@ func (a *Agent) RunScheduledInvestigation(ctx context.Context, s db.Investigatio
 	// We use ctx (parent) rather than runCtx (timed-out) for the emit so that
 	// a slow-but-succeeded RunMonitoring can still persist its result even if
 	// the run context is on the edge of expiring.
-	a.EmitLogWithSeverity(ctx, userID, nil, "scheduled_investigation", summary,
+	a.EmitLogWithSeverity(ctx, userID, &s.AppID, nil, "scheduled_investigation", summary,
 		map[string]any{
 			"schedule_id":   s.ID,
 			"schedule_name": s.Name,

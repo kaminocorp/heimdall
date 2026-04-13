@@ -13,6 +13,41 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countLogsByApp = `-- name: CountLogsByApp :one
+SELECT count(*) FROM log_buffer
+WHERE user_id = $1 AND app_id = $2
+`
+
+type CountLogsByAppParams struct {
+	UserID uuid.UUID   `json:"user_id"`
+	AppID  pgtype.UUID `json:"app_id"`
+}
+
+func (q *Queries) CountLogsByApp(ctx context.Context, arg CountLogsByAppParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countLogsByApp, arg.UserID, arg.AppID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countLogsByAppAndSeverity = `-- name: CountLogsByAppAndSeverity :one
+SELECT count(*) FROM log_buffer
+WHERE user_id = $1 AND app_id = $2 AND severity = $3
+`
+
+type CountLogsByAppAndSeverityParams struct {
+	UserID   uuid.UUID   `json:"user_id"`
+	AppID    pgtype.UUID `json:"app_id"`
+	Severity pgtype.Text `json:"severity"`
+}
+
+func (q *Queries) CountLogsByAppAndSeverity(ctx context.Context, arg CountLogsByAppAndSeverityParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countLogsByAppAndSeverity, arg.UserID, arg.AppID, arg.Severity)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countLogsByUser = `-- name: CountLogsByUser :one
 SELECT count(*) FROM log_buffer
 WHERE user_id = $1
@@ -84,9 +119,9 @@ func (q *Queries) GetConnectionByWebhookToken(ctx context.Context, webhookToken 
 }
 
 const insertLogEntry = `-- name: InsertLogEntry :one
-INSERT INTO log_buffer (connection_id, source_type, severity, payload, user_id)
-VALUES ($1, $2, $3, $4, $5)
-RETURNING id, connection_id, source_type, severity, payload, ingested_at, user_id
+INSERT INTO log_buffer (connection_id, source_type, severity, payload, user_id, app_id)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id, connection_id, source_type, severity, payload, ingested_at, user_id, app_id
 `
 
 type InsertLogEntryParams struct {
@@ -95,6 +130,7 @@ type InsertLogEntryParams struct {
 	Severity     pgtype.Text     `json:"severity"`
 	Payload      json.RawMessage `json:"payload"`
 	UserID       uuid.UUID       `json:"user_id"`
+	AppID        pgtype.UUID     `json:"app_id"`
 }
 
 func (q *Queries) InsertLogEntry(ctx context.Context, arg InsertLogEntryParams) (LogBuffer, error) {
@@ -104,6 +140,7 @@ func (q *Queries) InsertLogEntry(ctx context.Context, arg InsertLogEntryParams) 
 		arg.Severity,
 		arg.Payload,
 		arg.UserID,
+		arg.AppID,
 	)
 	var i LogBuffer
 	err := row.Scan(
@@ -114,12 +151,111 @@ func (q *Queries) InsertLogEntry(ctx context.Context, arg InsertLogEntryParams) 
 		&i.Payload,
 		&i.IngestedAt,
 		&i.UserID,
+		&i.AppID,
 	)
 	return i, err
 }
 
+const listLogsByApp = `-- name: ListLogsByApp :many
+SELECT id, connection_id, source_type, severity, payload, ingested_at, user_id, app_id FROM log_buffer
+WHERE user_id = $1 AND app_id = $2
+ORDER BY ingested_at DESC
+LIMIT $3 OFFSET $4
+`
+
+type ListLogsByAppParams struct {
+	UserID uuid.UUID   `json:"user_id"`
+	AppID  pgtype.UUID `json:"app_id"`
+	Limit  int32       `json:"limit"`
+	Offset int32       `json:"offset"`
+}
+
+func (q *Queries) ListLogsByApp(ctx context.Context, arg ListLogsByAppParams) ([]LogBuffer, error) {
+	rows, err := q.db.Query(ctx, listLogsByApp,
+		arg.UserID,
+		arg.AppID,
+		arg.Limit,
+		arg.Offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []LogBuffer{}
+	for rows.Next() {
+		var i LogBuffer
+		if err := rows.Scan(
+			&i.ID,
+			&i.ConnectionID,
+			&i.SourceType,
+			&i.Severity,
+			&i.Payload,
+			&i.IngestedAt,
+			&i.UserID,
+			&i.AppID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listLogsByAppAndSeverity = `-- name: ListLogsByAppAndSeverity :many
+SELECT id, connection_id, source_type, severity, payload, ingested_at, user_id, app_id FROM log_buffer
+WHERE user_id = $1 AND app_id = $2 AND severity = $3
+ORDER BY ingested_at DESC
+LIMIT $4 OFFSET $5
+`
+
+type ListLogsByAppAndSeverityParams struct {
+	UserID   uuid.UUID   `json:"user_id"`
+	AppID    pgtype.UUID `json:"app_id"`
+	Severity pgtype.Text `json:"severity"`
+	Limit    int32       `json:"limit"`
+	Offset   int32       `json:"offset"`
+}
+
+func (q *Queries) ListLogsByAppAndSeverity(ctx context.Context, arg ListLogsByAppAndSeverityParams) ([]LogBuffer, error) {
+	rows, err := q.db.Query(ctx, listLogsByAppAndSeverity,
+		arg.UserID,
+		arg.AppID,
+		arg.Severity,
+		arg.Limit,
+		arg.Offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []LogBuffer{}
+	for rows.Next() {
+		var i LogBuffer
+		if err := rows.Scan(
+			&i.ID,
+			&i.ConnectionID,
+			&i.SourceType,
+			&i.Severity,
+			&i.Payload,
+			&i.IngestedAt,
+			&i.UserID,
+			&i.AppID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listLogsByUser = `-- name: ListLogsByUser :many
-SELECT id, connection_id, source_type, severity, payload, ingested_at, user_id FROM log_buffer
+SELECT id, connection_id, source_type, severity, payload, ingested_at, user_id, app_id FROM log_buffer
 WHERE user_id = $1
 ORDER BY ingested_at DESC
 LIMIT $2 OFFSET $3
@@ -148,6 +284,7 @@ func (q *Queries) ListLogsByUser(ctx context.Context, arg ListLogsByUserParams) 
 			&i.Payload,
 			&i.IngestedAt,
 			&i.UserID,
+			&i.AppID,
 		); err != nil {
 			return nil, err
 		}
@@ -160,7 +297,7 @@ func (q *Queries) ListLogsByUser(ctx context.Context, arg ListLogsByUserParams) 
 }
 
 const listLogsByUserAndConnection = `-- name: ListLogsByUserAndConnection :many
-SELECT id, connection_id, source_type, severity, payload, ingested_at, user_id FROM log_buffer
+SELECT id, connection_id, source_type, severity, payload, ingested_at, user_id, app_id FROM log_buffer
 WHERE user_id = $1 AND connection_id = $2
 ORDER BY ingested_at DESC
 LIMIT $3 OFFSET $4
@@ -195,6 +332,7 @@ func (q *Queries) ListLogsByUserAndConnection(ctx context.Context, arg ListLogsB
 			&i.Payload,
 			&i.IngestedAt,
 			&i.UserID,
+			&i.AppID,
 		); err != nil {
 			return nil, err
 		}
@@ -207,7 +345,7 @@ func (q *Queries) ListLogsByUserAndConnection(ctx context.Context, arg ListLogsB
 }
 
 const listLogsByUserAndSeverity = `-- name: ListLogsByUserAndSeverity :many
-SELECT id, connection_id, source_type, severity, payload, ingested_at, user_id FROM log_buffer
+SELECT id, connection_id, source_type, severity, payload, ingested_at, user_id, app_id FROM log_buffer
 WHERE user_id = $1 AND severity = $2
 ORDER BY ingested_at DESC
 LIMIT $3 OFFSET $4
@@ -242,6 +380,7 @@ func (q *Queries) ListLogsByUserAndSeverity(ctx context.Context, arg ListLogsByU
 			&i.Payload,
 			&i.IngestedAt,
 			&i.UserID,
+			&i.AppID,
 		); err != nil {
 			return nil, err
 		}
@@ -266,7 +405,7 @@ func (q *Queries) PruneExpiredLogs(ctx context.Context) (int64, error) {
 }
 
 const searchLogsByUser = `-- name: SearchLogsByUser :many
-SELECT id, connection_id, source_type, severity, payload, ingested_at, user_id FROM log_buffer
+SELECT id, connection_id, source_type, severity, payload, ingested_at, user_id, app_id FROM log_buffer
 WHERE user_id = $1 AND payload::text ILIKE '%' || $2::text || '%' ESCAPE '\'
 ORDER BY ingested_at DESC
 LIMIT $4 OFFSET $3
@@ -301,6 +440,7 @@ func (q *Queries) SearchLogsByUser(ctx context.Context, arg SearchLogsByUserPara
 			&i.Payload,
 			&i.IngestedAt,
 			&i.UserID,
+			&i.AppID,
 		); err != nil {
 			return nil, err
 		}
@@ -313,7 +453,7 @@ func (q *Queries) SearchLogsByUser(ctx context.Context, arg SearchLogsByUserPara
 }
 
 const searchLogsByUserAndSeverity = `-- name: SearchLogsByUserAndSeverity :many
-SELECT id, connection_id, source_type, severity, payload, ingested_at, user_id FROM log_buffer
+SELECT id, connection_id, source_type, severity, payload, ingested_at, user_id, app_id FROM log_buffer
 WHERE user_id = $1 AND payload::text ILIKE '%' || $2::text || '%' ESCAPE '\' AND severity = $3
 ORDER BY ingested_at DESC
 LIMIT $5 OFFSET $4
@@ -350,6 +490,7 @@ func (q *Queries) SearchLogsByUserAndSeverity(ctx context.Context, arg SearchLog
 			&i.Payload,
 			&i.IngestedAt,
 			&i.UserID,
+			&i.AppID,
 		); err != nil {
 			return nil, err
 		}

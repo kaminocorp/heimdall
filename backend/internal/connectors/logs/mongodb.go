@@ -38,6 +38,7 @@ type MongoDB struct {
 	config       MongoDBConfig
 	connectionID uuid.UUID
 	userID       uuid.UUID
+	appID        uuid.UUID
 	httpClient   *http.Client
 	apiBase      string
 
@@ -45,7 +46,7 @@ type MongoDB struct {
 	cursor time.Time
 }
 
-func NewMongoDB(configJSON json.RawMessage, connectionID, userID uuid.UUID) (*MongoDB, error) {
+func NewMongoDB(configJSON json.RawMessage, connectionID, userID, appID uuid.UUID) (*MongoDB, error) {
 	var cfg MongoDBConfig
 	if err := json.Unmarshal(configJSON, &cfg); err != nil {
 		return nil, fmt.Errorf("mongodb: invalid config: %w", err)
@@ -70,6 +71,7 @@ func NewMongoDB(configJSON json.RawMessage, connectionID, userID uuid.UUID) (*Mo
 		config:       cfg,
 		connectionID: connectionID,
 		userID:       userID,
+		appID:        appID,
 		httpClient:   &http.Client{Timeout: 30 * time.Second},
 		apiBase:      mongoAPIBase,
 		cursor:       time.Now().Add(-10 * time.Minute),
@@ -177,6 +179,7 @@ func (m *MongoDB) Poll(ctx context.Context, queries *db.Queries) error {
 			Severity:     severity,
 			Payload:      payload,
 			UserID:       m.userID,
+			AppID:        pgtype.UUID{Bytes: m.appID, Valid: true},
 		})
 		if err != nil {
 			slog.Error("mongodb: insert log entry", "err", err, "connection_id", m.connectionID)

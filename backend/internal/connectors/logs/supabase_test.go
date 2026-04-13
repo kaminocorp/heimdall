@@ -24,7 +24,7 @@ func validConfig() json.RawMessage {
 }
 
 func TestNewSupabase_ValidConfig(t *testing.T) {
-	sb, err := NewSupabase(validConfig(), uuid.New(), uuid.New())
+	sb, err := NewSupabase(validConfig(), uuid.New(), uuid.New(), uuid.New())
 	require.NoError(t, err)
 
 	cfg := sb.ParsedConfig()
@@ -40,7 +40,7 @@ func TestNewSupabase_Defaults(t *testing.T) {
 		"access_token": "sbp_tok"
 	}`)
 
-	sb, err := NewSupabase(raw, uuid.New(), uuid.New())
+	sb, err := NewSupabase(raw, uuid.New(), uuid.New(), uuid.New())
 	require.NoError(t, err)
 
 	cfg := sb.ParsedConfig()
@@ -50,14 +50,14 @@ func TestNewSupabase_Defaults(t *testing.T) {
 
 func TestNewSupabase_MissingProjectRef(t *testing.T) {
 	raw := json.RawMessage(`{"access_token": "sbp_tok"}`)
-	_, err := NewSupabase(raw, uuid.New(), uuid.New())
+	_, err := NewSupabase(raw, uuid.New(), uuid.New(), uuid.New())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "project_ref is required")
 }
 
 func TestNewSupabase_MissingAccessToken(t *testing.T) {
 	raw := json.RawMessage(`{"project_ref": "myproj"}`)
-	_, err := NewSupabase(raw, uuid.New(), uuid.New())
+	_, err := NewSupabase(raw, uuid.New(), uuid.New(), uuid.New())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "access_token is required")
 }
@@ -68,14 +68,14 @@ func TestNewSupabase_InvalidTableName(t *testing.T) {
 		"access_token": "sbp_tok",
 		"poll_tables": ["postgres_logs", "malicious_table; DROP TABLE x--"]
 	}`)
-	_, err := NewSupabase(raw, uuid.New(), uuid.New())
+	_, err := NewSupabase(raw, uuid.New(), uuid.New(), uuid.New())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid table name")
 }
 
 func TestNewSupabase_InvalidJSON(t *testing.T) {
 	raw := json.RawMessage(`{bad json}`)
-	_, err := NewSupabase(raw, uuid.New(), uuid.New())
+	_, err := NewSupabase(raw, uuid.New(), uuid.New(), uuid.New())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid config")
 }
@@ -87,7 +87,7 @@ func TestNewSupabase_PollIntervalMinimum(t *testing.T) {
 		"poll_interval_secs": 5
 	}`)
 
-	sb, err := NewSupabase(raw, uuid.New(), uuid.New())
+	sb, err := NewSupabase(raw, uuid.New(), uuid.New(), uuid.New())
 	require.NoError(t, err)
 	// Interval below minimum (60) should be clamped to default (120).
 	assert.Equal(t, supabaseDefaultInterval, sb.ParsedConfig().PollIntervalSecs)
@@ -102,7 +102,7 @@ func TestSupabase_Connect_Success(t *testing.T) {
 	}))
 	defer server.Close()
 
-	sb, err := NewSupabase(validConfig(), uuid.New(), uuid.New())
+	sb, err := NewSupabase(validConfig(), uuid.New(), uuid.New(), uuid.New())
 	require.NoError(t, err)
 	sb.apiBase = server.URL
 
@@ -117,7 +117,7 @@ func TestSupabase_Connect_Unauthorized(t *testing.T) {
 	}))
 	defer server.Close()
 
-	sb, err := NewSupabase(validConfig(), uuid.New(), uuid.New())
+	sb, err := NewSupabase(validConfig(), uuid.New(), uuid.New(), uuid.New())
 	require.NoError(t, err)
 	sb.apiBase = server.URL
 
@@ -133,7 +133,7 @@ func TestSupabase_Connect_NotFound(t *testing.T) {
 	}))
 	defer server.Close()
 
-	sb, err := NewSupabase(validConfig(), uuid.New(), uuid.New())
+	sb, err := NewSupabase(validConfig(), uuid.New(), uuid.New(), uuid.New())
 	require.NoError(t, err)
 	sb.apiBase = server.URL
 
@@ -217,7 +217,7 @@ func TestSupabase_CursorAdvancement(t *testing.T) {
 		"project_ref": "proj",
 		"access_token": "tok",
 		"poll_tables": ["postgres_logs"]
-	}`), uuid.New(), uuid.New())
+	}`), uuid.New(), uuid.New(), uuid.New())
 	require.NoError(t, err)
 	sb.apiBase = server.URL
 
@@ -244,7 +244,7 @@ func TestSupabase_CursorAdvancement(t *testing.T) {
 }
 
 func TestSupabase_Close(t *testing.T) {
-	sb, err := NewSupabase(validConfig(), uuid.New(), uuid.New())
+	sb, err := NewSupabase(validConfig(), uuid.New(), uuid.New(), uuid.New())
 	require.NoError(t, err)
 	assert.NoError(t, sb.Close())
 }
@@ -256,7 +256,7 @@ func TestSupabase_Health(t *testing.T) {
 	}))
 	defer server.Close()
 
-	sb, err := NewSupabase(validConfig(), uuid.New(), uuid.New())
+	sb, err := NewSupabase(validConfig(), uuid.New(), uuid.New(), uuid.New())
 	require.NoError(t, err)
 	sb.apiBase = server.URL
 
@@ -270,7 +270,7 @@ func TestSupabase_RateLimit429(t *testing.T) {
 	}))
 	defer server.Close()
 
-	sb, err := NewSupabase(validConfig(), uuid.New(), uuid.New())
+	sb, err := NewSupabase(validConfig(), uuid.New(), uuid.New(), uuid.New())
 	require.NoError(t, err)
 	sb.apiBase = server.URL
 

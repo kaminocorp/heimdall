@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/hejijunhao/heimdall/backend/internal/db"
 )
@@ -37,6 +38,7 @@ type Railway struct {
 	config       RailwayConfig
 	connectionID uuid.UUID
 	userID       uuid.UUID
+	appID        uuid.UUID
 	httpClient   *http.Client
 	apiBase      string
 
@@ -44,7 +46,7 @@ type Railway struct {
 	cursor time.Time
 }
 
-func NewRailway(configJSON json.RawMessage, connectionID, userID uuid.UUID) (*Railway, error) {
+func NewRailway(configJSON json.RawMessage, connectionID, userID, appID uuid.UUID) (*Railway, error) {
 	var cfg RailwayConfig
 	if err := json.Unmarshal(configJSON, &cfg); err != nil {
 		return nil, fmt.Errorf("railway: invalid config: %w", err)
@@ -63,6 +65,7 @@ func NewRailway(configJSON json.RawMessage, connectionID, userID uuid.UUID) (*Ra
 		config:       cfg,
 		connectionID: connectionID,
 		userID:       userID,
+		appID:        appID,
 		httpClient:   &http.Client{Timeout: 30 * time.Second},
 		apiBase:      railwayAPIBase,
 		cursor:       time.Now().Add(-5 * time.Minute),
@@ -164,6 +167,7 @@ func (r *Railway) Poll(ctx context.Context, queries *db.Queries) error {
 			Severity:     severity,
 			Payload:      payload,
 			UserID:       r.userID,
+			AppID:        pgtype.UUID{Bytes: r.appID, Valid: true},
 		})
 		if err != nil {
 			slog.Error("railway: insert log entry", "err", err, "connection_id", r.connectionID)

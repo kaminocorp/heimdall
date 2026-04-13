@@ -50,6 +50,7 @@ type Supabase struct {
 	config       SupabaseConfig
 	connectionID uuid.UUID
 	userID       uuid.UUID
+	appID        uuid.UUID
 	httpClient   *http.Client
 	apiBase      string // defaults to supabaseAPIBase; overridable for testing
 
@@ -58,7 +59,7 @@ type Supabase struct {
 }
 
 // NewSupabase creates a Supabase connector from a connection's config JSONB.
-func NewSupabase(configJSON json.RawMessage, connectionID, userID uuid.UUID) (*Supabase, error) {
+func NewSupabase(configJSON json.RawMessage, connectionID, userID, appID uuid.UUID) (*Supabase, error) {
 	var cfg SupabaseConfig
 	if err := json.Unmarshal(configJSON, &cfg); err != nil {
 		return nil, fmt.Errorf("supabase: invalid config: %w", err)
@@ -86,6 +87,7 @@ func NewSupabase(configJSON json.RawMessage, connectionID, userID uuid.UUID) (*S
 		config:       cfg,
 		connectionID: connectionID,
 		userID:       userID,
+		appID:        appID,
 		httpClient:   &http.Client{Timeout: 30 * time.Second},
 		apiBase:      supabaseAPIBase,
 		cursors:      make(map[string]time.Time),
@@ -197,6 +199,7 @@ func (s *Supabase) pollTable(ctx context.Context, queries *db.Queries, table str
 			Severity:     severity,
 			Payload:      payload,
 			UserID:       s.userID,
+			AppID:        pgtype.UUID{Bytes: s.appID, Valid: true},
 		})
 		if err != nil {
 			slog.Error("supabase: insert log entry", "err", err)

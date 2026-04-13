@@ -76,6 +76,25 @@ func (s *Server) ListLogs(w http.ResponseWriter, r *http.Request) {
 		source = "all"
 	}
 
+	// Parse optional app_id for per-app filtering.
+	var appID pgtype.UUID
+	if v := r.URL.Query().Get("app_id"); v != "" {
+		parsed, parseErr := uuid.Parse(v)
+		if parseErr != nil {
+			jsonError(w, "invalid app_id", http.StatusBadRequest)
+			return
+		}
+		// Validate ownership: the app must belong to the user's org.
+		if _, authErr := s.Queries.GetApplicationByOrgUser(r.Context(), db.GetApplicationByOrgUserParams{
+			AppID:  parsed,
+			UserID: userID,
+		}); authErr != nil {
+			jsonError(w, "application not found", http.StatusNotFound)
+			return
+		}
+		appID = pgtype.UUID{Bytes: parsed, Valid: true}
+	}
+
 	var unified []unifiedLogEntry
 	var total int64
 
@@ -115,6 +134,21 @@ func (s *Server) ListLogs(w http.ResponseWriter, r *http.Request) {
 				Limit:        fetchLimit,
 				Offset:       fetchOffset,
 			})
+		case appID.Valid && severity != "":
+			rawLogs, err = queries.ListLogsByAppAndSeverity(r.Context(), db.ListLogsByAppAndSeverityParams{
+				UserID:   userID,
+				AppID:    appID,
+				Severity: pgtype.Text{String: severity, Valid: true},
+				Limit:    fetchLimit,
+				Offset:   fetchOffset,
+			})
+		case appID.Valid:
+			rawLogs, err = queries.ListLogsByApp(r.Context(), db.ListLogsByAppParams{
+				UserID: userID,
+				AppID:  appID,
+				Limit:  fetchLimit,
+				Offset: fetchOffset,
+			})
 		case severity != "":
 			rawLogs, err = queries.ListLogsByUserAndSeverity(r.Context(), db.ListLogsByUserAndSeverityParams{
 				UserID:   userID,
@@ -143,6 +177,17 @@ func (s *Server) ListLogs(w http.ResponseWriter, r *http.Request) {
 				UserID:       userID,
 				ConnectionID: connID,
 			})
+		case appID.Valid && severity != "":
+			rawCount, err = queries.CountLogsByAppAndSeverity(r.Context(), db.CountLogsByAppAndSeverityParams{
+				UserID:   userID,
+				AppID:    appID,
+				Severity: pgtype.Text{String: severity, Valid: true},
+			})
+		case appID.Valid:
+			rawCount, err = queries.CountLogsByApp(r.Context(), db.CountLogsByAppParams{
+				UserID: userID,
+				AppID:  appID,
+			})
 		case severity != "":
 			rawCount, err = queries.CountLogsByUserAndSeverity(r.Context(), db.CountLogsByUserAndSeverityParams{
 				UserID:   userID,
@@ -164,17 +209,37 @@ func (s *Server) ListLogs(w http.ResponseWriter, r *http.Request) {
 
 	// Fetch agent log entries.
 	if fetchAgent {
-		agentLogs, err := queries.ListAgentLogByUser(r.Context(), db.ListAgentLogByUserParams{
-			UserID: userID,
-			Limit:  fetchLimit,
-			Offset: fetchOffset,
-		})
-		if err != nil {
-			jsonServerError(w, "failed to list agent logs", err)
-			return
-		}
+		var agentLogs []db.AgentLog
+		var agentCount int64
+		var err error
 
-		agentCount, err := queries.CountAgentLogByUser(r.Context(), userID)
+		if appID.Valid {
+			agentLogs, err = queries.ListAgentLogByApp(r.Context(), db.ListAgentLogByAppParams{
+				UserID: userID,
+				AppID:  appID,
+				Limit:  fetchLimit,
+				Offset: fetchOffset,
+			})
+			if err != nil {
+				jsonServerError(w, "failed to list agent logs", err)
+				return
+			}
+			agentCount, err = queries.CountAgentLogByApp(r.Context(), db.CountAgentLogByAppParams{
+				UserID: userID,
+				AppID:  appID,
+			})
+		} else {
+			agentLogs, err = queries.ListAgentLogByUser(r.Context(), db.ListAgentLogByUserParams{
+				UserID: userID,
+				Limit:  fetchLimit,
+				Offset: fetchOffset,
+			})
+			if err != nil {
+				jsonServerError(w, "failed to list agent logs", err)
+				return
+			}
+			agentCount, err = queries.CountAgentLogByUser(r.Context(), userID)
+		}
 		if err != nil {
 			jsonServerError(w, "failed to count agent logs", err)
 			return

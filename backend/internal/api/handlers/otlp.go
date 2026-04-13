@@ -131,6 +131,7 @@ func (s *Server) IngestOTLPLogs(w http.ResponseWriter, r *http.Request) {
 					Severity:     severity,
 					Payload:      payload,
 					UserID:       conn.UserID,
+					AppID:        pgtype.UUID{Bytes: conn.AppID, Valid: true},
 				})
 				if err != nil {
 					insertErrors++

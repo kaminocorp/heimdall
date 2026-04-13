@@ -1,4 +1,5 @@
 import { useLogsStore } from '@/stores/logs'
+import { useAppStore } from '@/stores/app'
 import client from '@/api/client'
 
 const mockResponse = {
@@ -66,5 +67,33 @@ describe('logs store', () => {
     store.setSource('agent')
     expect(store.source).toBe('agent')
     expect(store.offset).toBe(0)
+  })
+
+  it('fetchLogs includes app_id from app store', async () => {
+    vi.mocked(client.get).mockResolvedValueOnce(mockResponse as any)
+
+    const appStore = useAppStore()
+    appStore.currentAppId = 'test-app-uuid'
+
+    const store = useLogsStore()
+    await store.fetchLogs()
+
+    expect(client.get).toHaveBeenCalledWith('/logs', {
+      params: expect.objectContaining({ app_id: 'test-app-uuid' }),
+    })
+  })
+
+  it('fetchLogs omits app_id when no app selected', async () => {
+    vi.mocked(client.get).mockResolvedValueOnce(mockResponse as any)
+
+    const appStore = useAppStore()
+    appStore.currentAppId = null
+
+    const store = useLogsStore()
+    await store.fetchLogs()
+
+    expect(client.get).toHaveBeenCalledWith('/logs', {
+      params: expect.not.objectContaining({ app_id: expect.anything() }),
+    })
   })
 })

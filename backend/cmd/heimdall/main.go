@@ -183,7 +183,7 @@ func resumeSyslogListeners(ctx context.Context, queries *db.Queries, lm *connect
 			}
 		}
 
-		sl, err := logs.NewSyslog(configJSON, conn.ID, conn.UserID, queries)
+		sl, err := logs.NewSyslog(configJSON, conn.ID, conn.UserID, conn.AppID, queries)
 		if err != nil {
 			slog.Error("failed to create syslog listener for resume", "connection_id", conn.ID, "err", err)
 			continue
@@ -208,7 +208,7 @@ func resumePollers(ctx context.Context, queries *db.Queries, poller *connectors.
 			continue
 		}
 		for _, conn := range conns {
-			if err := connectors.StartPoller(poller, typeName, conn.Config, conn.ID, conn.UserID); err != nil {
+			if err := connectors.StartPoller(poller, typeName, conn.Config, conn.ID, conn.UserID, conn.AppID); err != nil {
 				slog.Error("resume: poller init failed", "type", typeName, "connection_id", conn.ID, "err", err)
 			}
 		}

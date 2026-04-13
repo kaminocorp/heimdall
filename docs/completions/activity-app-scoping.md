@@ -327,3 +327,180 @@ beyond the denormalised `app_id` values, which can be re-derived from
 **Backwards compatibility:** The `app_id` query parameter is optional. If
 omitted, the handler falls back to user-scoped queries — existing API
 consumers are unaffected.
+
+---
+
+## Appendix — Org-level integrations and per-app scoping
+
+### The problem
+
+Some connections are inherently **org-level** on the provider's side. A
+GitHub App installation is tied to a GitHub organisation — it grants access
+to all (or selected) repos in that org. Supabase projects, similarly, are
+a single entity that spans multiple Heimdall apps.
+
+Heimdall's connection model is strictly per-app: `connections.app_id` is
+`NOT NULL`. When a user creates App B and wants the same GitHub org, the
+current flow redirects them to GitHub's OAuth screen. GitHub says "Heimdall
+is already installed" — the user either re-authorises (confusing) or backs
+out (stuck). Even when it works, the result is a second connection row with
+the same `installation_id`, which is invisible duplication.
+
+This is a pre-existing design tension — the app-scoping refactoring in
+Parts 1–5 doesn't make it worse, but it does make it more visible because
+users will interact with per-app views more deliberately.
+
+### Affected connection types
+
+| Type | Provider scope | Per-app what? |
+|------|---------------|---------------|
+| GitHub App | Org/account installation (one per GitHub org) | Which repos to enable |
+| Supabase | Project (one project_ref, one access token) | Which tables to poll |
+| Postgres | Database (one connection string) | Which schemas/queries to allow |
+| Webhook | Per-endpoint token | Always 1:1 with app — no sharing issue |
+| Fly.io / Vercel / Railway | Account/project API token | Which app/service to poll |
+
+GitHub is the clearest case. Supabase is a grey area — the same project
+could serve multiple Heimdall apps if they care about different tables.
+
+### Recommended approach: "Link existing installation"
+
+Keep the current per-app connection model (no schema changes), but add a
+**shortcut flow** in the connection wizard that detects existing
+installations within the same org and offers to reuse them.
+
+#### How it works
+
+**Backend — new query:**
+
+```sql
+-- name: ListInstallationsByOrgAndType :many
+SELECT DISTINCT ON (config->>'installation_id')
+  id, config, name, type
+FROM connections
+WHERE user_id = $1
+  AND type = $2
+  AND status = 'active'
+ORDER BY config->>'installation_id', created_at ASC;
+```
+
+**Backend — new endpoint:**
+
+```
+GET /api/connections/available-installations?type=github
+```
+
+Returns installations already connected to *any* app in the user's org.
+Response shape:
+
+```json
+[
+  {
+    "installation_id": 67890,
+    "account_login": "acme-corp",
+    "account_type": "Organization",
+    "connected_apps": ["API Service", "Worker"]
+  }
+]
+```
+
+**Frontend — wizard branching:**
+
+When the user selects "GitHub" in the connection wizard:
+
+1. Call `GET /api/connections/available-installations?type=github`
+2. **If installations exist**, show a choice screen:
+
+```
+┌─────────────────────────────────────────────────┐
+│  GitHub Connection                              │
+│                                                 │
+│  Your organisation already has GitHub connected: │
+│                                                 │
+│  ┌─────────────────────────────────────────┐    │
+│  │ ● Link existing: acme-corp             │    │
+│  │   Already used by: API Service, Worker  │    │
+│  └─────────────────────────────────────────┘    │
+│                                                 │
+│  ┌─────────────────────────────────────────┐    │
+│  │ ○ Connect a different GitHub org        │    │
+│  │   Opens GitHub App installation flow    │    │
+│  └─────────────────────────────────────────┘    │
+│                                                 │
+│                              [Continue →]       │
+└─────────────────────────────────────────────────┘
+```
+
+3. **"Link existing"** → skip OAuth entirely. Create a new connection row
+   with the same `installation_id` config, scoped to the current app.
+   Proceed directly to the repo picker (for GitHub) or table picker (for
+   Supabase).
+
+4. **"Connect a different org"** → normal OAuth flow. For cases where the
+   user genuinely has a second GitHub org.
+
+5. **If no installations exist**, skip the choice screen and go straight
+   to OAuth. The user sees no difference from today.
+
+#### What this creates in the database
+
+```
+Heimdall Org: acme-corp-team
+├─ App A (api-service)
+│   └─ Connection: GitHub (conn-1, installation_id=67890)
+│       └─ Enabled repos: acme-corp/api, acme-corp/shared-lib
+│
+└─ App B (worker)
+    └─ Connection: GitHub (conn-2, installation_id=67890)  ← same install
+        └─ Enabled repos: acme-corp/worker, acme-corp/shared-lib
+```
+
+Two connection rows, same `installation_id`, different `app_id`, different
+enabled repos. Each app sees only its own repos in codebase search.
+
+#### Why not a shared connection table?
+
+An `installations` table with a many-to-many join to `connections` would be
+cleaner relationally, but:
+
+1. Every handler that touches connections would need updating.
+2. The `config` JSONB would need splitting (installation-level fields vs.
+   app-level fields like `poll_tables`).
+3. The poller/listener resume logic assumes one config per connection.
+4. The benefit is marginal — `installation_id` duplication across 2–5 rows
+   costs nothing at Heimdall's scale.
+
+The "link existing" approach solves the UX problem (no confusing re-auth)
+without touching the data model.
+
+#### Uninstall handling
+
+If the user uninstalls the GitHub App from GitHub's side, **all connections
+sharing that `installation_id` break simultaneously**. The connection health
+check (`Connect()`) will fail for each one. This is correct behaviour — the
+installation is gone — but the UI should surface it clearly:
+
+- The Connections page already shows connection status badges.
+- Consider a banner: "This GitHub installation was removed. Reconnect to
+  restore access." on each affected app's Connections page.
+
+#### Applicability to other types
+
+The same "link existing" pattern works for Supabase (same `project_ref` +
+`access_token`, different `poll_tables`) and Postgres (same connection
+string, different query scope). The wizard just needs type-specific
+detection logic:
+
+| Type | Shared key | Per-app config |
+|------|-----------|----------------|
+| GitHub | `installation_id` | Enabled repos |
+| Supabase | `project_ref` | `poll_tables`, `poll_interval_secs` |
+| Postgres | `host` + `port` + `database` | Read-only query scope |
+
+#### Implementation priority
+
+This is a **separate work item** from the Activity feed app-scoping (Parts
+1–5). The Activity scoping is a correctness fix — logs must filter by app.
+The "link existing installation" flow is a UX improvement that becomes more
+valuable *after* app-scoping lands, because users will create more apps
+once per-app views actually work properly.

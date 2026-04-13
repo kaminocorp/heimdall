@@ -13,16 +13,16 @@ import (
 
 // EmitLog writes an entry to the agent_log table.
 // Fire-and-forget: errors are logged but never propagated so agent work is not degraded by logging failures.
-func (a *Agent) EmitLog(ctx context.Context, userID uuid.UUID, conversationID *uuid.UUID, entryType, summary string, detail map[string]any) uuid.UUID {
-	return a.emitLog(ctx, userID, conversationID, entryType, summary, detail, "")
+func (a *Agent) EmitLog(ctx context.Context, userID uuid.UUID, appID *uuid.UUID, conversationID *uuid.UUID, entryType, summary string, detail map[string]any) uuid.UUID {
+	return a.emitLog(ctx, userID, appID, conversationID, entryType, summary, detail, "")
 }
 
 // EmitLogWithSeverity writes an entry to the agent_log table with an explicit severity.
-func (a *Agent) EmitLogWithSeverity(ctx context.Context, userID uuid.UUID, conversationID *uuid.UUID, entryType, summary string, detail map[string]any, severity string) uuid.UUID {
-	return a.emitLog(ctx, userID, conversationID, entryType, summary, detail, severity)
+func (a *Agent) EmitLogWithSeverity(ctx context.Context, userID uuid.UUID, appID *uuid.UUID, conversationID *uuid.UUID, entryType, summary string, detail map[string]any, severity string) uuid.UUID {
+	return a.emitLog(ctx, userID, appID, conversationID, entryType, summary, detail, severity)
 }
 
-func (a *Agent) emitLog(ctx context.Context, userID uuid.UUID, conversationID *uuid.UUID, entryType, summary string, detail map[string]any, severity string) uuid.UUID {
+func (a *Agent) emitLog(ctx context.Context, userID uuid.UUID, appID *uuid.UUID, conversationID *uuid.UUID, entryType, summary string, detail map[string]any, severity string) uuid.UUID {
 	var detailBytes []byte
 	if detail != nil {
 		var err error
@@ -43,6 +43,11 @@ func (a *Agent) emitLog(ctx context.Context, userID uuid.UUID, conversationID *u
 		sev = pgtype.Text{String: severity, Valid: true}
 	}
 
+	var pgAppID pgtype.UUID
+	if appID != nil {
+		pgAppID = pgtype.UUID{Bytes: *appID, Valid: true}
+	}
+
 	row, err := a.queries.InsertAgentLog(ctx, db.InsertAgentLogParams{
 		UserID:         userID,
 		EntryType:      entryType,
@@ -50,6 +55,7 @@ func (a *Agent) emitLog(ctx context.Context, userID uuid.UUID, conversationID *u
 		Detail:         detailBytes,
 		Severity:       sev,
 		ConversationID: convID,
+		AppID:          pgAppID,
 	})
 	if err != nil {
 		slog.Warn("agent emit: failed to insert agent log", "err", err, "entry_type", entryType)

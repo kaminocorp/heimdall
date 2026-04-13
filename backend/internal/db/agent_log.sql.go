@@ -12,6 +12,23 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countAgentLogByApp = `-- name: CountAgentLogByApp :one
+SELECT count(*) FROM agent_log
+WHERE user_id = $1 AND app_id = $2
+`
+
+type CountAgentLogByAppParams struct {
+	UserID uuid.UUID   `json:"user_id"`
+	AppID  pgtype.UUID `json:"app_id"`
+}
+
+func (q *Queries) CountAgentLogByApp(ctx context.Context, arg CountAgentLogByAppParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countAgentLogByApp, arg.UserID, arg.AppID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countAgentLogByUser = `-- name: CountAgentLogByUser :one
 SELECT count(*) FROM agent_log
 WHERE user_id = $1
@@ -25,9 +42,9 @@ func (q *Queries) CountAgentLogByUser(ctx context.Context, userID uuid.UUID) (in
 }
 
 const insertAgentLog = `-- name: InsertAgentLog :one
-INSERT INTO agent_log (user_id, entry_type, summary, detail, severity, conversation_id)
-VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, user_id, entry_type, summary, detail, severity, conversation_id, created_at
+INSERT INTO agent_log (user_id, entry_type, summary, detail, severity, conversation_id, app_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING id, user_id, entry_type, summary, detail, severity, conversation_id, created_at, app_id
 `
 
 type InsertAgentLogParams struct {
@@ -37,6 +54,7 @@ type InsertAgentLogParams struct {
 	Detail         []byte      `json:"detail"`
 	Severity       pgtype.Text `json:"severity"`
 	ConversationID pgtype.UUID `json:"conversation_id"`
+	AppID          pgtype.UUID `json:"app_id"`
 }
 
 func (q *Queries) InsertAgentLog(ctx context.Context, arg InsertAgentLogParams) (AgentLog, error) {
@@ -47,6 +65,7 @@ func (q *Queries) InsertAgentLog(ctx context.Context, arg InsertAgentLogParams) 
 		arg.Detail,
 		arg.Severity,
 		arg.ConversationID,
+		arg.AppID,
 	)
 	var i AgentLog
 	err := row.Scan(
@@ -58,12 +77,62 @@ func (q *Queries) InsertAgentLog(ctx context.Context, arg InsertAgentLogParams) 
 		&i.Severity,
 		&i.ConversationID,
 		&i.CreatedAt,
+		&i.AppID,
 	)
 	return i, err
 }
 
+const listAgentLogByApp = `-- name: ListAgentLogByApp :many
+SELECT id, user_id, entry_type, summary, detail, severity, conversation_id, created_at, app_id FROM agent_log
+WHERE user_id = $1 AND app_id = $2
+ORDER BY created_at DESC
+LIMIT $3 OFFSET $4
+`
+
+type ListAgentLogByAppParams struct {
+	UserID uuid.UUID   `json:"user_id"`
+	AppID  pgtype.UUID `json:"app_id"`
+	Limit  int32       `json:"limit"`
+	Offset int32       `json:"offset"`
+}
+
+func (q *Queries) ListAgentLogByApp(ctx context.Context, arg ListAgentLogByAppParams) ([]AgentLog, error) {
+	rows, err := q.db.Query(ctx, listAgentLogByApp,
+		arg.UserID,
+		arg.AppID,
+		arg.Limit,
+		arg.Offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AgentLog{}
+	for rows.Next() {
+		var i AgentLog
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.EntryType,
+			&i.Summary,
+			&i.Detail,
+			&i.Severity,
+			&i.ConversationID,
+			&i.CreatedAt,
+			&i.AppID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAgentLogByUser = `-- name: ListAgentLogByUser :many
-SELECT id, user_id, entry_type, summary, detail, severity, conversation_id, created_at FROM agent_log
+SELECT id, user_id, entry_type, summary, detail, severity, conversation_id, created_at, app_id FROM agent_log
 WHERE user_id = $1
 ORDER BY created_at DESC
 LIMIT $2 OFFSET $3
@@ -93,6 +162,7 @@ func (q *Queries) ListAgentLogByUser(ctx context.Context, arg ListAgentLogByUser
 			&i.Severity,
 			&i.ConversationID,
 			&i.CreatedAt,
+			&i.AppID,
 		); err != nil {
 			return nil, err
 		}
@@ -105,7 +175,7 @@ func (q *Queries) ListAgentLogByUser(ctx context.Context, arg ListAgentLogByUser
 }
 
 const listAgentLogByUserAndType = `-- name: ListAgentLogByUserAndType :many
-SELECT id, user_id, entry_type, summary, detail, severity, conversation_id, created_at FROM agent_log
+SELECT id, user_id, entry_type, summary, detail, severity, conversation_id, created_at, app_id FROM agent_log
 WHERE user_id = $1 AND entry_type = $2
 ORDER BY created_at DESC
 LIMIT $3 OFFSET $4
@@ -141,6 +211,7 @@ func (q *Queries) ListAgentLogByUserAndType(ctx context.Context, arg ListAgentLo
 			&i.Severity,
 			&i.ConversationID,
 			&i.CreatedAt,
+			&i.AppID,
 		); err != nil {
 			return nil, err
 		}

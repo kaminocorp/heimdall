@@ -1,6 +1,6 @@
 -- name: InsertLogEntry :one
-INSERT INTO log_buffer (connection_id, source_type, severity, payload, user_id)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO log_buffer (connection_id, source_type, severity, payload, user_id, app_id)
+VALUES ($1, $2, $3, $4, $5, $6)
 RETURNING *;
 
 -- name: ListLogsByUser :many
@@ -48,6 +48,26 @@ SELECT * FROM log_buffer
 WHERE user_id = @user_id AND payload::text ILIKE '%' || @query::text || '%' ESCAPE '\' AND severity = @severity
 ORDER BY ingested_at DESC
 LIMIT @row_limit OFFSET @row_offset;
+
+-- name: ListLogsByApp :many
+SELECT * FROM log_buffer
+WHERE user_id = $1 AND app_id = $2
+ORDER BY ingested_at DESC
+LIMIT $3 OFFSET $4;
+
+-- name: ListLogsByAppAndSeverity :many
+SELECT * FROM log_buffer
+WHERE user_id = $1 AND app_id = $2 AND severity = $3
+ORDER BY ingested_at DESC
+LIMIT $4 OFFSET $5;
+
+-- name: CountLogsByApp :one
+SELECT count(*) FROM log_buffer
+WHERE user_id = $1 AND app_id = $2;
+
+-- name: CountLogsByAppAndSeverity :one
+SELECT count(*) FROM log_buffer
+WHERE user_id = $1 AND app_id = $2 AND severity = $3;
 
 -- name: PruneExpiredLogs :execrows
 DELETE FROM log_buffer WHERE ingested_at < now() - interval '48 hours';

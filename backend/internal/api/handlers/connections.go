@@ -188,13 +188,13 @@ func (s *Server) CreateConnection(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Start polling goroutines for poll-based connectors.
-	if err := connectors.StartPoller(s.Poller, req.Type, config, conn.ID, userID); err != nil {
+	if err := connectors.StartPoller(s.Poller, req.Type, config, conn.ID, userID, conn.AppID); err != nil {
 		slog.Error("poller init failed", "type", req.Type, "connection_id", conn.ID, "err", err)
 	}
 
 	// Start listener for syslog connections.
 	if req.Type == "syslog" {
-		sl, err := logs.NewSyslog(config, conn.ID, userID, s.Queries)
+		sl, err := logs.NewSyslog(config, conn.ID, userID, conn.AppID, s.Queries)
 		if err != nil {
 			slog.Error("syslog listener init failed", "connection_id", conn.ID, "err", err)
 			conn.Status = "error"
@@ -341,12 +341,12 @@ func (s *Server) UpdateConnection(w http.ResponseWriter, r *http.Request) {
 	s.Poller.Stop(connID)
 	s.Listener.Stop(connID)
 
-	if err := connectors.StartPoller(s.Poller, req.Type, config, conn.ID, userID); err != nil {
+	if err := connectors.StartPoller(s.Poller, req.Type, config, conn.ID, userID, conn.AppID); err != nil {
 		slog.Error("poller init failed", "type", req.Type, "connection_id", conn.ID, "err", err)
 	}
 
 	if req.Type == "syslog" {
-		sl, err := logs.NewSyslog(config, conn.ID, userID, s.Queries)
+		sl, err := logs.NewSyslog(config, conn.ID, userID, conn.AppID, s.Queries)
 		if err != nil {
 			slog.Error("syslog listener init failed", "connection_id", conn.ID, "err", err)
 			conn.Status = "error"

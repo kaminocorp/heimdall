@@ -38,6 +38,7 @@ type Vercel struct {
 	config       VercelConfig
 	connectionID uuid.UUID
 	userID       uuid.UUID
+	appID        uuid.UUID
 	httpClient   *http.Client
 	apiBase      string
 
@@ -45,7 +46,7 @@ type Vercel struct {
 	cursor time.Time
 }
 
-func NewVercel(configJSON json.RawMessage, connectionID, userID uuid.UUID) (*Vercel, error) {
+func NewVercel(configJSON json.RawMessage, connectionID, userID, appID uuid.UUID) (*Vercel, error) {
 	var cfg VercelConfig
 	if err := json.Unmarshal(configJSON, &cfg); err != nil {
 		return nil, fmt.Errorf("vercel: invalid config: %w", err)
@@ -64,6 +65,7 @@ func NewVercel(configJSON json.RawMessage, connectionID, userID uuid.UUID) (*Ver
 		config:       cfg,
 		connectionID: connectionID,
 		userID:       userID,
+		appID:        appID,
 		httpClient:   &http.Client{Timeout: 30 * time.Second},
 		apiBase:      vercelAPIBase,
 		cursor:       time.Now().Add(-5 * time.Minute),
@@ -153,6 +155,7 @@ func (v *Vercel) Poll(ctx context.Context, queries *db.Queries) error {
 			Severity:     severity,
 			Payload:      payload,
 			UserID:       v.userID,
+			AppID:        pgtype.UUID{Bytes: v.appID, Valid: true},
 		})
 		if err != nil {
 			slog.Error("vercel: insert log entry", "err", err, "connection_id", v.connectionID)

@@ -9,6 +9,7 @@ export interface PaginatedLogs {
 }
 
 export function listLogs(params?: {
+  app_id?: string
   severity?: string
   connection_id?: string
   source?: string

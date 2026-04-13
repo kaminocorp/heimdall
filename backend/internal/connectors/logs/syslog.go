@@ -42,6 +42,7 @@ type Syslog struct {
 	config       SyslogConfig
 	connectionID uuid.UUID
 	userID       uuid.UUID
+	appID        uuid.UUID
 	queries      *db.Queries
 
 	listener net.Listener
@@ -53,7 +54,7 @@ type Syslog struct {
 
 // NewSyslog creates a Syslog connector from a connection's config JSONB.
 // The queries handle is used for inserting log entries as they arrive.
-func NewSyslog(configJSON json.RawMessage, connectionID, userID uuid.UUID, queries *db.Queries) (*Syslog, error) {
+func NewSyslog(configJSON json.RawMessage, connectionID, userID, appID uuid.UUID, queries *db.Queries) (*Syslog, error) {
 	var cfg SyslogConfig
 	if err := json.Unmarshal(configJSON, &cfg); err != nil {
 		return nil, fmt.Errorf("syslog: invalid config: %w", err)
@@ -76,6 +77,7 @@ func NewSyslog(configJSON json.RawMessage, connectionID, userID uuid.UUID, queri
 		config:       cfg,
 		connectionID: connectionID,
 		userID:       userID,
+		appID:        appID,
 		queries:      queries,
 		connSem:      make(chan struct{}, syslogMaxConnections),
 	}, nil
@@ -267,6 +269,7 @@ func (s *Syslog) handleConnection(ctx context.Context, conn net.Conn) {
 			Severity:     severity,
 			Payload:      payload,
 			UserID:       s.userID,
+			AppID:        pgtype.UUID{Bytes: s.appID, Valid: true},
 		})
 		if err != nil {
 			slog.Error("syslog: insert log entry", "err", err, "connection_id", s.connectionID)

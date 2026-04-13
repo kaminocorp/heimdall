@@ -1,5 +1,7 @@
 # Changelog
 
+- [0.37.0 — Activity Feed App-Scoping](#0370--activity-feed-app-scoping-2026-04-13)
+- [0.36.0 — Top Header Nav Bar & Sidebar Slim-Down](#0360--top-header-nav-bar--sidebar-slim-down-2026-04-13)
 - [0.35.0 — Technical Retro-Futurism UI Refresh](#0350--technical-retro-futurism-ui-refresh-2026-04-13)
 - [0.34.1 — Dev-Mode Background Job Kill-Switch](#0341--dev-mode-background-job-kill-switch-2026-04-13)
 - [0.34.0 — Activity Detail Modal & Supabase Poller Tuning](#0340--activity-detail-modal--supabase-poller-tuning-2026-04-13)
@@ -81,6 +83,215 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.37.0 — Activity Feed App-Scoping (2026-04-13)
+
+The Activity feed was the last major surface in Heimdall that ignored the application selector — it merged logs and agent observations from every app into one org-wide timeline. Every other per-app surface (Connections, Dashboard, Agent Config, Scheduled Investigations) already filtered by the selected application, so switching apps left the Activity page showing stale cross-app noise. This release adds end-to-end app-scoping: a new `app_id` column on both log tables, app-filtered SQL queries, write-path population across all 8 ingestion code paths, and a frontend watcher that re-fetches when the user switches applications.
+
+### Why denormalise instead of joining?
+
+`log_buffer` already has a path to `app_id` through `connection_id → connections.app_id`, but joining on every Activity page load adds latency and complexity for a column that never changes after insert. `agent_log` is worse — its only app reference was buried in the JSONB `detail` payload, which can't be indexed efficiently. Adding a direct `app_id UUID` column to both tables trades a small write-time cost (one extra parameter on every INSERT) for a single `WHERE app_id = $1` clause on reads — no joins, no JSONB extraction, and the partial indexes serve exactly the queries the handler issues.
+
+### Phase 1 — Database migration (`025_add_app_id_to_logs`)
+
+**`log_buffer.app_id`** — nullable UUID with FK to `applications(id) ON DELETE CASCADE`. The backfill joins on `connections.app_id` to populate existing rows. At current production scale (0 rows in log_buffer due to the 48-hour retention pruner) the backfill is instantaneous, but the migration is written to handle arbitrary row counts safely.
+
+**`agent_log.app_id`** — same column definition. The backfill extracts `(detail->>'app_id')::uuid` from the JSONB payload where present. Production had 32 agent_log rows, all successfully backfilled.
+
+**Partial indexes** on both tables: `(app_id, timestamp DESC) WHERE app_id IS NOT NULL`. The `WHERE` clause keeps the index lean — historical rows with NULL `app_id` (pre-migration interactive chat entries, org-level audit events) are excluded from the index since they'll never match an app-scoped query. PostgreSQL's planner recognises that `app_id = $1` implies `app_id IS NOT NULL` and uses the partial index automatically.
+
+**Down migration** drops indexes before columns (correct dependency order) with `IF EXISTS` guards.
+
+### Phase 2 — Backend queries & handler
+
+**Six new sqlc queries** mirror the existing `*ByUser` variants with an added `AND app_id = $N` clause:
+
+| Query | Table | Filters |
+|-------|-------|---------|
+| `ListLogsByApp` | log_buffer | user_id + app_id |
+| `ListLogsByAppAndSeverity` | log_buffer | user_id + app_id + severity |
+| `CountLogsByApp` | log_buffer | user_id + app_id |
+| `CountLogsByAppAndSeverity` | log_buffer | user_id + app_id + severity |
+| `ListAgentLogByApp` | agent_log | user_id + app_id |
+| `CountAgentLogByApp` | agent_log | user_id + app_id |
+
+All six queries are served by the Phase 1 partial indexes — the `(app_id, timestamp DESC)` ordering matches the `ORDER BY ... DESC LIMIT N OFFSET M` pattern exactly, so the planner can satisfy the query with an index-only scan (plus a recheck against the user_id filter, which is always selective given single-user orgs).
+
+**`ListLogs` handler** (`logs.go`) gains an optional `app_id` query parameter:
+
+1. **Parse** — UUID validation, returns 400 on malformed input
+2. **Authorise** — `GetApplicationByOrgUser(appID, userID)` confirms the app belongs to the user's org, returns 404 on mismatch
+3. **Route** — a switch statement selects the correct query variant: `connectionID` takes priority (forces `source=raw`), then `appID+severity`, then `appID` alone, then the existing `severity` and `user-only` defaults
+4. **Count** — the count query mirrors the list query exactly, so pagination totals are always accurate for the active filter combination
+
+Backwards compatible: omitting `app_id` produces identical behaviour to before.
+
+### Phase 3 — Write-path population
+
+Every code path that INSERTs into `log_buffer` or `agent_log` now populates `app_id`. This is the most diffuse phase — 15 files touched — but each change is mechanical: accept an `appID` parameter, convert to `pgtype.UUID`, pass as the new query field.
+
+**`InsertLogEntry` callers (log_buffer):**
+
+| Caller | Source of app_id |
+|--------|-----------------|
+| Webhook handler (`webhooks.go`) | `conn.AppID` from `GetConnectionByWebhookToken` |
+| OTLP handler (`otlp.go`) | `conn.AppID` from `GetConnectionByWebhookToken` |
+| Supabase poller (`supabase.go`) | Stored `appID` field from constructor |
+| Fly.io poller (`flyio.go`) | Stored `appID` field from constructor |
+| Vercel poller (`vercel.go`) | Stored `appID` field from constructor |
+| Railway poller (`railway.go`) | Stored `appID` field from constructor |
+| MongoDB poller (`mongodb.go`) | Stored `appID` field from constructor |
+| Syslog listener (`syslog.go`) | Stored `appID` field from constructor |
+
+**Factory & resume paths.** `StartPoller` gains an `appID uuid.UUID` parameter, threaded through from `conn.AppID` at both create-time (connection handlers) and resume-time (`main.go` startup loop via `ListActiveConnectionsByType`). `NewSyslog` follows the same pattern. The validation handler passes `conn.AppID` for constructor compatibility but never inserts real data (test connections are read-only probes).
+
+**`InsertAgentLog` callers (agent_log) — via `emit.go`:**
+
+The emit layer's signature changes from `(ctx, userID, conversationID, ...)` to `(ctx, userID, appID *uuid.UUID, conversationID, ...)`. The `*uuid.UUID` type is the key design choice — `nil` means "no app context" (org-level events, interactive chat without an app selected), and the conversion to `pgtype.UUID` happens at the emit boundary so the rest of the agent layer works with native Go types.
+
+| Caller | Source of app_id |
+|--------|-----------------|
+| Interactive chat (`loop.go`) | `appIDPtr` — derived from the `appID uuid.UUID` parameter; nil when `uuid.Nil` |
+| Monitoring assessment (`monitor.go`) | `&app.ID` from `ListActiveApplicationsRow` |
+| Monitoring tool calls (`loop.go` RunMonitoring) | `&monAppID` from `AppAgentConfig.AppID` |
+| Scheduled investigation (`scheduler.go`) | `&s.AppID` from `InvestigationSchedule` |
+| App created/deleted audit (`applications.go`) | `nil` — org-level events have no single app context |
+
+### Phase 4 — Frontend
+
+**API client** (`api/logs.ts`) — `app_id?: string` added to the `listLogs` params interface. Optional and backwards compatible.
+
+**Logs store** (`stores/logs.ts`) — every `fetchLogs` call now includes `app_id: appStore.currentAppId ?? undefined`. The `?? undefined` conversion is load-bearing: `currentAppId` can be `null` (no app selected), and passing `null` to Axios would serialize as the literal string `"null"` in the query string. Converting to `undefined` causes Axios to omit the parameter entirely, which is the correct "unfiltered" signal. `useAppStore()` is called inside `fetchLogs` (not at store definition time) to avoid Pinia circular-dependency issues — this matches the lazy-access pattern already used by other stores.
+
+**Activity page** (`ActivityPage.vue`) — a `watch()` on `appStore.currentAppId` resets pagination and re-fetches logs. This is the same reactive pattern used by ConnectionsPage, SchedulesPage, NotificationsPage, and DashboardPage — switching apps in the header breadcrumb immediately refreshes the Activity feed to show only that app's data.
+
+### Phase 5 — Verification
+
+| Check | Result |
+|-------|--------|
+| `go build ./...` | Clean |
+| `go vet ./...` | Clean |
+| `vue-tsc --noEmit` | Clean |
+| Backend unit tests | All pass |
+| Frontend tests (52) | All pass |
+| `TestListLogs_AppScoped` | Inserts one scoped + one unscoped row; filtered query returns exactly 1 |
+| `TestListLogs_AppScoped_InvalidAppID` | Returns 400 |
+| `TestListLogs_AppScoped_WrongOrg` | Returns 404 |
+| `fetchLogs omits app_id when no app selected` | Confirms undefined is not serialised |
+
+### Design decisions & trade-offs
+
+**Nullable `app_id`.** Interactive chat entries created before this release (and future chat sessions opened without an app selected) have `app_id = NULL`. When filtering by app, these rows are excluded — which is correct, since they don't belong to any specific application. When no `app_id` filter is active, all rows (including NULLs) are returned, preserving the org-wide view.
+
+**`source=all` merge pagination.** When fetching from both sources (raw + agent), the handler fetches `offset + limit` rows from each source, merges by timestamp, then applies the original offset/limit to the merged set. The `total` is the sum of both source counts. At high offsets with uneven distribution, the last pages could show fewer items than expected — bounded by the `maxOffset = 10000` cap. This is an acceptable trade-off for avoiding a materialised view or UNION query.
+
+**No `ListAgentLogByAppAndType` query.** The existing `ListAgentLogByUserAndType` has no app-scoped counterpart. The UI doesn't currently combine entry-type filtering with app filtering, so the query isn't needed yet — it can be added as a single SQL + sqlc-generate step if the need arises.
+
+### Files changed
+
+| File | Kind | Change |
+|------|------|--------|
+| `backend/migrations/025_add_app_id_to_logs.up.sql` | **New** | Add `app_id` columns, backfill, partial indexes |
+| `backend/migrations/025_add_app_id_to_logs.down.sql` | **New** | Drop indexes and columns |
+| `backend/internal/db/queries/log_buffer.sql` | Edit | 4 new app-scoped queries + `app_id` on INSERT |
+| `backend/internal/db/queries/agent_log.sql` | Edit | 2 new app-scoped queries + `app_id` on INSERT |
+| `backend/internal/db/log_buffer.sql.go` | Regen | sqlc-generated |
+| `backend/internal/db/agent_log.sql.go` | Regen | sqlc-generated |
+| `backend/internal/db/models.go` | Regen | `AppID pgtype.UUID` on LogBuffer and AgentLog |
+| `backend/internal/db/monitoring.sql.go` | Regen | sqlc-generated |
+| `backend/internal/api/handlers/logs.go` | Edit | `app_id` query param, auth check, query routing |
+| `backend/internal/api/handlers/logs_test.go` | Edit | 3 new app-scoping test cases |
+| `backend/internal/api/handlers/webhooks.go` | Edit | Pass `conn.AppID` to `InsertLogEntry` |
+| `backend/internal/api/handlers/otlp.go` | Edit | Pass `conn.AppID` to `InsertLogEntry` |
+| `backend/internal/api/handlers/applications.go` | Edit | Pass `nil` app_id on org-level audit emits |
+| `backend/internal/api/handlers/connections.go` | Edit | Pass `conn.AppID` to `StartPoller`/`NewSyslog` |
+| `backend/internal/api/handlers/connections_validate.go` | Edit | Pass `uuid.Nil` to connector constructors |
+| `backend/internal/api/handlers/connections_test_handler.go` | Edit | Pass `conn.AppID` to connector constructors |
+| `backend/internal/agent/emit.go` | Edit | `appID *uuid.UUID` parameter on all emit functions |
+| `backend/internal/agent/loop.go` | Edit | Derive `appIDPtr` from `appID`, pass through emit calls |
+| `backend/internal/agent/monitor.go` | Edit | Pass `&app.ID` to `EmitLogWithSeverity` |
+| `backend/internal/agent/scheduler.go` | Edit | Pass `&s.AppID` to `EmitLogWithSeverity` |
+| `backend/internal/connectors/factory.go` | Edit | `appID uuid.UUID` parameter on `StartPoller` |
+| `backend/internal/connectors/logs/supabase.go` | Edit | `appID` field + constructor param + INSERT |
+| `backend/internal/connectors/logs/supabase_test.go` | Edit | Constructor call updated |
+| `backend/internal/connectors/logs/flyio.go` | Edit | `appID` field + constructor param + INSERT |
+| `backend/internal/connectors/logs/vercel.go` | Edit | `appID` field + constructor param + INSERT |
+| `backend/internal/connectors/logs/railway.go` | Edit | `appID` field + constructor param + INSERT |
+| `backend/internal/connectors/logs/mongodb.go` | Edit | `appID` field + constructor param + INSERT |
+| `backend/internal/connectors/logs/syslog.go` | Edit | `appID` field + constructor param + INSERT |
+| `backend/internal/connectors/logs/syslog_test.go` | Edit | Constructor call updated |
+| `backend/cmd/heimdall/main.go` | Edit | Pass `conn.AppID` on poller/syslog resume at startup |
+| `frontend/src/api/logs.ts` | Edit | `app_id?: string` param |
+| `frontend/src/stores/logs.ts` | Edit | Include `currentAppId` in every fetch |
+| `frontend/src/pages/ActivityPage.vue` | Edit | Watch `currentAppId`, reset + re-fetch |
+
+---
+
+## 0.36.0 — Top Header Nav Bar & Sidebar Slim-Down (2026-04-13)
+
+The authenticated layout has been restructured from sidebar-first to header-first, inspired by the Supabase dashboard pattern. A full-width top header bar now handles identity context — which organisation, which application, who's logged in — while the sidebar is stripped back to pure page navigation. The "HEIMDALL" wordmark is restyled to match the public homepage's spaced-out monospace treatment, the green status dot and "Status: Active" label are removed, and the app selector moves from a sidebar dropdown into a breadcrumb trail in the header.
+
+### AppHeader — new component
+
+**`AppHeader.vue`** is a 48px (`h-12`) fixed header bar sitting above the sidebar and content area. It follows the Supabase breadcrumb pattern: logo on the left, then org and app context selectors separated by `/` dividers, then a profile avatar on the right.
+
+**Left section — logo + breadcrumbs.** The Heimdall radial-eye icon is inlined as SVG (not an `<img>` tag) so it can use `currentColor` with the `text-accent` class, keeping it consistent with the design token system. Next to it, "H E I M D A L L" is rendered in `font-mono text-xs font-semibold uppercase tracking-[0.25em]` — the same letter-spacing treatment as `PublicNav.vue` on the public homepage. On small screens the wordmark hides (`hidden sm:inline`) to save horizontal space, leaving just the icon.
+
+**Organisation breadcrumb.** A building icon + the org name + chevron. Clicking opens a dropdown showing the current organisation as a highlighted row. Currently single-org per user, but the dropdown is structurally ready for multi-org — when that feature lands, the list just needs populating. The dropdown closes on outside click or when another dropdown opens (all three are mutually exclusive).
+
+**Application breadcrumb.** A database icon + the current app name + chevron. The dropdown lists all applications with the active one highlighted in `accent-bright` on `accent-subtle` background. A border-separated footer row shows "+ New application" which opens the `AppWizard` modal (moved from the sidebar). Selecting an app calls `app.selectApp()`, persists to localStorage, and closes the dropdown.
+
+**Right section — profile.** A 28px circular avatar showing the first letter of the user's email, styled with `border-border bg-bg-surface`. The dropdown shows the email, a "Settings" link (navigates to the settings route), and a "Sign out" button that calls `auth.logout()` + `app.reset()` before redirecting to login.
+
+**Interaction model.** All three dropdowns are mutually exclusive — opening one closes the other two. A document-level click listener dismisses any open dropdown when clicking outside its container ref. Enter/leave transitions use the same `opacity + translate-y` animation as `BaseSelect.vue` for visual consistency.
+
+### AppSidebar — slim-down
+
+The sidebar loses 108 lines (203 → 95) and three of its five sections:
+
+| Removed section | Lines | New location |
+|----------------|-------|-------------|
+| Brand header (green dot, "Heimdall" text, "Status: Active") | ~10 | Removed — branding in header; status visible on Dashboard |
+| App selector (`BaseSelect` + "Application" label) | ~10 | Header app breadcrumb |
+| User footer (Settings, org name, email, Sign Out) | ~20 | Header profile dropdown |
+| `AppWizard` mount point | ~2 | Header component |
+| Related imports and logic (`useAuthStore`, `useAppStore`, `BaseSelect`, `AppWizard`, `useRouter`, `handleSelectApp`, `handleLogout`, `closeWizard`, `appOptions`, `NEW_APP_SENTINEL`) | ~55 | Logic moved to `AppHeader.vue` |
+
+What remains is a clean navigation-only panel: four labelled sections (Overview, Infrastructure, Agent, Intelligence) with active-indicator bars and phosphor glow — unchanged from before. The width narrows from `w-60` (240px) to `w-56` (224px) since the wider app selector dropdown no longer dictates minimum width.
+
+### DefaultLayout — structural change
+
+The layout container changes from `min-h-screen flex` (horizontal, full-page scroll) to `h-screen flex-col overflow-hidden` (vertical, content-area scroll):
+
+```
+Before:                           After:
+┌──────────┬──────────┐           ┌───────────────────────┐
+│ Sidebar  │          │           │     AppHeader (48px)  │
+│ (full    │ Content  │           ├────────┬──────────────┤
+│  height) │ (whole   │           │Sidebar │              │
+│          │  page    │           │(nav    │ Content      │
+│          │  scrolls)│           │ only)  │ (scrolls)    │
+└──────────┴──────────┘           └────────┴──────────────┘
+```
+
+**`AppHeader`** renders as the first child with `flex-shrink-0`. Below it, a `flex-1 min-h-0` row contains the sidebar and content. The content `<main>` gains `overflow-y-auto` so it scrolls independently — this is critical for the Agent Chat page which uses `h-full flex-col` and needs a fixed-height parent.
+
+**Benefits:**
+- Header and sidebar stay pinned without `position: fixed` or z-index gymnastics.
+- macOS elastic scroll bounce is eliminated — the viewport is locked.
+- Agent Chat's flex layout works correctly with a deterministic parent height.
+
+**Mobile adjustment:** The hamburger button moves from `top-4` to `top-14` so it sits below the header rather than overlapping it. The slide-over sidebar overlay is unchanged.
+
+### Files changed
+
+| File | Kind | Change |
+|------|------|--------|
+| `frontend/src/components/common/AppHeader.vue` | **New** | Top nav bar — logo, org breadcrumb, app breadcrumb, profile dropdown (~260 lines) |
+| `frontend/src/components/common/AppSidebar.vue` | Edit | Stripped to navigation-only (203 → 95 lines) |
+| `frontend/src/layouts/DefaultLayout.vue` | Edit | Header-first layout, `h-screen` viewport, content-area scroll |
 
 ---
 

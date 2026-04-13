@@ -35,27 +35,27 @@ func isValidConnectionStatus(s string) bool { return s == "active" || s == "inac
 func (s *Server) validateConnectorConfig(connType string, config json.RawMessage) (json.RawMessage, error) {
 	switch connType {
 	case "supabase":
-		if _, err := logs.NewSupabase(config, uuid.Nil, uuid.Nil); err != nil {
+		if _, err := logs.NewSupabase(config, uuid.Nil, uuid.Nil, uuid.Nil); err != nil {
 			return nil, fmt.Errorf("Invalid Supabase config: %v", err)
 		}
 	case "flyio":
-		if _, err := logs.NewFlyio(config, uuid.Nil, uuid.Nil); err != nil {
+		if _, err := logs.NewFlyio(config, uuid.Nil, uuid.Nil, uuid.Nil); err != nil {
 			return nil, fmt.Errorf("Invalid Fly.io config: %v", err)
 		}
 	case "vercel":
-		if _, err := logs.NewVercel(config, uuid.Nil, uuid.Nil); err != nil {
+		if _, err := logs.NewVercel(config, uuid.Nil, uuid.Nil, uuid.Nil); err != nil {
 			return nil, fmt.Errorf("Invalid Vercel config: %v", err)
 		}
 	case "railway":
-		if _, err := logs.NewRailway(config, uuid.Nil, uuid.Nil); err != nil {
+		if _, err := logs.NewRailway(config, uuid.Nil, uuid.Nil, uuid.Nil); err != nil {
 			return nil, fmt.Errorf("Invalid Railway config: %v", err)
 		}
 	case "mongodb":
-		if _, err := logs.NewMongoDB(config, uuid.Nil, uuid.Nil); err != nil {
+		if _, err := logs.NewMongoDB(config, uuid.Nil, uuid.Nil, uuid.Nil); err != nil {
 			return nil, fmt.Errorf("Invalid MongoDB Atlas config: %v", err)
 		}
 	case "syslog":
-		if _, err := logs.NewSyslog(config, uuid.Nil, uuid.Nil, nil); err != nil {
+		if _, err := logs.NewSyslog(config, uuid.Nil, uuid.Nil, uuid.Nil, nil); err != nil {
 			return nil, fmt.Errorf("Invalid syslog config: %v", err)
 		}
 		if s.Config.SyslogTLSCert != "" && s.Config.SyslogTLSKey != "" {

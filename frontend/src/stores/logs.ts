@@ -3,6 +3,7 @@ import { ref } from 'vue'
 import type { LogEntry } from '@/types/log'
 import * as logsApi from '@/api/logs'
 import { extractApiError } from '@/utils/apiError'
+import { useAppStore } from '@/stores/app'
 
 export const useLogsStore = defineStore('logs', () => {
   const entries = ref<LogEntry[]>([])
@@ -14,11 +15,13 @@ export const useLogsStore = defineStore('logs', () => {
   const source = ref<'raw' | 'agent' | 'all'>('all')
 
   async function fetchLogs(params?: { severity?: string; connection_id?: string }) {
+    const appStore = useAppStore()
     loading.value = true
     error.value = null
     try {
       const { data } = await logsApi.listLogs({
         ...params,
+        app_id: appStore.currentAppId ?? undefined,
         source: source.value,
         limit: limit.value,
         offset: offset.value,

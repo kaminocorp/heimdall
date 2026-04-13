@@ -70,7 +70,7 @@ func (q *Queries) ListActiveApplications(ctx context.Context) ([]ListActiveAppli
 }
 
 const listLogsSinceForApp = `-- name: ListLogsSinceForApp :many
-SELECT lb.id, lb.connection_id, lb.source_type, lb.severity, lb.payload, lb.ingested_at, lb.user_id FROM log_buffer lb
+SELECT lb.id, lb.connection_id, lb.source_type, lb.severity, lb.payload, lb.ingested_at, lb.user_id, lb.app_id FROM log_buffer lb
 JOIN connections c ON c.id = lb.connection_id
 WHERE c.app_id = $1 AND lb.ingested_at > $2
 ORDER BY lb.ingested_at ASC
@@ -100,6 +100,7 @@ func (q *Queries) ListLogsSinceForApp(ctx context.Context, arg ListLogsSinceForA
 			&i.Payload,
 			&i.IngestedAt,
 			&i.UserID,
+			&i.AppID,
 		); err != nil {
 			return nil, err
 		}

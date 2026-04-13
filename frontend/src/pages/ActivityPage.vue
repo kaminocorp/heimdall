@@ -1,18 +1,25 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import { useLogsStore } from '@/stores/logs'
 import { useConnectionsStore } from '@/stores/connections'
+import { useAppStore } from '@/stores/app'
 import LogFeed from '@/components/log/LogFeed.vue'
 import SkeletonBlock from '@/components/common/SkeletonBlock.vue'
 
 const logsStore = useLogsStore()
 const connectionsStore = useConnectionsStore()
+const appStore = useAppStore()
 
 const activeFilters = ref<{ severity?: string; connection_id?: string }>({})
 
 onMounted(() => {
   logsStore.fetchLogs()
   connectionsStore.fetchConnections()
+})
+
+watch(() => appStore.currentAppId, () => {
+  logsStore.resetPagination()
+  logsStore.fetchLogs(activeFilters.value)
 })
 
 function handleFilter(filters: { severity?: string; connection_id?: string; source?: string }) {

@@ -42,7 +42,9 @@ cd frontend && npm run lint  # ESLint
 
 ### Database
 ```bash
-# Requires DATABASE_URL env var
+# Requires DATABASE_URL env var (defined in root .env).
+# make dev-backend auto-sources .env, but migrate commands do not.
+# Source it first: set -a && . ./.env && set +a && make migrate-up
 make migrate-up        # Apply all pending migrations
 make migrate-down      # Rollback one migration
 make migrate-create    # Interactive: create new migration pair

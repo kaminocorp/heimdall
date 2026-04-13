@@ -13,7 +13,7 @@ import (
 
 func TestNewSyslog_Defaults(t *testing.T) {
 	cfg := `{"port": 0}`
-	sl, err := NewSyslog(json.RawMessage(cfg), uuid.New(), uuid.New(), nil)
+	sl, err := NewSyslog(json.RawMessage(cfg), uuid.New(), uuid.New(), uuid.New(), nil)
 	require.NoError(t, err)
 	assert.Equal(t, syslogDefaultPort, sl.config.Port)
 	assert.Equal(t, "tls", sl.config.Protocol)
@@ -21,21 +21,21 @@ func TestNewSyslog_Defaults(t *testing.T) {
 
 func TestNewSyslog_InvalidPort(t *testing.T) {
 	cfg := `{"port": 99999}`
-	_, err := NewSyslog(json.RawMessage(cfg), uuid.New(), uuid.New(), nil)
+	_, err := NewSyslog(json.RawMessage(cfg), uuid.New(), uuid.New(), uuid.New(), nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "port must be between 1 and 65535")
 }
 
 func TestNewSyslog_InvalidProtocol(t *testing.T) {
 	cfg := `{"port": 6514, "protocol": "udp"}`
-	_, err := NewSyslog(json.RawMessage(cfg), uuid.New(), uuid.New(), nil)
+	_, err := NewSyslog(json.RawMessage(cfg), uuid.New(), uuid.New(), uuid.New(), nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "protocol must be 'tcp' or 'tls'")
 }
 
 func TestNewSyslog_ValidTCP(t *testing.T) {
 	cfg := `{"port": 1514, "protocol": "tcp"}`
-	sl, err := NewSyslog(json.RawMessage(cfg), uuid.New(), uuid.New(), nil)
+	sl, err := NewSyslog(json.RawMessage(cfg), uuid.New(), uuid.New(), uuid.New(), nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1514, sl.config.Port)
 	assert.Equal(t, "tcp", sl.config.Protocol)

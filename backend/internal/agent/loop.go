@@ -66,6 +66,12 @@ func emitEvent(ctx context.Context, events chan<- AgentEvent, ev AgentEvent) {
 // conversationID is optional — when provided, agent observations are emitted to agent_log.
 // appID is optional — when provided, enables app-scoped tools like search_codebase.
 func (a *Agent) runConversationCore(ctx context.Context, userID uuid.UUID, appID uuid.UUID, conversationID *uuid.UUID, history []Message, input string, events chan<- AgentEvent) (string, error) {
+	// Derive *uuid.UUID for EmitLog calls: nil when no app context.
+	var appIDPtr *uuid.UUID
+	if appID != uuid.Nil {
+		appIDPtr = &appID
+	}
+
 	// Load agent config: prefer per-app config when appID is provided,
 	// fall back to global agent_config singleton.
 	model := DefaultModelID
@@ -136,7 +142,7 @@ func (a *Agent) runConversationCore(ctx context.Context, userID uuid.UUID, appID
 			if utf8.RuneCountInString(summary) > 200 {
 				summary = string([]rune(summary)[:200]) + "..."
 			}
-			a.EmitLog(ctx, userID, conversationID, "observation", summary, nil)
+			a.EmitLog(ctx, userID, appIDPtr, conversationID, "observation", summary, nil)
 
 			return text, nil
 		}
@@ -166,7 +172,7 @@ func (a *Agent) runConversationCore(ctx context.Context, userID uuid.UUID, appID
 				}
 
 				// Emit tool_call log entry.
-				a.EmitLog(ctx, userID, conversationID, "tool_call",
+				a.EmitLog(ctx, userID, appIDPtr, conversationID, "tool_call",
 					fmt.Sprintf("Called %s", tu.Name),
 					map[string]any{"tool": tu.Name, "input": toolInput},
 				)
@@ -185,7 +191,7 @@ func (a *Agent) runConversationCore(ctx context.Context, userID uuid.UUID, appID
 					})
 
 					// Emit tool_result error entry.
-					a.EmitLog(ctx, userID, conversationID, "tool_result",
+					a.EmitLog(ctx, userID, appIDPtr, conversationID, "tool_result",
 						fmt.Sprintf("%s failed: %v", tu.Name, err),
 						map[string]any{"tool": tu.Name, "error": err.Error()},
 					)
@@ -201,7 +207,7 @@ func (a *Agent) runConversationCore(ctx context.Context, userID uuid.UUID, appID
 					if utf8.RuneCountInString(resultSummary) > 200 {
 						resultSummary = string([]rune(resultSummary)[:200]) + "..."
 					}
-					a.EmitLog(ctx, userID, conversationID, "tool_result",
+					a.EmitLog(ctx, userID, appIDPtr, conversationID, "tool_result",
 						fmt.Sprintf("%s returned results", tu.Name),
 						map[string]any{"tool": tu.Name, "result_preview": resultSummary},
 					)
@@ -229,6 +235,7 @@ func (a *Agent) runConversationCore(ctx context.Context, userID uuid.UUID, appID
 // muddy that contract. See docs/executing/openrouter-implementation.md
 // (Phase 1, Task 1.4) for the full reasoning.
 func (a *Agent) RunMonitoring(ctx context.Context, userID uuid.UUID, appConfig db.AppAgentConfig, flaggedLogs string) (string, string) {
+	monAppID := appConfig.AppID // local copy for pointer-taking
 	model := appConfig.Model
 	if model == "" {
 		model = DefaultModelID
@@ -291,7 +298,7 @@ func (a *Agent) RunMonitoring(ctx context.Context, userID uuid.UUID, appConfig d
 					continue
 				}
 
-				a.EmitLog(ctx, userID, nil, "tool_call",
+				a.EmitLog(ctx, userID, &monAppID, nil, "tool_call",
 					fmt.Sprintf("Monitoring: called %s", tu.Name),
 					map[string]any{"tool": tu.Name, "input": toolInput, "app_id": appConfig.AppID},
 				)
@@ -305,7 +312,7 @@ func (a *Agent) RunMonitoring(ctx context.Context, userID uuid.UUID, appConfig d
 						Content:    fmt.Sprintf("Tool error: %v", err),
 						IsError:    true,
 					})
-					a.EmitLog(ctx, userID, nil, "tool_result",
+					a.EmitLog(ctx, userID, &monAppID, nil, "tool_result",
 						fmt.Sprintf("Monitoring: %s failed: %v", tu.Name, err),
 						map[string]any{"tool": tu.Name, "error": err.Error(), "app_id": appConfig.AppID},
 					)
@@ -318,7 +325,7 @@ func (a *Agent) RunMonitoring(ctx context.Context, userID uuid.UUID, appConfig d
 					if utf8.RuneCountInString(resultSummary) > 200 {
 						resultSummary = string([]rune(resultSummary)[:200]) + "..."
 					}
-					a.EmitLog(ctx, userID, nil, "tool_result",
+					a.EmitLog(ctx, userID, &monAppID, nil, "tool_result",
 						fmt.Sprintf("Monitoring: %s returned results", tu.Name),
 						map[string]any{"tool": tu.Name, "result_preview": resultSummary, "app_id": appConfig.AppID},
 					)

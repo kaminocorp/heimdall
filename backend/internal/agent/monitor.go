@@ -171,7 +171,7 @@ func (a *Agent) monitorApp(ctx context.Context, app db.ListActiveApplicationsRow
 		if utf8.RuneCountInString(summary) > 200 {
 			summary = string([]rune(summary)[:200]) + "..."
 		}
-		logEntryID := a.EmitLogWithSeverity(ctx, userID, nil, "monitoring", summary,
+		logEntryID := a.EmitLogWithSeverity(ctx, userID, &app.ID, nil, "monitoring", summary,
 			map[string]any{
 				"app_id":         app.ID,
 				"app_name":       app.Name,

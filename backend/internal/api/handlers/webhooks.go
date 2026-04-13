@@ -76,6 +76,7 @@ func (s *Server) IngestWebhookLogs(w http.ResponseWriter, r *http.Request) {
 			Severity:     severity,
 			Payload:      e.Payload,
 			UserID:       conn.UserID,
+			AppID:        pgtype.UUID{Bytes: conn.AppID, Valid: true},
 		})
 		if err != nil {
 			jsonServerError(w, "failed to insert log entry", err)

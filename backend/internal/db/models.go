@@ -31,6 +31,7 @@ type AgentLog struct {
 	Severity       pgtype.Text `json:"severity"`
 	ConversationID pgtype.UUID `json:"conversation_id"`
 	CreatedAt      time.Time   `json:"created_at"`
+	AppID          pgtype.UUID `json:"app_id"`
 }
 
 type AppAgentConfig struct {
@@ -127,6 +128,7 @@ type LogBuffer struct {
 	Payload      json.RawMessage `json:"payload"`
 	IngestedAt   time.Time       `json:"ingested_at"`
 	UserID       uuid.UUID       `json:"user_id"`
+	AppID        pgtype.UUID     `json:"app_id"`
 }
 
 type MonitoringState struct {

@@ -36,6 +36,7 @@ type Flyio struct {
 	config       FlyioConfig
 	connectionID uuid.UUID
 	userID       uuid.UUID
+	appID        uuid.UUID
 	httpClient   *http.Client
 	apiBase      string
 
@@ -44,7 +45,7 @@ type Flyio struct {
 }
 
 // NewFlyio creates a Fly.io connector from a connection's config JSONB.
-func NewFlyio(configJSON json.RawMessage, connectionID, userID uuid.UUID) (*Flyio, error) {
+func NewFlyio(configJSON json.RawMessage, connectionID, userID, appID uuid.UUID) (*Flyio, error) {
 	var cfg FlyioConfig
 	if err := json.Unmarshal(configJSON, &cfg); err != nil {
 		return nil, fmt.Errorf("flyio: invalid config: %w", err)
@@ -63,6 +64,7 @@ func NewFlyio(configJSON json.RawMessage, connectionID, userID uuid.UUID) (*Flyi
 		config:       cfg,
 		connectionID: connectionID,
 		userID:       userID,
+		appID:        appID,
 		httpClient:   &http.Client{Timeout: 30 * time.Second},
 		apiBase:      flyAPIBase,
 		cursor:       time.Now().Add(-5 * time.Minute),
@@ -242,6 +244,7 @@ func (f *Flyio) pollMachineLogs(ctx context.Context, queries *db.Queries, machin
 			Severity:     severity,
 			Payload:      payload,
 			UserID:       f.userID,
+			AppID:        pgtype.UUID{Bytes: f.appID, Valid: true},
 		})
 		if err != nil {
 			slog.Error("flyio: insert log entry", "err", err, "connection_id", f.connectionID)

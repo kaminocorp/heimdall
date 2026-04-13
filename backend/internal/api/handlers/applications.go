@@ -112,7 +112,7 @@ func (s *Server) CreateApplication(w http.ResponseWriter, r *http.Request) {
 	// stack, and we don't want handler coverage to blow up for that reason.
 	if s.Agent != nil {
 		s.Agent.EmitLog(
-			r.Context(), userID, nil,
+			r.Context(), userID, nil, nil,
 			"application_created",
 			fmt.Sprintf("Application %q created", app.Name),
 			map[string]any{
@@ -188,7 +188,7 @@ func (s *Server) DeleteApplication(w http.ResponseWriter, r *http.Request) {
 	// entry must outlive the thing it audits.
 	if s.Agent != nil {
 		s.Agent.EmitLog(
-			r.Context(), userID, nil,
+			r.Context(), userID, nil, nil,
 			"application_deleted",
 			fmt.Sprintf("Application %q deleted", app.Name),
 			map[string]any{
