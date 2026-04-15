@@ -64,7 +64,7 @@ const configDetails = computed(() => {
       break
 
     case 'webhook_logs':
-      if (cfg.token) details.push({ label: 'Bearer Token', value: String(cfg.token), masked: true })
+      if (cfg.webhook_token) details.push({ label: 'Bearer Token', value: String(cfg.webhook_token), masked: true })
       break
 
     case 'syslog':

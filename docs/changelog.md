@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.44.1 — Webhook Token Display Fix](#0441--webhook-token-display-fix-2026-04-16)
 - [0.44.0 — Fly.io Log Integration](#0440--flyio-log-integration-2026-04-16)
 - [0.43.1 — Defense-in-Depth Hardening](#0431--defense-in-depth-hardening-2026-04-15)
 - [0.43.0 — RLS on System Tables](#0430--rls-on-system-tables-2026-04-15)
@@ -113,6 +114,18 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.44.1 — Webhook Token Display Fix (2026-04-16)
+
+Fixed the connection detail modal not displaying the Bearer Token for webhook connections.
+
+**File:** `connections/ConnectionDetailModal.vue`
+
+The backend stores the auto-generated webhook token under the config key `webhook_token`, but the detail modal was reading `cfg.token` — a field that doesn't exist. The token was generated and persisted correctly; it simply never rendered in the UI.
+
+**Fix:** `cfg.token` → `cfg.webhook_token` in the `webhook_logs` case of the detail builder.
 
 ---
 
