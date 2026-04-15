@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.42.21 — TypeScript Build Fixes](#04221--typescript-build-fixes-2026-04-15)
 - [0.42.20 — Post-Assessment Hardening](#04220--post-assessment-hardening-2026-04-15)
 - [0.42.19 — Final Production Hardening](#04219--final-production-hardening-2026-04-15)
 - [0.42.18 — Pre-Deploy Hardening](#04218--pre-deploy-hardening-2026-04-15)
@@ -109,6 +110,24 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.42.21 — TypeScript Build Fixes (2026-04-15)
+
+Three type errors that broke the Vercel production build (`vue-tsc` exit code 2).
+
+### 1. ConnectionForm empty-number field typed as `undefined`
+**File:** `components/connections/ConnectionForm.vue`
+**Fix:** `setFieldValue` stored `undefined` when a number field was cleared, but `getFieldValue` declared its return type as `string | number`. Changed the empty-field fallback from `undefined` to `''` so the stored value stays within the declared type.
+
+### 2. NotificationPreferences threshold typed as bare `string`
+**File:** `components/notifications/NotificationPreferences.vue`
+**Fix:** `formThreshold` was `ref<string>`, but the `updateNotificationPreferences` payload expects `'info' | 'warning' | 'error' | 'critical'`. Narrowed the ref to the four-member union so the assignment on line 45 type-checks.
+
+### 3. ActivityPage uses `.value` on ref inside template
+**File:** `pages/ActivityPage.vue`
+**Fix:** `activeFilters` is a `ref`, and Vue auto-unwraps refs in templates — so `activeFilters` in the template is already the plain object. Accessing `.value` tried to read a non-existent property on `{ severity?: string; connection_id?: string }`. Removed `.value` from both `@next` and `@prev` handlers.
 
 ---
 

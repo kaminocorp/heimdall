@@ -67,8 +67,8 @@ function handleFilter(filters: { severity?: string; connection_id?: string; sour
       :limit="logsStore.limit"
       :offset="logsStore.offset"
       @filter="handleFilter"
-      @next="logsStore.nextPage(activeFilters.value)"
-      @prev="logsStore.prevPage(activeFilters.value)"
+      @next="logsStore.nextPage(activeFilters)"
+      @prev="logsStore.prevPage(activeFilters)"
     />
   </div>
 </template>

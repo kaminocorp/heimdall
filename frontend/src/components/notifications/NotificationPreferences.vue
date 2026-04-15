@@ -19,7 +19,7 @@ const toast = useToast()
 const editing = ref(false)
 const saving = ref(false)
 const formEnabled = ref(false)
-const formThreshold = ref<string>('warning')
+const formThreshold = ref<'info' | 'warning' | 'error' | 'critical'>('warning')
 const formCooldown = ref(15)
 
 const thresholdOptions = [
