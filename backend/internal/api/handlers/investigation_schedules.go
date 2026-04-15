@@ -175,7 +175,7 @@ func (s *Server) CreateSchedule(w http.ResponseWriter, r *http.Request) {
 		enabled = *req.Enabled
 	}
 
-	queries, done, err := s.UserQueries(r.Context(), userID)
+	queries, commit, done, err := s.UserQueries(r.Context(), userID)
 	if err != nil {
 		jsonServerError(w, "failed to begin transaction", err)
 		return
@@ -193,6 +193,11 @@ func (s *Server) CreateSchedule(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		jsonServerError(w, "failed to create schedule", err)
+		return
+	}
+
+	if err := commit(); err != nil {
+		jsonServerError(w, "failed to save changes", err)
 		return
 	}
 
@@ -249,7 +254,7 @@ func (s *Server) UpdateSchedule(w http.ResponseWriter, r *http.Request) {
 		enabled = *req.Enabled
 	}
 
-	queries, done, err := s.UserQueries(r.Context(), userID)
+	queries, commit, done, err := s.UserQueries(r.Context(), userID)
 	if err != nil {
 		jsonServerError(w, "failed to begin transaction", err)
 		return
@@ -267,6 +272,11 @@ func (s *Server) UpdateSchedule(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		jsonServerError(w, "failed to update schedule", err)
+		return
+	}
+
+	if err := commit(); err != nil {
+		jsonServerError(w, "failed to save changes", err)
 		return
 	}
 
@@ -304,7 +314,7 @@ func (s *Server) DeleteSchedule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	queries, done, err := s.UserQueries(r.Context(), userID)
+	queries, commit, done, err := s.UserQueries(r.Context(), userID)
 	if err != nil {
 		jsonServerError(w, "failed to begin transaction", err)
 		return
@@ -313,6 +323,11 @@ func (s *Server) DeleteSchedule(w http.ResponseWriter, r *http.Request) {
 
 	if err := queries.DeleteSchedule(r.Context(), scheduleID); err != nil {
 		jsonServerError(w, "failed to delete schedule", err)
+		return
+	}
+
+	if err := commit(); err != nil {
+		jsonServerError(w, "failed to save changes", err)
 		return
 	}
 

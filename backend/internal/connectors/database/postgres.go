@@ -5,9 +5,25 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"regexp"
 
 	"github.com/jackc/pgx/v5"
 )
+
+// validHost matches a hostname (labels separated by dots), an IPv4 address,
+// or a bracketed IPv6 address.  Rejects values containing query-string
+// metacharacters (?, &, =) that could inject connection-string parameters.
+var validHost = regexp.MustCompile(`^(\[[0-9a-fA-F:]+\]|[a-zA-Z0-9._-]+)$`)
+
+// validSSLModes is the set of PostgreSQL SSL modes that can safely appear in
+// a connection URL.  Validating against this set prevents injection of extra
+// query parameters (e.g. "require&default_transaction_read_only=off").
+var validSSLModes = map[string]bool{
+	"disable":     true,
+	"require":     true,
+	"verify-ca":   true,
+	"verify-full": true,
+}
 
 // Postgres connects to a user's monitored PostgreSQL database and executes
 // read-only queries on behalf of the agent.
@@ -36,11 +52,17 @@ func New(configJSON json.RawMessage) (*Postgres, error) {
 	if cfg.Host == "" || cfg.Database == "" || cfg.User == "" {
 		return nil, fmt.Errorf("postgres: host, database, and user are required")
 	}
+	if !validHost.MatchString(cfg.Host) {
+		return nil, fmt.Errorf("postgres: invalid host %q", cfg.Host)
+	}
 	if cfg.Port == 0 {
 		cfg.Port = 5432
 	}
 	if cfg.SSLMode == "" {
 		cfg.SSLMode = "require"
+	}
+	if !validSSLModes[cfg.SSLMode] {
+		return nil, fmt.Errorf("postgres: invalid ssl_mode %q (must be one of: disable, require, verify-ca, verify-full)", cfg.SSLMode)
 	}
 
 	// Build connection string with read-only enforcement.
@@ -48,7 +70,7 @@ func New(configJSON json.RawMessage) (*Postgres, error) {
 		"postgres://%s:%s@%s:%d/%s?sslmode=%s&default_transaction_read_only=on",
 		url.PathEscape(cfg.User),
 		url.PathEscape(cfg.Password),
-		cfg.Host,
+		url.PathEscape(cfg.Host),
 		cfg.Port,
 		url.PathEscape(cfg.Database),
 		cfg.SSLMode,
@@ -67,7 +89,13 @@ func (p *Postgres) Connect(ctx context.Context) error {
 	return nil
 }
 
+// maxQueryRows is the maximum number of rows returned from a single query.
+// This prevents LLM-generated queries like "SELECT * FROM large_table"
+// from exhausting the agent process's memory.
+const maxQueryRows = 1000
+
 // Query executes a read-only SQL query and returns the results as a slice of maps.
+// Results are capped at maxQueryRows to prevent unbounded memory consumption.
 func (p *Postgres) Query(ctx context.Context, sql string) ([]map[string]any, error) {
 	if p.conn == nil {
 		return nil, fmt.Errorf("postgres: not connected")
@@ -81,8 +109,13 @@ func (p *Postgres) Query(ctx context.Context, sql string) ([]map[string]any, err
 
 	fields := rows.FieldDescriptions()
 	var results []map[string]any
+	truncated := false
 
 	for rows.Next() {
+		if len(results) >= maxQueryRows {
+			truncated = true
+			break
+		}
 		values, err := rows.Values()
 		if err != nil {
 			return nil, fmt.Errorf("postgres: scan: %w", err)
@@ -96,6 +129,12 @@ func (p *Postgres) Query(ctx context.Context, sql string) ([]map[string]any, err
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("postgres: rows: %w", err)
+	}
+
+	if truncated {
+		results = append(results, map[string]any{
+			"_truncated": fmt.Sprintf("Results limited to %d rows. Add a LIMIT clause for narrower queries.", maxQueryRows),
+		})
 	}
 
 	return results, nil

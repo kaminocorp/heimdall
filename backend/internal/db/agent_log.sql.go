@@ -18,8 +18,8 @@ WHERE user_id = $1 AND app_id = $2
 `
 
 type CountAgentLogByAppParams struct {
-	UserID uuid.UUID   `json:"user_id"`
-	AppID  pgtype.UUID `json:"app_id"`
+	UserID uuid.UUID `json:"user_id"`
+	AppID  uuid.UUID `json:"app_id"`
 }
 
 func (q *Queries) CountAgentLogByApp(ctx context.Context, arg CountAgentLogByAppParams) (int64, error) {
@@ -54,7 +54,7 @@ type InsertAgentLogParams struct {
 	Detail         []byte      `json:"detail"`
 	Severity       pgtype.Text `json:"severity"`
 	ConversationID pgtype.UUID `json:"conversation_id"`
-	AppID          pgtype.UUID `json:"app_id"`
+	AppID          uuid.UUID   `json:"app_id"`
 }
 
 func (q *Queries) InsertAgentLog(ctx context.Context, arg InsertAgentLogParams) (AgentLog, error) {
@@ -90,10 +90,10 @@ LIMIT $3 OFFSET $4
 `
 
 type ListAgentLogByAppParams struct {
-	UserID uuid.UUID   `json:"user_id"`
-	AppID  pgtype.UUID `json:"app_id"`
-	Limit  int32       `json:"limit"`
-	Offset int32       `json:"offset"`
+	UserID uuid.UUID `json:"user_id"`
+	AppID  uuid.UUID `json:"app_id"`
+	Limit  int32     `json:"limit"`
+	Offset int32     `json:"offset"`
 }
 
 func (q *Queries) ListAgentLogByApp(ctx context.Context, arg ListAgentLogByAppParams) ([]AgentLog, error) {

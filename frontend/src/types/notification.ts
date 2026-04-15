@@ -9,7 +9,7 @@ export interface NotificationPreferences {
 
 export interface UpdatePreferencesPayload {
   enabled: boolean
-  severity_threshold: string
+  severity_threshold: 'info' | 'warning' | 'error' | 'critical'
   cooldown_minutes: number
 }
 
@@ -38,16 +38,18 @@ export interface DiscordConfig {
   webhook_url: string
 }
 
+export type ChannelConfig = EmailConfig | SlackConfig | DiscordConfig
+
 export interface CreateChannelPayload {
   type: NotificationChannelType
   name: string
-  config: Record<string, unknown>
+  config: ChannelConfig
   enabled?: boolean
 }
 
 export interface UpdateChannelPayload {
   name: string
-  config: Record<string, unknown>
+  config: ChannelConfig
   enabled: boolean
 }
 

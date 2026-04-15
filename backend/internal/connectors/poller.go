@@ -18,14 +18,19 @@ type Poller struct {
 	queries *db.Queries
 	mu      sync.Mutex
 	wg      sync.WaitGroup
-	pollers map[uuid.UUID]context.CancelFunc
+	pollers map[uuid.UUID]pollerEntry
+}
+
+type pollerEntry struct {
+	cancel context.CancelFunc
+	done   chan struct{} // closed when the goroutine exits
 }
 
 // NewPoller creates a new Poller manager.
 func NewPoller(queries *db.Queries) *Poller {
 	return &Poller{
 		queries: queries,
-		pollers: make(map[uuid.UUID]context.CancelFunc),
+		pollers: make(map[uuid.UUID]pollerEntry),
 	}
 }
 
@@ -38,32 +43,43 @@ func (p *Poller) Start(conn PollConnector, connectionID uuid.UUID, interval time
 	}
 
 	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	// Stop existing poller for this connection if running.
-	if cancel, ok := p.pollers[connectionID]; ok {
-		cancel()
+	// Stop existing poller for this connection and wait for it to exit
+	// before starting a new one, preventing concurrent polls.
+	if entry, ok := p.pollers[connectionID]; ok {
+		entry.cancel()
+		p.mu.Unlock()
+		<-entry.done // wait for old goroutine to finish
+		p.mu.Lock()
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	p.pollers[connectionID] = cancel
+	done := make(chan struct{})
+	p.pollers[connectionID] = pollerEntry{cancel: cancel, done: done}
+	p.mu.Unlock()
 
 	p.wg.Add(1)
 	go func() {
 		defer p.wg.Done()
+		defer close(done)
 		p.run(ctx, conn, connectionID, interval)
 	}()
 	slog.Info("poller started", "connection_id", connectionID, "interval", interval)
 }
 
-// Stop cancels the polling goroutine for the given connection.
+// Stop cancels the polling goroutine for the given connection and waits
+// for it to exit, preventing a subsequent Start from racing with the
+// still-running old goroutine.
 func (p *Poller) Stop(connectionID uuid.UUID) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	if cancel, ok := p.pollers[connectionID]; ok {
-		cancel()
+	entry, ok := p.pollers[connectionID]
+	if ok {
+		entry.cancel()
 		delete(p.pollers, connectionID)
+	}
+	p.mu.Unlock()
+
+	if ok {
+		<-entry.done
 		slog.Info("poller stopped", "connection_id", connectionID)
 	}
 }
@@ -72,11 +88,11 @@ func (p *Poller) Stop(connectionID uuid.UUID) {
 // Called on server shutdown to ensure in-flight polls complete cleanly.
 func (p *Poller) StopAll() {
 	p.mu.Lock()
-	for id, cancel := range p.pollers {
-		cancel()
+	for id, entry := range p.pollers {
+		entry.cancel()
 		slog.Info("poller stopped", "connection_id", id)
 	}
-	p.pollers = make(map[uuid.UUID]context.CancelFunc)
+	p.pollers = make(map[uuid.UUID]pollerEntry)
 	p.mu.Unlock()
 
 	// Wait outside the lock so goroutines can finish without deadlocking.

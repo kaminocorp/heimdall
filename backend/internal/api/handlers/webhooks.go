@@ -76,7 +76,7 @@ func (s *Server) IngestWebhookLogs(w http.ResponseWriter, r *http.Request) {
 			Severity:     severity,
 			Payload:      e.Payload,
 			UserID:       conn.UserID,
-			AppID:        pgtype.UUID{Bytes: conn.AppID, Valid: true},
+			AppID:        conn.AppID,
 		})
 		if err != nil {
 			jsonServerError(w, "failed to insert log entry", err)
@@ -87,9 +87,5 @@ func (s *Server) IngestWebhookLogs(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	if len(inserted) == 1 {
-		json.NewEncoder(w).Encode(inserted[0])
-	} else {
-		json.NewEncoder(w).Encode(inserted)
-	}
+	json.NewEncoder(w).Encode(inserted)
 }

@@ -51,6 +51,12 @@ func envForUser(t *testing.T, parent *testEnv, userID uuid.UUID) *testEnv {
 	})
 	router.Route("/api", func(r chi.Router) {
 		r.Post("/onboard", parent.Server.Onboard)
+		r.Route("/org/members", func(r chi.Router) {
+			r.Get("/", parent.Server.ListOrgMembers)
+			r.Post("/invite", parent.Server.InviteMember)
+			r.Put("/{userId}/role", parent.Server.UpdateMemberRole)
+			r.Delete("/{userId}", parent.Server.RemoveMember)
+		})
 	})
 	return &testEnv{
 		Pool:    parent.Pool,

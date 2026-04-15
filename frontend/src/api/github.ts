@@ -1,14 +1,16 @@
 import client from './client'
 import type { GitHubRepo } from '@/types/github'
 
-export function getGitHubInstallURL(appId: string) {
-  return client.get<{ url: string }>(`/github/install`, { params: { app_id: appId } }).then(r => r.data)
+export async function getGitHubInstallURL(appId: string): Promise<{ url: string }> {
+  const { data } = await client.get<{ url: string }>(`/github/install`, { params: { app_id: appId } })
+  return data
 }
 
-export function listGitHubRepos(connectionId: string) {
-  return client.get<GitHubRepo[]>(`/connections/${connectionId}/github/repos`).then(r => r.data)
+export async function listGitHubRepos(connectionId: string): Promise<GitHubRepo[]> {
+  const { data } = await client.get<GitHubRepo[]>(`/connections/${connectionId}/github/repos`)
+  return data
 }
 
-export function updateGitHubRepos(connectionId: string, repos: GitHubRepo[]) {
-  return client.put(`/connections/${connectionId}/github/repos`, repos)
+export async function updateGitHubRepos(connectionId: string, repos: GitHubRepo[]): Promise<void> {
+  await client.put(`/connections/${connectionId}/github/repos`, repos)
 }

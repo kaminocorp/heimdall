@@ -16,15 +16,8 @@ import (
 )
 
 func (s *Server) ListApplications(w http.ResponseWriter, r *http.Request) {
-	userID, ok := middleware.UserIDFromContext(r.Context())
+	org, _, ok := s.resolveOrgAndRole(w, r)
 	if !ok {
-		jsonError(w, "missing user context", http.StatusUnauthorized)
-		return
-	}
-
-	org, err := s.Queries.GetOrganizationByUser(r.Context(), userID)
-	if err != nil {
-		jsonError(w, "organization not found", http.StatusNotFound)
 		return
 	}
 
@@ -58,17 +51,12 @@ type createApplicationRequest struct {
 }
 
 func (s *Server) CreateApplication(w http.ResponseWriter, r *http.Request) {
-	userID, ok := middleware.UserIDFromContext(r.Context())
+	org, _, ok := s.resolveOrgAndRole(w, r)
 	if !ok {
-		jsonError(w, "missing user context", http.StatusUnauthorized)
 		return
 	}
 
-	org, err := s.Queries.GetOrganizationByUser(r.Context(), userID)
-	if err != nil {
-		jsonError(w, "organization not found", http.StatusNotFound)
-		return
-	}
+	userID, _ := middleware.UserIDFromContext(r.Context())
 
 	var req createApplicationRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -81,7 +69,14 @@ func (s *Server) CreateApplication(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	app, err := s.Queries.CreateApplication(r.Context(), db.CreateApplicationParams{
+	queries, commit, done, err := s.UserQueries(r.Context(), userID)
+	if err != nil {
+		jsonServerError(w, "database error", err)
+		return
+	}
+	defer done()
+
+	app, err := queries.CreateApplication(r.Context(), db.CreateApplicationParams{
 		OrgID:  org.ID,
 		Name:   req.Name,
 		Status: "active",
@@ -92,7 +87,7 @@ func (s *Server) CreateApplication(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create default agent config
-	_, err = s.Queries.UpsertAppAgentConfig(r.Context(), db.UpsertAppAgentConfigParams{
+	_, err = queries.UpsertAppAgentConfig(r.Context(), db.UpsertAppAgentConfigParams{
 		AppID:                app.ID,
 		Model:                agent.DefaultModelID,
 		Mode:                 "off",
@@ -122,6 +117,11 @@ func (s *Server) CreateApplication(w http.ResponseWriter, r *http.Request) {
 		)
 	}
 
+	if err := commit(); err != nil {
+		jsonServerError(w, "failed to save changes", err)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(app)
@@ -147,11 +147,21 @@ func (s *Server) DeleteApplication(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Use RLS-scoped transaction for both the authorization check and the
+	// delete, so even if the unscoped query is ever called without the handler
+	// guard the DB layer rejects cross-org access.
+	queries, commit, done, err := s.UserQueries(r.Context(), userID)
+	if err != nil {
+		jsonServerError(w, "database error", err)
+		return
+	}
+	defer done()
+
 	// Org-scope authorization: resolve the app through the user→org→app
 	// join so a caller can't delete an app in a different org. 404 instead of
 	// 403 matches the pattern used by every other /api/apps/{appId}/* route —
 	// we don't leak existence of resources the caller can't see.
-	app, err := s.Queries.GetApplicationByOrgUser(r.Context(), db.GetApplicationByOrgUserParams{
+	app, err := queries.GetApplicationByOrgUser(r.Context(), db.GetApplicationByOrgUserParams{
 		AppID:  appID,
 		UserID: userID,
 	})
@@ -166,7 +176,7 @@ func (s *Server) DeleteApplication(w http.ResponseWriter, r *http.Request) {
 	// predictable. The `code` field is what the frontend keys off to render
 	// the specific "create another app first" helper line instead of a
 	// generic toast.
-	count, err := s.Queries.CountApplicationsByOrg(r.Context(), app.OrgID)
+	count, err := queries.CountApplicationsByOrg(r.Context(), app.OrgID)
 	if err != nil {
 		jsonServerError(w, "failed to count applications", err)
 		return
@@ -176,8 +186,13 @@ func (s *Server) DeleteApplication(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.Queries.DeleteApplication(r.Context(), app.ID); err != nil {
+	if err := queries.DeleteApplication(r.Context(), app.ID); err != nil {
 		jsonServerError(w, "failed to delete application", err)
+		return
+	}
+
+	if err := commit(); err != nil {
+		jsonServerError(w, "failed to save changes", err)
 		return
 	}
 
@@ -271,6 +286,12 @@ type updateAppAgentConfigRequest struct {
 }
 
 func (s *Server) UpdateAppAgentConfig(w http.ResponseWriter, r *http.Request) {
+	userID, ok := middleware.UserIDFromContext(r.Context())
+	if !ok {
+		jsonError(w, "missing user context", http.StatusUnauthorized)
+		return
+	}
+
 	app := s.authorizeApp(w, r)
 	if app == nil {
 		return
@@ -340,7 +361,14 @@ func (s *Server) UpdateAppAgentConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cfg, err := s.Queries.UpsertAppAgentConfig(r.Context(), db.UpsertAppAgentConfigParams{
+	queries, commit, done, err := s.UserQueries(r.Context(), userID)
+	if err != nil {
+		jsonServerError(w, "failed to begin transaction", err)
+		return
+	}
+	defer done()
+
+	cfg, err := queries.UpsertAppAgentConfig(r.Context(), db.UpsertAppAgentConfigParams{
 		AppID:                app.ID,
 		Model:                req.Model,
 		Provider:             req.Provider,
@@ -353,6 +381,11 @@ func (s *Server) UpdateAppAgentConfig(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		jsonServerError(w, "failed to update agent config", err)
+		return
+	}
+
+	if err := commit(); err != nil {
+		jsonServerError(w, "failed to commit", err)
 		return
 	}
 

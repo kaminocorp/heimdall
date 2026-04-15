@@ -62,9 +62,9 @@ func (c *Config) Validate() error {
 	if c.AnthropicKey == "" {
 		return fmt.Errorf("ANTHROPIC_API_KEY is required")
 	}
-	if c.SupabaseURL == "" {
-		return fmt.Errorf("SUPABASE_URL is required")
-	}
+	// Note: SupabaseURL is loaded but not validated as required. It is
+	// consumed by the Supabase log connector (when configured) but is not
+	// needed for core server operation.
 	return nil
 }
 

@@ -5,26 +5,30 @@ import type { InvestigationSchedule, ScheduleInput } from '@/types/schedule'
 // and the currentAppId from the app store is embedded in the URL. This
 // mirrors the connections/agent-config routing pattern.
 
-export function listSchedules(appId: string) {
-  return client.get<InvestigationSchedule[]>(`/apps/${appId}/schedules`)
+export async function listSchedules(appId: string): Promise<InvestigationSchedule[]> {
+  const { data } = await client.get<InvestigationSchedule[]>(`/apps/${appId}/schedules`)
+  return data
 }
 
-export function createSchedule(appId: string, input: ScheduleInput) {
-  return client.post<InvestigationSchedule>(`/apps/${appId}/schedules`, input)
+export async function createSchedule(appId: string, input: ScheduleInput): Promise<InvestigationSchedule> {
+  const { data } = await client.post<InvestigationSchedule>(`/apps/${appId}/schedules`, input)
+  return data
 }
 
-export function updateSchedule(appId: string, id: string, input: ScheduleInput) {
-  return client.patch<InvestigationSchedule>(`/apps/${appId}/schedules/${id}`, input)
+export async function updateSchedule(appId: string, id: string, input: ScheduleInput): Promise<InvestigationSchedule> {
+  const { data } = await client.patch<InvestigationSchedule>(`/apps/${appId}/schedules/${id}`, input)
+  return data
 }
 
-export function deleteSchedule(appId: string, id: string) {
-  return client.delete(`/apps/${appId}/schedules/${id}`)
+export async function deleteSchedule(appId: string, id: string): Promise<void> {
+  await client.delete(`/apps/${appId}/schedules/${id}`)
 }
 
 // runScheduleNow fires a schedule synchronously and returns the updated row
 // (with fresh last_run_at / last_status / last_summary). The backend caps
 // the run at 5 minutes internally, so the worst-case latency here is bounded
 // by the same scheduler timeout — but callers should still show a spinner.
-export function runScheduleNow(appId: string, id: string) {
-  return client.post<InvestigationSchedule>(`/apps/${appId}/schedules/${id}/run`)
+export async function runScheduleNow(appId: string, id: string): Promise<InvestigationSchedule> {
+  const { data } = await client.post<InvestigationSchedule>(`/apps/${appId}/schedules/${id}/run`)
+  return data
 }

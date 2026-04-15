@@ -30,13 +30,6 @@ const mobileOpen = ref(false)
         >
           Pricing
         </RouterLink>
-        <RouterLink
-          to="/security"
-          class="transition-colors"
-          :class="route.name === 'security' ? 'text-accent' : 'text-text-secondary hover:text-text-primary'"
-        >
-          Security
-        </RouterLink>
       </div>
 
       <!-- Desktop: right actions -->
@@ -79,7 +72,6 @@ const mobileOpen = ref(false)
       <div class="px-6 py-4 flex flex-col gap-3 uppercase text-[12.5px] font-mono tracking-widest">
         <RouterLink to="/features" class="text-text-secondary hover:text-text-primary transition-colors" @click="mobileOpen = false">Platform</RouterLink>
         <RouterLink to="/pricing" class="text-text-secondary hover:text-text-primary transition-colors" @click="mobileOpen = false">Pricing</RouterLink>
-        <RouterLink to="/security" class="text-text-secondary hover:text-text-primary transition-colors" @click="mobileOpen = false">Security</RouterLink>
         <a href="https://github.com" target="_blank" rel="noopener noreferrer" class="text-text-secondary hover:text-text-primary transition-colors">GitHub</a>
         <div class="border-t border-border pt-3 mt-1 flex flex-col gap-3">
           <RouterLink to="/login" class="text-text-secondary hover:text-text-primary transition-colors" @click="mobileOpen = false">Login</RouterLink>

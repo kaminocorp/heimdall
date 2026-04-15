@@ -24,8 +24,7 @@ export const useSchedulesStore = defineStore('schedules', () => {
     loading.value = true
     error.value = null
     try {
-      const { data } = await schedulesApi.listSchedules(appId)
-      schedules.value = data
+      schedules.value = await schedulesApi.listSchedules(appId)
     } catch (e: unknown) {
       error.value = extractApiError(e, 'Failed to load schedules')
     } finally {
@@ -34,18 +33,18 @@ export const useSchedulesStore = defineStore('schedules', () => {
   }
 
   async function createSchedule(appId: string, input: ScheduleInput) {
-    const { data } = await schedulesApi.createSchedule(appId, input)
+    const schedule = await schedulesApi.createSchedule(appId, input)
     // The backend returns rows in created_at DESC from the list endpoint,
     // so newest-first; unshift keeps the local view consistent without a refetch.
-    schedules.value.unshift(data)
-    return data
+    schedules.value.unshift(schedule)
+    return schedule
   }
 
   async function updateSchedule(appId: string, id: string, input: ScheduleInput) {
-    const { data } = await schedulesApi.updateSchedule(appId, id, input)
+    const updated = await schedulesApi.updateSchedule(appId, id, input)
     const idx = schedules.value.findIndex((s) => s.id === id)
-    if (idx !== -1) schedules.value[idx] = data
-    return data
+    if (idx !== -1) schedules.value[idx] = updated
+    return updated
   }
 
   async function deleteSchedule(appId: string, id: string) {
@@ -56,10 +55,10 @@ export const useSchedulesStore = defineStore('schedules', () => {
   async function runNow(appId: string, id: string) {
     runningId.value = id
     try {
-      const { data } = await schedulesApi.runScheduleNow(appId, id)
+      const result = await schedulesApi.runScheduleNow(appId, id)
       const idx = schedules.value.findIndex((s) => s.id === id)
-      if (idx !== -1) schedules.value[idx] = data
-      return data
+      if (idx !== -1) schedules.value[idx] = result
+      return result
     } finally {
       runningId.value = null
     }

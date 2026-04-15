@@ -137,7 +137,7 @@ func (v *Vercel) Poll(ctx context.Context, queries *db.Queries) error {
 		commitMsg := d.Meta["githubCommitMessage"]
 		commitSha := d.Meta["githubCommitSha"]
 
-		payload, _ := json.Marshal(map[string]any{
+		payload, err := json.Marshal(map[string]any{
 			"deployment_id": d.UID,
 			"name":          d.Name,
 			"url":           d.URL,
@@ -148,18 +148,22 @@ func (v *Vercel) Poll(ctx context.Context, queries *db.Queries) error {
 			"commit_message": commitMsg,
 			"commit_sha":    commitSha,
 		})
+		if err != nil {
+			slog.Error("vercel: marshal payload", "err", err, "connection_id", v.connectionID)
+			continue
+		}
 
-		_, err := queries.InsertLogEntry(ctx, db.InsertLogEntryParams{
+		_, err = queries.InsertLogEntry(ctx, db.InsertLogEntryParams{
 			ConnectionID: v.connectionID,
 			SourceType:   "vercel/deployment",
 			Severity:     severity,
 			Payload:      payload,
 			UserID:       v.userID,
-			AppID:        pgtype.UUID{Bytes: v.appID, Valid: true},
+			AppID:        v.appID,
 		})
 		if err != nil {
 			slog.Error("vercel: insert log entry", "err", err, "connection_id", v.connectionID)
-			return fmt.Errorf("vercel: insert log entry: %w", err)
+			continue
 		}
 
 		insertCount++

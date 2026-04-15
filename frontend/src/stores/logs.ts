@@ -19,15 +19,15 @@ export const useLogsStore = defineStore('logs', () => {
     loading.value = true
     error.value = null
     try {
-      const { data } = await logsApi.listLogs({
+      const result = await logsApi.listLogs({
         ...params,
         app_id: appStore.currentAppId ?? undefined,
         source: source.value,
         limit: limit.value,
         offset: offset.value,
       })
-      entries.value = data.data ?? []
-      total.value = data.total
+      entries.value = result.data ?? []
+      total.value = result.total
     } catch (e: unknown) {
       error.value = extractApiError(e, 'Failed to load logs')
     } finally {
@@ -35,17 +35,19 @@ export const useLogsStore = defineStore('logs', () => {
     }
   }
 
-  function nextPage(filters?: { severity?: string; connection_id?: string }) {
+  async function nextPage(filters?: { severity?: string; connection_id?: string }) {
+    if (loading.value) return
     if (offset.value + limit.value < total.value) {
       offset.value += limit.value
-      fetchLogs(filters)
+      await fetchLogs(filters)
     }
   }
 
-  function prevPage(filters?: { severity?: string; connection_id?: string }) {
+  async function prevPage(filters?: { severity?: string; connection_id?: string }) {
+    if (loading.value) return
     if (offset.value > 0) {
       offset.value = Math.max(0, offset.value - limit.value)
-      fetchLogs(filters)
+      await fetchLogs(filters)
     }
   }
 

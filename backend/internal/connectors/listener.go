@@ -26,6 +26,7 @@ type ListenerManager struct {
 type listenerEntry struct {
 	listener Listener
 	cancel   context.CancelFunc
+	done     chan struct{} // closed when the goroutine exits
 }
 
 // NewListenerManager creates a new ListenerManager.
@@ -44,20 +45,32 @@ func (m *ListenerManager) Start(ctx context.Context, l Listener, connectionID uu
 	}
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	// Extract the old entry (if any) under the lock, then release before
+	// blocking on Close(). This prevents holding the mutex during the
+	// potentially slow drain timeout.
+	old, hadOld := m.listeners[connectionID]
+	if hadOld {
+		delete(m.listeners, connectionID)
+	}
+	m.mu.Unlock()
 
-	// Stop existing listener if running.
-	if entry, ok := m.listeners[connectionID]; ok {
-		entry.cancel()
-		entry.listener.Close()
+	if hadOld {
+		old.cancel()
+		old.listener.Close()
+		<-old.done // wait for old goroutine to fully exit
 	}
 
 	lCtx, cancel := context.WithCancel(context.Background())
-	m.listeners[connectionID] = listenerEntry{listener: l, cancel: cancel}
+	done := make(chan struct{})
+
+	m.mu.Lock()
+	m.listeners[connectionID] = listenerEntry{listener: l, cancel: cancel, done: done}
+	m.mu.Unlock()
 
 	m.wg.Add(1)
 	go func() {
 		defer m.wg.Done()
+		defer close(done)
 		if err := l.Listen(lCtx); err != nil {
 			slog.Error("listener exited with error", "connection_id", connectionID, "err", err)
 		}
@@ -67,7 +80,7 @@ func (m *ListenerManager) Start(ctx context.Context, l Listener, connectionID uu
 	return nil
 }
 
-// Stop shuts down the listener for the given connection.
+// Stop shuts down the listener for the given connection and waits for it to exit.
 func (m *ListenerManager) Stop(connectionID uuid.UUID) {
 	m.mu.Lock()
 	entry, ok := m.listeners[connectionID]
@@ -79,20 +92,30 @@ func (m *ListenerManager) Stop(connectionID uuid.UUID) {
 	if ok {
 		entry.cancel()
 		entry.listener.Close()
+		<-entry.done
 		slog.Info("listener stopped", "connection_id", connectionID)
 	}
 }
 
 // StopAll shuts down all active listeners and waits for them to finish.
+// Unlike Stop() which waits on individual done channels, StopAll() uses
+// wg.Wait() which is sufficient: each listener goroutine calls wg.Done()
+// as its final action before the done channel would be signalled, so
+// wg.Wait() returning guarantees all goroutines have completed.
 func (m *ListenerManager) StopAll() {
 	m.mu.Lock()
+	entries := make(map[uuid.UUID]listenerEntry, len(m.listeners))
 	for id, entry := range m.listeners {
+		entries[id] = entry
+	}
+	m.listeners = make(map[uuid.UUID]listenerEntry)
+	m.mu.Unlock()
+
+	for id, entry := range entries {
 		entry.cancel()
 		entry.listener.Close()
 		slog.Info("listener stopped", "connection_id", id)
 	}
-	m.listeners = make(map[uuid.UUID]listenerEntry)
-	m.mu.Unlock()
 
 	m.wg.Wait()
 }

@@ -8,13 +8,14 @@ export interface PaginatedLogs {
   offset: number
 }
 
-export function listLogs(params?: {
+export async function listLogs(params?: {
   app_id?: string
   severity?: string
   connection_id?: string
   source?: string
   limit?: number
   offset?: number
-}) {
-  return client.get<PaginatedLogs>('/logs', { params })
+}): Promise<PaginatedLogs> {
+  const { data } = await client.get<PaginatedLogs>('/logs', { params })
+  return data
 }

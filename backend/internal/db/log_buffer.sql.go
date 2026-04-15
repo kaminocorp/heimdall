@@ -19,8 +19,8 @@ WHERE user_id = $1 AND app_id = $2
 `
 
 type CountLogsByAppParams struct {
-	UserID uuid.UUID   `json:"user_id"`
-	AppID  pgtype.UUID `json:"app_id"`
+	UserID uuid.UUID `json:"user_id"`
+	AppID  uuid.UUID `json:"app_id"`
 }
 
 func (q *Queries) CountLogsByApp(ctx context.Context, arg CountLogsByAppParams) (int64, error) {
@@ -37,7 +37,7 @@ WHERE user_id = $1 AND app_id = $2 AND severity = $3
 
 type CountLogsByAppAndSeverityParams struct {
 	UserID   uuid.UUID   `json:"user_id"`
-	AppID    pgtype.UUID `json:"app_id"`
+	AppID    uuid.UUID   `json:"app_id"`
 	Severity pgtype.Text `json:"severity"`
 }
 
@@ -96,7 +96,7 @@ func (q *Queries) CountLogsByUserAndSeverity(ctx context.Context, arg CountLogsB
 
 const getConnectionByWebhookToken = `-- name: GetConnectionByWebhookToken :one
 SELECT id, name, type, direction, config, status, last_seen, created_at, updated_at, user_id, app_id FROM connections
-WHERE config->>'webhook_token' = $1::text AND type = 'webhook_logs' AND status = 'active'
+WHERE config->>'webhook_token' = $1::text AND type IN ('webhook_logs', 'otlp') AND status = 'active'
 `
 
 func (q *Queries) GetConnectionByWebhookToken(ctx context.Context, webhookToken string) (Connection, error) {
@@ -130,7 +130,7 @@ type InsertLogEntryParams struct {
 	Severity     pgtype.Text     `json:"severity"`
 	Payload      json.RawMessage `json:"payload"`
 	UserID       uuid.UUID       `json:"user_id"`
-	AppID        pgtype.UUID     `json:"app_id"`
+	AppID        uuid.UUID       `json:"app_id"`
 }
 
 func (q *Queries) InsertLogEntry(ctx context.Context, arg InsertLogEntryParams) (LogBuffer, error) {
@@ -164,10 +164,10 @@ LIMIT $3 OFFSET $4
 `
 
 type ListLogsByAppParams struct {
-	UserID uuid.UUID   `json:"user_id"`
-	AppID  pgtype.UUID `json:"app_id"`
-	Limit  int32       `json:"limit"`
-	Offset int32       `json:"offset"`
+	UserID uuid.UUID `json:"user_id"`
+	AppID  uuid.UUID `json:"app_id"`
+	Limit  int32     `json:"limit"`
+	Offset int32     `json:"offset"`
 }
 
 func (q *Queries) ListLogsByApp(ctx context.Context, arg ListLogsByAppParams) ([]LogBuffer, error) {
@@ -213,7 +213,7 @@ LIMIT $4 OFFSET $5
 
 type ListLogsByAppAndSeverityParams struct {
 	UserID   uuid.UUID   `json:"user_id"`
-	AppID    pgtype.UUID `json:"app_id"`
+	AppID    uuid.UUID   `json:"app_id"`
 	Severity pgtype.Text `json:"severity"`
 	Limit    int32       `json:"limit"`
 	Offset   int32       `json:"offset"`
@@ -402,6 +402,108 @@ func (q *Queries) PruneExpiredLogs(ctx context.Context) (int64, error) {
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const searchLogsByApp = `-- name: SearchLogsByApp :many
+SELECT id, connection_id, source_type, severity, payload, ingested_at, user_id, app_id FROM log_buffer
+WHERE user_id = $1 AND app_id = $2 AND payload::text ILIKE '%' || $3::text || '%' ESCAPE '\'
+ORDER BY ingested_at DESC
+LIMIT $5 OFFSET $4
+`
+
+type SearchLogsByAppParams struct {
+	UserID    uuid.UUID `json:"user_id"`
+	AppID     uuid.UUID `json:"app_id"`
+	Query     string    `json:"query"`
+	RowOffset int32     `json:"row_offset"`
+	RowLimit  int32     `json:"row_limit"`
+}
+
+func (q *Queries) SearchLogsByApp(ctx context.Context, arg SearchLogsByAppParams) ([]LogBuffer, error) {
+	rows, err := q.db.Query(ctx, searchLogsByApp,
+		arg.UserID,
+		arg.AppID,
+		arg.Query,
+		arg.RowOffset,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []LogBuffer{}
+	for rows.Next() {
+		var i LogBuffer
+		if err := rows.Scan(
+			&i.ID,
+			&i.ConnectionID,
+			&i.SourceType,
+			&i.Severity,
+			&i.Payload,
+			&i.IngestedAt,
+			&i.UserID,
+			&i.AppID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const searchLogsByAppAndSeverity = `-- name: SearchLogsByAppAndSeverity :many
+SELECT id, connection_id, source_type, severity, payload, ingested_at, user_id, app_id FROM log_buffer
+WHERE user_id = $1 AND app_id = $2 AND payload::text ILIKE '%' || $3::text || '%' ESCAPE '\' AND severity = $4
+ORDER BY ingested_at DESC
+LIMIT $6 OFFSET $5
+`
+
+type SearchLogsByAppAndSeverityParams struct {
+	UserID    uuid.UUID   `json:"user_id"`
+	AppID     uuid.UUID   `json:"app_id"`
+	Query     string      `json:"query"`
+	Severity  pgtype.Text `json:"severity"`
+	RowOffset int32       `json:"row_offset"`
+	RowLimit  int32       `json:"row_limit"`
+}
+
+func (q *Queries) SearchLogsByAppAndSeverity(ctx context.Context, arg SearchLogsByAppAndSeverityParams) ([]LogBuffer, error) {
+	rows, err := q.db.Query(ctx, searchLogsByAppAndSeverity,
+		arg.UserID,
+		arg.AppID,
+		arg.Query,
+		arg.Severity,
+		arg.RowOffset,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []LogBuffer{}
+	for rows.Next() {
+		var i LogBuffer
+		if err := rows.Scan(
+			&i.ID,
+			&i.ConnectionID,
+			&i.SourceType,
+			&i.Severity,
+			&i.Payload,
+			&i.IngestedAt,
+			&i.UserID,
+			&i.AppID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const searchLogsByUser = `-- name: SearchLogsByUser :many

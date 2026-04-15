@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/hejijunhao/heimdall/backend/internal/db"
 )
@@ -152,26 +151,30 @@ func (r *Railway) Poll(ctx context.Context, queries *db.Queries) error {
 			continue
 		}
 
-		payload, _ := json.Marshal(map[string]any{
+		payload, err := json.Marshal(map[string]any{
 			"timestamp": entry.Timestamp,
 			"message":   entry.Message,
 			"severity":  entry.Severity,
 			"tags":      entry.Tags,
 		})
+		if err != nil {
+			slog.Error("railway: marshal payload", "err", err, "connection_id", r.connectionID)
+			continue
+		}
 
 		severity := normalizeSev(entry.Severity)
 
-		_, err := queries.InsertLogEntry(ctx, db.InsertLogEntryParams{
+		_, err = queries.InsertLogEntry(ctx, db.InsertLogEntryParams{
 			ConnectionID: r.connectionID,
 			SourceType:   "railway/" + r.config.ProjectID,
 			Severity:     severity,
 			Payload:      payload,
 			UserID:       r.userID,
-			AppID:        pgtype.UUID{Bytes: r.appID, Valid: true},
+			AppID:        r.appID,
 		})
 		if err != nil {
 			slog.Error("railway: insert log entry", "err", err, "connection_id", r.connectionID)
-			return fmt.Errorf("railway: insert log entry: %w", err)
+			continue
 		}
 
 		insertCount++

@@ -32,19 +32,35 @@ func CORS(next http.Handler) http.Handler {
 	origins := allowedOrigins()
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Always set Vary: Origin so caching intermediaries don't serve a
+		// non-CORS response to a cross-origin request (or vice versa).
+		w.Header().Set("Vary", "Origin")
+
 		origin := r.Header.Get("Origin")
 		if origins[origin] {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-			w.Header().Set("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Org-ID")
 		}
 
 		if r.Method == http.MethodOptions {
+			w.Header().Set("Access-Control-Max-Age", "3600")
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+// MaxBodySize returns middleware that caps request body size. Routes that need
+// larger bodies (e.g. webhook/OTLP ingestion) should be registered outside
+// the group that applies this middleware.
+func MaxBodySize(bytes int64) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			r.Body = http.MaxBytesReader(w, r.Body, bytes)
+			next.ServeHTTP(w, r)
+		})
+	}
 }

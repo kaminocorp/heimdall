@@ -2,10 +2,12 @@
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { useAppStore } from '@/stores/app'
 import { extractApiError } from '@/utils/apiError'
 
 const router = useRouter()
 const auth = useAuthStore()
+const appStore = useAppStore()
 
 const email = ref('')
 const password = ref('')
@@ -17,9 +19,20 @@ async function handleSubmit() {
   error.value = ''
   try {
     await auth.login(email.value, password.value)
-    router.push('/dashboard')
   } catch (e: unknown) {
     error.value = extractApiError(e, 'Authentication failed')
+    loading.value = false
+    return
+  }
+  try {
+    await appStore.init()
+    if (appStore.needsOnboarding) {
+      router.push('/onboarding')
+    } else {
+      router.push('/dashboard')
+    }
+  } catch (e: unknown) {
+    error.value = extractApiError(e, 'Logged in but failed to load your workspace')
   } finally {
     loading.value = false
   }

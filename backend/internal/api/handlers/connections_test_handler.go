@@ -24,7 +24,7 @@ func (s *Server) TestConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	queries, done, err := s.UserQueries(r.Context(), userID)
+	queries, commit, done, err := s.UserQueries(r.Context(), userID)
 	if err != nil {
 		jsonServerError(w, "database error", err)
 		return
@@ -58,14 +58,14 @@ func (s *Server) TestConnection(w http.ResponseWriter, r *http.Request) {
 		pg, err := database.New(conn.Config)
 		if err != nil {
 			slog.Error("connection test failed", "connection_id", connID, "err", err)
-			result = testResult{Success: false, Message: fmt.Sprintf("Failed to initialize database connector: %v", err)}
+			result = testResult{Success: false, Message: "Failed to initialize database connector. Check your configuration."}
 			break
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		defer cancel()
 		if err := pg.Connect(ctx); err != nil {
 			slog.Error("connection test failed", "connection_id", connID, "err", err)
-			result = testResult{Success: false, Message: fmt.Sprintf("Failed to connect to database: %v", err)}
+			result = testResult{Success: false, Message: "Failed to connect to database. Verify host, port, and credentials."}
 		} else {
 			defer pg.Close()
 			result = testResult{Success: true, Message: "Connection established"}
@@ -74,14 +74,14 @@ func (s *Server) TestConnection(w http.ResponseWriter, r *http.Request) {
 		sb, err := logs.NewSupabase(conn.Config, conn.ID, userID, conn.AppID)
 		if err != nil {
 			slog.Error("connection test failed", "connection_id", connID, "err", err)
-			result = testResult{Success: false, Message: fmt.Sprintf("Invalid config: %v", err)}
+			result = testResult{Success: false, Message: "Invalid configuration. Check your settings."}
 			break
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 		defer cancel()
 		if err := sb.Connect(ctx); err != nil {
 			slog.Error("connection test failed", "connection_id", connID, "err", err)
-			result = testResult{Success: false, Message: fmt.Sprintf("Failed to connect to Supabase API: %v", err)}
+			result = testResult{Success: false, Message: "Failed to connect to Supabase API. Verify your project URL and service key."}
 		} else {
 			defer sb.Close()
 			result = testResult{Success: true, Message: "Connected to Supabase Management API"}
@@ -97,14 +97,14 @@ func (s *Server) TestConnection(w http.ResponseWriter, r *http.Request) {
 		f, err := logs.NewFlyio(conn.Config, conn.ID, userID, conn.AppID)
 		if err != nil {
 			slog.Error("connection test failed", "connection_id", connID, "err", err)
-			result = testResult{Success: false, Message: fmt.Sprintf("Invalid config: %v", err)}
+			result = testResult{Success: false, Message: "Invalid configuration. Check your settings."}
 			break
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 		defer cancel()
 		if err := f.Connect(ctx); err != nil {
 			slog.Error("connection test failed", "connection_id", connID, "err", err)
-			result = testResult{Success: false, Message: fmt.Sprintf("Failed to connect to Fly.io API: %v", err)}
+			result = testResult{Success: false, Message: "Failed to connect to Fly.io API. Verify your API token and app name."}
 		} else {
 			defer f.Close()
 			result = testResult{Success: true, Message: "Connected to Fly.io Machines API"}
@@ -113,14 +113,14 @@ func (s *Server) TestConnection(w http.ResponseWriter, r *http.Request) {
 		v, err := logs.NewVercel(conn.Config, conn.ID, userID, conn.AppID)
 		if err != nil {
 			slog.Error("connection test failed", "connection_id", connID, "err", err)
-			result = testResult{Success: false, Message: fmt.Sprintf("Invalid config: %v", err)}
+			result = testResult{Success: false, Message: "Invalid configuration. Check your settings."}
 			break
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 		defer cancel()
 		if err := v.Connect(ctx); err != nil {
 			slog.Error("connection test failed", "connection_id", connID, "err", err)
-			result = testResult{Success: false, Message: fmt.Sprintf("Failed to connect to Vercel API: %v", err)}
+			result = testResult{Success: false, Message: "Failed to connect to Vercel API. Verify your API token."}
 		} else {
 			defer v.Close()
 			result = testResult{Success: true, Message: "Connected to Vercel API"}
@@ -129,14 +129,14 @@ func (s *Server) TestConnection(w http.ResponseWriter, r *http.Request) {
 		rl, err := logs.NewRailway(conn.Config, conn.ID, userID, conn.AppID)
 		if err != nil {
 			slog.Error("connection test failed", "connection_id", connID, "err", err)
-			result = testResult{Success: false, Message: fmt.Sprintf("Invalid config: %v", err)}
+			result = testResult{Success: false, Message: "Invalid configuration. Check your settings."}
 			break
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 		defer cancel()
 		if err := rl.Connect(ctx); err != nil {
 			slog.Error("connection test failed", "connection_id", connID, "err", err)
-			result = testResult{Success: false, Message: fmt.Sprintf("Failed to connect to Railway API: %v", err)}
+			result = testResult{Success: false, Message: "Failed to connect to Railway API. Verify your API token and project ID."}
 		} else {
 			defer rl.Close()
 			result = testResult{Success: true, Message: "Connected to Railway GraphQL API"}
@@ -145,14 +145,14 @@ func (s *Server) TestConnection(w http.ResponseWriter, r *http.Request) {
 		mg, err := logs.NewMongoDB(conn.Config, conn.ID, userID, conn.AppID)
 		if err != nil {
 			slog.Error("connection test failed", "connection_id", connID, "err", err)
-			result = testResult{Success: false, Message: fmt.Sprintf("Invalid config: %v", err)}
+			result = testResult{Success: false, Message: "Invalid configuration. Check your settings."}
 			break
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 		defer cancel()
 		if err := mg.Connect(ctx); err != nil {
 			slog.Error("connection test failed", "connection_id", connID, "err", err)
-			result = testResult{Success: false, Message: fmt.Sprintf("Failed to connect to MongoDB Atlas API: %v", err)}
+			result = testResult{Success: false, Message: "Failed to connect to MongoDB Atlas API. Verify your API keys and project ID."}
 		} else {
 			defer mg.Close()
 			result = testResult{Success: true, Message: "Connected to MongoDB Atlas API"}
@@ -161,7 +161,7 @@ func (s *Server) TestConnection(w http.ResponseWriter, r *http.Request) {
 		sl, err := logs.NewSyslog(conn.Config, conn.ID, userID, conn.AppID, s.Queries)
 		if err != nil {
 			slog.Error("connection test failed", "connection_id", connID, "err", err)
-			result = testResult{Success: false, Message: fmt.Sprintf("Invalid config: %v", err)}
+			result = testResult{Success: false, Message: "Invalid configuration. Check your settings."}
 			break
 		}
 		cfg := sl.ParsedConfig()
@@ -185,6 +185,15 @@ func (s *Server) TestConnection(w http.ResponseWriter, r *http.Request) {
 		slog.Error("failed to update connection status", "connection_id", connID, "err", err)
 	}
 
+	if err := commit(); err != nil {
+		slog.Error("failed to commit connection status", "connection_id", connID, "err", err)
+		jsonServerError(w, "failed to persist test result", err)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
+	if !result.Success {
+		w.WriteHeader(http.StatusBadGateway)
+	}
 	json.NewEncoder(w).Encode(result)
 }

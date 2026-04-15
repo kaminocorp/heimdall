@@ -19,14 +19,33 @@ export function useAgent(existingConversationId?: string) {
 
   const wsUrl = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/chat`
 
-  const { data, status, send } = useWebSocket(wsUrl, {
+  const { data, status, send, updateOptions } = useWebSocket(wsUrl, {
     token: auth.token ?? undefined,
     conversationId: existingConversationId,
     appId: appStore.currentAppId ?? undefined,
   })
 
-  watch(data, (raw) => {
-    if (raw === null) return
+  // Reactively update WebSocket options when token or appId changes.
+  watch(
+    () => auth.token,
+    (newToken) => updateOptions({ token: newToken ?? undefined }),
+  )
+  watch(
+    () => appStore.currentAppId,
+    (newAppId) => updateOptions({ appId: newAppId ?? undefined }),
+  )
+
+  // Reset thinking/tool state when the WebSocket connection drops.
+  watch(status, (newStatus) => {
+    if (newStatus === 'closed') {
+      isThinking.value = false
+      activeTools.value = []
+    }
+  })
+
+  watch(data, (msg) => {
+    if (msg === null) return
+    const raw = msg.payload
     try {
       const parsed = JSON.parse(raw)
 
@@ -90,8 +109,8 @@ export function useAgent(existingConversationId?: string) {
         tool_calls: msg.tool_calls,
         timestamp: msg.timestamp ?? new Date().toISOString(),
       })
-    } catch {
-      // Ignore malformed messages.
+    } catch (e) {
+      console.warn('WebSocket: failed to parse message:', e)
     }
   })
 

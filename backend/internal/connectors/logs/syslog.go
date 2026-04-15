@@ -187,9 +187,11 @@ func (s *Syslog) Listen(ctx context.Context) error {
 	}
 }
 
-// Stream satisfies the StreamConnector interface but is unused — Listen is the
-// primary entry point. Kept for interface compatibility.
-func (s *Syslog) Stream(ctx context.Context, out chan<- []byte) error {
+// Stream satisfies the StreamConnector interface. The syslog connector is
+// listener-based (TCP/TLS), so it delegates to Listen() which writes directly
+// to the database. The out channel parameter is intentionally unused — syslog
+// messages are inserted as they arrive rather than being piped through a channel.
+func (s *Syslog) Stream(ctx context.Context, _ chan<- []byte) error {
 	return s.Listen(ctx)
 }
 
@@ -209,17 +211,25 @@ func (s *Syslog) Close() error {
 	}
 
 	// Wait for in-flight connections to finish, with a timeout.
-	done := make(chan struct{})
+	// Use a channel that is closed inline so the goroutine is joined
+	// in all code paths (avoiding a goroutine leak on timeout).
+	waitDone := make(chan struct{})
 	go func() {
 		s.wg.Wait()
-		close(done)
+		close(waitDone)
 	}()
 
+	timer := time.NewTimer(syslogShutdownTimeout)
+	defer timer.Stop()
+
 	select {
-	case <-done:
-	case <-time.After(syslogShutdownTimeout):
+	case <-waitDone:
+	case <-timer.C:
 		slog.Warn("syslog: shutdown timeout, some connections may not have drained",
 			"connection_id", s.connectionID)
+		// The wg.Wait goroutine will finish naturally once connections
+		// hit their read deadline (syslogReadTimeout). We accept the
+		// brief leak rather than blocking the caller indefinitely.
 	}
 
 	slog.Info("syslog listener stopped", "connection_id", s.connectionID)
@@ -269,7 +279,7 @@ func (s *Syslog) handleConnection(ctx context.Context, conn net.Conn) {
 			Severity:     severity,
 			Payload:      payload,
 			UserID:       s.userID,
-			AppID:        pgtype.UUID{Bytes: s.appID, Valid: true},
+			AppID:        s.appID,
 		})
 		if err != nil {
 			slog.Error("syslog: insert log entry", "err", err, "connection_id", s.connectionID)
@@ -299,9 +309,14 @@ type syslogMessage struct {
 	Raw       string `json:"raw"`
 }
 
-// RFC 5424 pattern: <PRI>VERSION SP TIMESTAMP SP HOSTNAME SP APP-NAME SP PROCID SP MSGID SP MSG
+// RFC 5424 pattern: <PRI>VERSION SP TIMESTAMP SP HOSTNAME SP APP-NAME SP PROCID SP MSGID SP STRUCTURED-DATA SP MSG
 // RFC 3164 pattern: <PRI>TIMESTAMP SP HOSTNAME SP MSG
-var rfc5424Re = regexp.MustCompile(`^<(\d{1,3})>\d+ (\S+) (\S+) (\S+) (\S+) (\S+) (.*)$`)
+// The STRUCTURED-DATA field is either "-" (nil) or one or more "[...]" blocks.
+// We capture it as group 7 and the message as group 8.
+// Group 7 captures the optional STRUCTURED-DATA field (either "-" or "[...]" blocks).
+// Group 8 captures the message. If STRUCTURED-DATA is absent (non-compliant but common),
+// group 7 will be empty and the message lands in group 8 via the fallthrough.
+var rfc5424Re = regexp.MustCompile(`^<(\d{1,3})>\d+ (\S+) (\S+) (\S+) (\S+) (\S+) (?:(-|(?:\[.*?\])+) )?(.*)$`)
 var rfc3164Re = regexp.MustCompile(`^<(\d{1,3})>(\w{3}\s+\d{1,2}\s\d{2}:\d{2}:\d{2}) (\S+) (.*)$`)
 
 // parseSyslogMessage attempts RFC 5424 first, then RFC 3164, then treats as raw.
@@ -317,7 +332,7 @@ func parseSyslogMessage(line string) syslogMessage {
 			AppName:   nilDash(m[4]),
 			ProcID:    nilDash(m[5]),
 			MsgID:     nilDash(m[6]),
-			Message:   strings.TrimSpace(m[7]),
+			Message:   strings.TrimSpace(m[8]),
 			Raw:       line,
 		}
 	}

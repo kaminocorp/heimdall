@@ -30,6 +30,7 @@ type Agent struct {
 	notifier     *notifications.Dispatcher
 	githubClient *github.Client
 	limiter      *rate.Limiter
+	mu           sync.Mutex // protects cancel and wg
 	cancel       context.CancelFunc
 	wg           sync.WaitGroup
 }
@@ -80,25 +81,35 @@ func (a *Agent) Start(ctx context.Context) {
 		return
 	}
 
+	a.mu.Lock()
 	if a.cancel != nil {
+		// Inline the stop sequence instead of calling Stop() to avoid
+		// releasing the lock (which would allow concurrent Stop/Start to
+		// observe inconsistent state). Nil-ing cancel under the lock means
+		// any concurrent Stop() becomes a no-op.
+		cancel := a.cancel
+		a.cancel = nil
+		a.mu.Unlock()
 		slog.Warn("agent already running, stopping previous instance before restart")
-		a.Stop()
+		cancel()
+		a.wg.Wait()
+		a.mu.Lock()
 	}
 	ctx, a.cancel = context.WithCancel(ctx)
 
-	a.wg.Add(1)
+	a.wg.Add(3)
+	a.mu.Unlock()
+
 	go func() {
 		defer a.wg.Done()
 		a.Monitor(ctx)
 	}()
 
-	a.wg.Add(1)
 	go func() {
 		defer a.wg.Done()
 		a.Prune(ctx)
 	}()
 
-	a.wg.Add(1)
 	go func() {
 		defer a.wg.Done()
 		a.InvestigationScheduler(ctx)
@@ -109,8 +120,13 @@ func (a *Agent) Start(ctx context.Context) {
 
 // Stop cancels the monitoring goroutine and waits for it to finish.
 func (a *Agent) Stop() {
-	if a.cancel != nil {
-		a.cancel()
+	a.mu.Lock()
+	cancel := a.cancel
+	a.cancel = nil
+	a.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
 	}
 	a.wg.Wait()
 	slog.Info("agent stopped")

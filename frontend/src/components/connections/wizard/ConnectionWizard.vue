@@ -112,7 +112,7 @@ function goBack() {
 }
 
 async function goNext() {
-  if (!selectedFlow.value) return
+  if (!selectedFlow.value || creating.value) return
 
   // If we're about to enter the test step, create the connection first.
   const nextStep = selectedFlow.value.steps[currentStepIndex.value + 1]

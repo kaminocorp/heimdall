@@ -86,7 +86,7 @@ func testSetup(t *testing.T) *testEnv {
 	)
 	require.NoError(t, err)
 
-	_, err = pool.Exec(ctx, "UPDATE users SET org_id = $1 WHERE id = $2", orgID, userID)
+	_, err = pool.Exec(ctx, "INSERT INTO org_members (user_id, org_id, role) VALUES ($1, $2, 'owner')", userID, orgID)
 	require.NoError(t, err)
 
 	appID := uuid.New()
@@ -139,11 +139,28 @@ func testSetup(t *testing.T) *testEnv {
 
 	// Mount all API routes exactly as router.go does (minus auth middleware).
 	router.Route("/api", func(r chi.Router) {
+		// Public routes
 		r.Post("/webhooks/logs", srv.IngestWebhookLogs)
+		r.Post("/v1/logs", srv.IngestOTLPLogs)
+		r.Get("/github/callback", srv.GitHubCallback)
 
 		// Organization & onboarding
 		r.Get("/org", srv.GetOrganization)
+		r.Put("/org", srv.UpdateOrganization)
+		r.Delete("/org", srv.DeleteOrganization)
 		r.Post("/onboard", srv.Onboard)
+
+		// All orgs the user belongs to
+		r.Get("/orgs", srv.ListUserOrganizations)
+		r.Post("/orgs", srv.CreateNewOrganization)
+
+		// Org membership management
+		r.Route("/org/members", func(r chi.Router) {
+			r.Get("/", srv.ListOrgMembers)
+			r.Post("/invite", srv.InviteMember)
+			r.Put("/{userId}/role", srv.UpdateMemberRole)
+			r.Delete("/{userId}", srv.RemoveMember)
+		})
 
 		// Applications
 		r.Get("/apps", srv.ListApplications)
@@ -159,6 +176,16 @@ func testSetup(t *testing.T) *testEnv {
 			r.Get("/monitoring/status", srv.GetMonitoringStatus)
 			r.Get("/stats", srv.GetAppDashboardStats)
 
+			// Notification management
+			r.Get("/notifications/preferences", srv.GetNotificationPreferences)
+			r.Put("/notifications/preferences", srv.UpdateNotificationPreferences)
+			r.Get("/notifications/channels", srv.ListNotificationChannels)
+			r.Post("/notifications/channels", srv.CreateNotificationChannel)
+			r.Put("/notifications/channels/{channelId}", srv.UpdateNotificationChannel)
+			r.Delete("/notifications/channels/{channelId}", srv.DeleteNotificationChannel)
+			r.Post("/notifications/channels/{channelId}/test", srv.TestNotificationChannel)
+			r.Get("/notifications/history", srv.ListNotificationHistory)
+
 			// Scheduled investigations (Phase 3)
 			r.Get("/schedules", srv.ListSchedules)
 			r.Post("/schedules", srv.CreateSchedule)
@@ -167,6 +194,9 @@ func testSetup(t *testing.T) *testEnv {
 			r.Post("/schedules/{id}/run", srv.RunScheduleNow)
 		})
 
+		// GitHub App integration
+		r.Get("/github/install", srv.InstallGitHub)
+
 		r.Route("/connections", func(r chi.Router) {
 			r.Get("/", srv.ListConnections)
 			r.Post("/", srv.CreateConnection)
@@ -174,6 +204,8 @@ func testSetup(t *testing.T) *testEnv {
 			r.Put("/{id}", srv.UpdateConnection)
 			r.Delete("/{id}", srv.DeleteConnection)
 			r.Post("/{id}/test", srv.TestConnection)
+			r.Get("/{id}/github/repos", srv.ListGitHubRepos)
+			r.Put("/{id}/github/repos", srv.UpdateGitHubRepos)
 		})
 
 		r.Get("/logs", srv.ListLogs)
@@ -184,11 +216,7 @@ func testSetup(t *testing.T) *testEnv {
 		})
 
 		r.Get("/auth/me", srv.Me)
-
-		r.Route("/reports", func(r chi.Router) {
-			r.Get("/", srv.ListReports)
-			r.Get("/{id}", srv.GetReport)
-		})
+		r.Get("/models", srv.GetAvailableModels)
 	})
 
 	return &testEnv{

@@ -1,5 +1,26 @@
 # Changelog
 
+- [0.42.20 — Post-Assessment Hardening](#04220--post-assessment-hardening-2026-04-15)
+- [0.42.19 — Final Production Hardening](#04219--final-production-hardening-2026-04-15)
+- [0.42.18 — Pre-Deploy Hardening](#04218--pre-deploy-hardening-2026-04-15)
+- [0.42.17 — Production Readiness Fixes](#04217--production-readiness-fixes-2026-04-15)
+- [0.42.16 — Post-Assessment Hardening](#04216--post-assessment-hardening-2026-04-15)
+- [0.42.15 — Medium-Severity Fixes](#04215--medium-severity-fixes-2026-04-15)
+- [0.42.14 — High-Severity Fixes](#04214--high-severity-fixes-2026-04-15)
+- [0.42.13 — Critical Security & Correctness Fixes](#04213--critical-security--correctness-fixes-2026-04-15)
+- [0.42.12 — Low-Severity Polish](#04212--low-severity-polish-2026-04-15)
+- [0.42.11 — Medium-Severity Fixes](#04211--medium-severity-fixes-2026-04-15)
+- [0.42.10 — High-Severity Hardening](#04210--high-severity-hardening-2026-04-14)
+- [0.42.9 — Critical Security & Correctness Fixes](#0429--critical-security--correctness-fixes-2026-04-14)
+- [0.42.8 — Concurrency, Correctness & Test Coverage](#0428--concurrency-correctness--test-coverage-2026-04-14)
+- [0.42.7 — Medium-Severity Fixes](#0427--medium-severity-fixes-2026-04-14)
+- [0.42.6 — Post-Assessment Hardening](#0426--post-assessment-hardening-2026-04-14)
+- [0.42.5 — Critical & High-Severity Fixes](#0425--critical--high-severity-fixes-2026-04-14)
+- [0.42.4 — File Length Refactoring](#0424--file-length-refactoring-2026-04-13)
+- [0.42.3 — Medium-Severity Fixes](#0423--medium-severity-fixes-2026-04-13)
+- [0.42.2 — High-Severity Fixes](#0422--high-severity-fixes-2026-04-13)
+- [0.42.1 — Post-Assessment Hardening](#0421--post-assessment-hardening-2026-04-13)
+- [0.42.0 — Multi-Org Support & Team Management](#0420--multi-org-support--team-management-2026-04-13)
 - [0.41.1 — Unified Connections Page: Three-Lane Layout](#0411--unified-connections-page-three-lane-layout-2026-04-13)
 - [0.41.0 — Neutral Canvas Colour Rebalance](#0410--neutral-canvas-colour-rebalance-2026-04-13)
 - [0.40.0 — Connection Wizard: Platform-First Redesign](#0400--connection-wizard-platform-first-redesign-2026-04-13)
@@ -88,6 +109,1502 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.42.20 — Post-Assessment Hardening (2026-04-15)
+
+Eleven fixes from a v0.42.19 production readiness assessment covering four high-severity bugs (stale page state, 401 interceptor race, host injection), and seven medium correctness and robustness improvements across backend handlers, frontend state lifecycle, and routing.
+
+### H1. OrgOverviewPage refetches apps on org switch
+**File:** `pages/org/OrgOverviewPage.vue`
+**Fix:** `fetchApps()` ran in `onMounted` only. When the user switched orgs via the dropdown while already on `/org`, Vue reused the component instance without re-mounting — the page showed the previous org's applications. Replaced `onMounted(fetchApps)` with `watch(() => appStore.organization?.id, () => fetchApps(), { immediate: true, flush: 'post' })` so data refetches whenever the org context changes.
+
+### H2. OrgTeamPage refetches members on org switch
+**File:** `pages/org/OrgTeamPage.vue`
+**Fix:** Same root cause as H1 — `fetchMembers()` ran in `onMounted` only. Applied the same reactive watch pattern.
+
+### H3. 401 interceptor no longer resets deduplication flag
+**File:** `api/client.ts`
+**Fix:** `isLoggingOut` was reset in the `finally` block before `window.location.href = '/login'` executed. Other in-flight 401 responses could re-enter the handler during the brief async gap, producing duplicate `auth.logout()` calls. Removed the `finally` reset entirely — the hard redirect destroys the JS context, making flag reset unnecessary.
+
+### H4. Postgres connector validates and escapes `Host`
+**File:** `connectors/database/postgres.go`
+**Fix:** `cfg.Host` was interpolated directly into the connection string. A crafted value like `evil.com?default_transaction_read_only=off&host=` could inject query parameters, disabling the read-only enforcement. Now validated against a hostname/IP regex and URL-escaped with `url.PathEscape` before interpolation.
+
+### M1. `Onboard` and `CreateNewOrganization` use `UserQueries`
+**File:** `handlers/organizations.go`
+**Fix:** Both handlers manually replicated the `UserQueries` pattern (begin tx, set RLS variable, commit/rollback) instead of calling the centralised helper. They missed the `context.WithoutCancel` that `UserQueries` uses for finalization — if a client disconnected mid-commit, the deferred rollback used a cancelled context. Refactored both to use `s.UserQueries()`.
+
+### M2. `CreateConnection` auth check inside transaction
+**File:** `handlers/connections.go`
+**Fix:** `GetApplicationByOrgUser` ran against `s.Queries` (un-transacted), then the insert ran inside a `UserQueries` transaction — a TOCTOU gap where a user could be removed from the org between the auth check and the write. Moved the auth check inside the `UserQueries` transaction.
+
+### M3. Chat handler uses `defer done()` via helper
+**File:** `handlers/chat.go`
+**Fix:** The conversation-setup transaction used manual `done()` calls in each early-return branch. Fragile — a future modification could forget `done()` in a new branch, leaking a transaction. Extracted the setup logic into `setupConversation()` where `defer done()` works naturally, returning the conversation ID and messages to the outer handler.
+
+### M4. LoginPage distinguishes auth vs init failure
+**File:** `pages/LoginPage.vue`
+**Fix:** After successful `auth.login()`, if `appStore.init()` threw (network error, 500), the catch block showed "Authentication failed" — misleading since authentication succeeded. Separated error handling: auth errors show "Authentication failed", init errors show "Logged in but failed to load your workspace".
+
+### M5. ProfileDropdown catches logout errors
+**File:** `components/common/ProfileDropdown.vue`
+**Fix:** `handleLogout` called `app.reset()` then `auth.logout()`. If `logout()` threw, app state was already cleared but the user stayed on the current page in a partially reset state. Wrapped in try/catch so navigation to `/login` proceeds regardless of logout outcome.
+
+### M6. WebSocket `onclose` skips status flash on intentional close
+**File:** `composables/useWebSocket.ts`
+**Fix:** When `updateOptions` closed the old socket and opened a new one, the old socket's async `onclose` fired after the new socket was already connecting, briefly setting `status = 'closed'`. The `useAgent` watcher on status resets `isThinking` and `activeTools` on `'closed'`, causing a visual glitch during token refresh. Now guards the `onclose` handler — skips `status = 'closed'` when `intentionalClose` is true.
+
+### M7. Org context detection uses `route.meta` instead of `startsWith`
+**Files:** `router/index.ts`, `layouts/DefaultLayout.vue`, `components/common/AppHeader.vue`
+**Fix:** `DefaultLayout` and `AppHeader` used `route.path.startsWith('/org')` to switch between org and app sidebars. Any future route starting with `/org` (e.g. `/organic`) would incorrectly trigger the org sidebar. Added `meta: { context: 'org' }` to all org routes and switched both components to `route.meta.context === 'org'`.
+
+---
+
+## 0.42.19 — Final Production Hardening (2026-04-15)
+
+Six fixes from a comprehensive cross-subsystem production readiness assessment covering one high-severity security gap, one high-severity frontend state bug, and four medium correctness and robustness improvements.
+
+### H1. Postgres connector validates SSLMode against allowlist
+**File:** `connectors/database/postgres.go`
+**Fix:** The `ssl_mode` field from connection config was interpolated directly into the connection URL without validation. A crafted value like `require&default_transaction_read_only=off` could inject additional query parameters, disabling the read-only enforcement that protects against LLM-generated write queries. Now validated against `{disable, require, verify-ca, verify-full}` before URL construction. The application-layer SQL validation (`tools_db.go`) remains the primary guard; this closes the defence-in-depth gap.
+
+### H2. OrgSettingsPage seeds form on late-arriving org data
+**File:** `pages/org/OrgSettingsPage.vue`
+**Fix:** The settings form was populated in `onMounted`, but if the app store hadn't finished its async init yet, `org` was null and the name/slug fields stayed blank. Replaced `onMounted` with a reactive `watch(org, ..., { immediate: true })` so the form is seeded as soon as org data becomes available — whether that's before or after mount.
+
+### M1. OrgSettingsPage sanitizes slug input
+**File:** `pages/org/OrgSettingsPage.vue`
+**Fix:** The slug edit field accepted arbitrary input (uppercase, spaces, special characters), relying entirely on backend validation. Added a `watch` on `editSlug` that applies the same sanitization pipeline used by `CreateOrgModal`: lowercase, strip non-alphanumeric characters (except hyphens), collapse consecutive hyphens, cap at 48 characters.
+
+### M2. StatusBadge renders `paused` and `archived` statuses
+**File:** `components/common/StatusBadge.vue`
+**Fix:** The data model defines `status: 'active' | 'paused' | 'archived'`, but StatusBadge only styled `active`, `inactive`, `error`, and `warning`. `paused` and `archived` apps rendered with no color classes at all — no border tint, no dot color, no glow. Now maps `paused` to the warn/amber style and `archived` to the inactive/muted style.
+
+### M3. Sole-owner guards run inside the transaction
+**File:** `handlers/org_members.go`
+**Fix:** `UpdateMemberRole` and `RemoveMember` both checked `CountOrgOwners` via `s.Queries` (outside the RLS-scoped transaction), then performed the write inside a separate `UserQueries()` transaction. Two concurrent requests to demote the last two owners could both pass the guard, then both commit, leaving zero owners. Moved the `GetOrgMembership` and `CountOrgOwners` reads inside the `UserQueries()` transaction so the guard and the write share the same transactional snapshot.
+
+### M4. `app.init()` deduplicates concurrent calls
+**File:** `stores/app.ts`
+**Fix:** `init()` had no re-entry guard — overlapping calls from `App.vue` mount and the login handler could race, issuing parallel `listUserOrganizations` + `listApplications` calls with unpredictable interleaving. Added a shared `initPromise` that deduplicates concurrent callers: the first call runs, subsequent calls await the same promise, and the promise is cleared on completion so future calls work normally. Also fixed `reset()` to clear `loading`, `selectOrgSeq`, and `initPromise` for complete state teardown.
+
+---
+
+## 0.42.18 — Pre-Deploy Hardening (2026-04-15)
+
+Six fixes from a comprehensive cross-subsystem review covering two high-severity concurrency bugs, two high-severity frontend state lifecycle issues, one medium commit-error handling gap, and one medium race condition in org switching.
+
+### H1. GitHub connector `Health()` no longer reads token without mutex
+**File:** `connectors/codebase/github.go`
+**Fix:** `Health()` read `g.token` directly without holding `g.mu`, racing with `refreshTokenIfNeeded()` which updates the token under the lock. Now calls `refreshTokenIfNeeded(ctx)` and uses the returned value, matching the pattern already used by `apiGet()`. Eliminates a data race under concurrent agent tool-use calls.
+
+### H2. `app.reset()` clears `initialized` flag
+**File:** `stores/app.ts`
+**Fix:** `reset()` cleared all reactive state and localStorage keys but left `initialized = true`. After a 401-triggered logout, the router guard saw `initialized === true` and skipped the init/onboarding flow — the app stayed on a stale page with empty state. Now sets `initialized = false` so the next navigation triggers a full `init()`.
+
+### H3. Agent `Start()` inlines stop sequence to close lifecycle race
+**File:** `agent/agent.go`
+**Fix:** `Start()` previously unlocked `a.mu`, called `Stop()` (which re-acquires the lock), then re-locked — leaving a window where concurrent `Stop()` or `Start()` calls could observe inconsistent state (cancel set but wg count stale). Now inlines the stop logic: nils `a.cancel` under the lock before releasing it for `cancel()` + `wg.Wait()`, so any concurrent `Stop()` becomes a no-op.
+
+### M1. 401 interceptor resets `isLoggingOut` after redirect
+**File:** `api/client.ts`
+**Fix:** The `isLoggingOut` deduplication flag was set on the first 401 but never reset. If the user logged back in within the same page session (no full reload), subsequent 401s were silently swallowed — the user got stuck in a zombie state where logout couldn't fire. Now resets in a `finally` block after the logout call completes.
+
+### M2. `selectOrg()` discards stale responses on rapid org switch
+**File:** `stores/app.ts`
+**Fix:** Rapidly switching orgs (A → B → C) caused the async `listApplications()` response from org B to overwrite org C's state when it resolved late. Added a monotonic sequence counter (`selectOrgSeq`); the response is only applied if the counter still matches the value captured before the fetch.
+
+### M3. `TestConnection` returns 500 on commit failure
+**File:** `handlers/connections_test_handler.go`
+**Fix:** When `commit()` failed after `UpdateConnectionStatus`, the error was logged but the handler continued to write a 200/502 HTTP response as if the status had been persisted. The UI showed "test passed" but the status wasn't saved. Now returns 500 and exits early if the commit fails.
+
+---
+
+## 0.42.17 — Production Readiness Fixes (2026-04-15)
+
+Eight fixes from a comprehensive production-readiness review covering one critical RLS bypass, two high-severity bugs, and five medium/low consistency and correctness improvements.
+
+### C1. `UpdateAppAgentConfig` now uses RLS-scoped transaction
+**File:** `handlers/applications.go`
+**Fix:** `UpdateAppAgentConfig` was the sole write handler bypassing `UserQueries` — it wrote via the unscoped `s.Queries` pool, skipping the `SET LOCAL app.current_user_id` RLS session variable. Now follows the same `UserQueries` + `commit()` + `defer done()` pattern as every other write handler.
+
+### H1. `TestConnection` status update no longer silently rolled back
+**File:** `handlers/connections_test_handler.go`
+**Fix:** The `commit` return from `UserQueries` was discarded (`_`), so `done()` always rolled back the transaction. `UpdateConnectionStatus` writes were lost — connections showed stale status after testing. Now captures and calls `commit()` after the status write.
+
+### H2. Post-delete navigation uses correct route name
+**File:** `pages/org/OrgSettingsPage.vue`
+**Fix:** After deleting an organisation, `router.push({ name: 'org' })` referenced a non-existent route (`'org'` vs the actual `'org-overview'`). The user was stranded on a dead page. Changed to `{ name: 'org-overview' }`.
+
+### M1. `app.reset()` clears localStorage on logout
+**File:** `stores/app.ts`
+**Fix:** `reset()` cleared reactive state but left `heimdall_current_org` and `heimdall_current_app` in localStorage. A different user logging into the same browser would briefly attempt to load the previous user's org/app data. Now calls `localStorage.removeItem` for both keys.
+
+### M2. SQL literal parser handles escaped single quotes (`''`)
+**File:** `agent/tools_db.go`, `agent/tools_db_test.go`
+**Fix:** PostgreSQL represents a literal `'` inside strings as `''` (two adjacent quotes). `stripAllLiterals` treated the second `'` as a closing delimiter, prematurely exiting the literal and potentially causing false rejections of valid queries. Now consumes `''` pairs and continues blanking inside the literal. Three new test cases added.
+
+### M3. `CreateOrgModal` uses centralised `extractApiError()`
+**File:** `components/org/CreateOrgModal.vue`
+**Fix:** Replaced inline `as { response?: { data?: ... } }` type assertion with the `extractApiError()` utility used by every other page. Picks up the `response.data.message` fallback path the inline version missed.
+
+### M4. 401 interceptor deduplicates logout on session expiry
+**File:** `api/client.ts`
+**Fix:** When a session expires, multiple in-flight requests each independently called `auth.logout()` and set `window.location.href`. Added an `isLoggingOut` guard so only the first 401 triggers the logout/redirect cycle.
+
+### L1. Removed unused `formatRelativeTime` import
+**File:** `components/org/AppCard.vue`
+**Fix:** `formatRelativeTime` was imported but never used (only `formatDate` is referenced in the template). Removed the dead import.
+
+---
+
+## 0.42.16 — Post-Assessment Hardening (2026-04-15)
+
+Eleven fixes from the v0.42 comprehensive code assessment, spanning one critical production-blocking bug, three high-severity issues, and seven medium correctness/consistency improvements.
+
+### C1. MaxBodySize middleware no longer blocks webhook/OTLP ingestion
+**Files:** `api/router.go`, `middleware/cors.go`
+**Fix:** The global 1MB `MaxBodySize` middleware was wrapping request bodies *before* the webhook/OTLP handlers could apply their own 10MB limit. Moved `MaxBodySize` into the authenticated route group so ingestion endpoints are exempt. This was a production-blocking bug — large webhook payloads would silently fail with a generic "request body too large" error.
+
+### H1. GitHub connector token access is now thread-safe
+**File:** `connectors/codebase/github.go`
+**Fix:** Added `sync.Mutex` around `token` and `tokenExpiresAt` fields. `refreshTokenIfNeeded` now returns the token under the lock, and `apiGet` uses the returned value instead of reading the field directly. Prevents a data race when concurrent agent tool-use calls trigger simultaneous token refreshes.
+
+### H2. SQL read-only validation handles PostgreSQL dollar-quoting
+**File:** `agent/tools_db.go`
+**Fix:** `containsSemicolon` and `containsWriteKeyword` now strip `$$..$$` and `$tag$..$tag$` dollar-quoted literals alongside single-quoted strings. Also extended write-keyword scanning to SELECT/EXPLAIN statements (previously only applied to CTE/WITH). Defence-in-depth — the Postgres connector's `default_transaction_read_only=on` remains the primary guard.
+
+### H3. ESLint config excludes `dist/` build artifacts
+**File:** `frontend/eslint.config.js`
+**Fix:** Added `{ ignores: ['dist/**'] }` to the flat config array. `npm run lint` previously scanned compiled build output, inflating the error count from 33 (source-only) to 2113.
+
+### M1. `UserQueries` uses rollback-by-default transaction pattern
+**File:** `handlers/userqueries.go` + 27 call sites across 12 handler files
+**Fix:** Changed return signature from `(queries, done, err)` to `(queries, commit, done, err)`. `done()` now rolls back by default (safe to defer). Write handlers must call `commit()` explicitly on the success path. Read-only handlers use `_` for the commit return. This prevents partial commits when a handler returns early after a successful first write.
+
+### M2. Notification write handlers use RLS-scoped transactions
+**File:** `handlers/notifications.go`
+**Fix:** `CreateNotificationChannel`, `UpdateNotificationChannel`, `DeleteNotificationChannel`, and `UpdateNotificationPreferences` now use `UserQueries` instead of the unscoped `s.Queries`. This ensures RLS policies are active for notification writes, matching the defence-in-depth pattern used by all other write handlers.
+
+### M3. Scheduler marks failure on LLM provider error
+**File:** `agent/scheduler.go`
+**Fix:** When `providerFailed` is true, the scheduler now calls `markRunError` to advance `last_run_at`. Previously it returned silently without advancing the cursor, causing a tight retry loop (every 60s) that burned rate-limiter tokens while the provider was down.
+
+### M4. MongoDB hostname resolution retries on transient failure
+**File:** `connectors/logs/mongodb.go`
+**Fix:** Replaced `sync.Once` caching with a mutex-guarded cache that only stores successful lookups. A transient DNS or network failure no longer permanently caches the error — the next `Poll` retries the lookup.
+
+### M5. OrgTeamPage reverts role on failed API call
+**File:** `pages/org/OrgTeamPage.vue`
+**Fix:** `handleRoleChange` now saves `oldRole` before the optimistic update and reverts `member.role` in the catch block. Previously the UI displayed the new role even when the server rejected the change.
+
+### M6. NotificationChannels requires confirmation before delete
+**File:** `components/notifications/NotificationChannels.vue`
+**Fix:** Replaced immediate delete-on-click with a confirmation modal (backdrop + Cancel/Delete buttons), matching the confirmation pattern used throughout the rest of the app for destructive actions.
+
+### M7. Consistent `extractApiError` usage across org pages
+**Files:** `pages/org/OrgTeamPage.vue`, `pages/org/OrgSettingsPage.vue`, `pages/org/OrgOverviewPage.vue`
+**Fix:** Replaced 6 instances of inline `as { response?: { data?: ... } }` error type casting with the centralised `extractApiError()` utility. Eliminates duplicated fragile error-extraction logic.
+
+---
+
+## 0.42.15 — Medium-Severity Fixes (2026-04-15)
+
+Twenty-five of twenty-eight medium issues from the v0.42.10 code assessment. M1 was already resolved by C2, M6 was a false positive (no change needed), and M25 (redundant index) is deferred. Covers correctness, consistency, hardening, and cleanup across both backend and frontend.
+
+### M2. Dead `tools_memory.go` removed
+**Fix:** Deleted placeholder file containing only a deferred-to-Phase-5 comment.
+
+### M3. Malformed cron expressions emit to Activity feed
+**Files:** `agent/scheduler.go`, `agent/scheduler_test.go`
+**Fix:** `shouldFire` now returns `(bool, string)` — the string carries the parse error message. `schedulerTick` emits an agent_log entry so broken schedules are visible in the Activity feed, not just server logs.
+
+### M4. `notifications.ts` refactored to `async/await`
+**File:** `api/notifications.ts`
+**Fix:** All 8 functions converted from `.then(r => r.data)` to `async/await` with explicit return types, matching every other API module.
+
+### M5. GitHub Health() drains response body
+**File:** `connectors/codebase/github.go`
+**Fix:** Added `io.Copy(io.Discard, resp.Body)` before close to allow HTTP connection reuse.
+
+### M7. Syslog Stream() contract documented
+**File:** `connectors/logs/syslog.go`
+**Fix:** Documented why the `out` channel parameter is unused (listener writes directly to DB). Renamed param to `_` for clarity.
+
+### M8. ConnectionForm number field uses `undefined` sentinel
+**File:** `components/connections/ConnectionForm.vue`
+**Fix:** Replaced `'' as unknown as number` type assertion with `undefined` for empty numeric fields.
+
+### M9. BaseSelect keyboard navigation validates bounds
+**File:** `components/common/BaseSelect.vue`
+**Fix:** `scrollToFocused()` now checks `focusedIndex` is within `[0, children.length)` before accessing DOM.
+
+### M10. NotificationsPage template refs — already correct
+**Assessment note:** Both child components already use `defineExpose` and the parent types refs via `InstanceType<typeof Component>`. No change needed.
+
+### M11. Auth refresh distinguishes auth vs transient errors
+**File:** `stores/auth.ts`
+**Fix:** `init()` now checks whether a refresh failure is an auth error (401/403, revoked token) vs transient (network, 500). Transient errors keep the cached session; auth errors clear it.
+
+### M12. API client uses synchronous toast import
+**File:** `api/client.ts`
+**Fix:** Replaced `import('@/composables/useToast').then(...)` with a top-level `import` so toasts display before redirect.
+
+### M13. ScheduleModal resets custom cron on mode switch
+**File:** `components/schedules/ScheduleModal.vue`
+**Fix:** Added a `watch(mode)` that clears `customCron` when switching away from custom mode.
+
+### M14. StepTest uses `extractApiError`
+**File:** `components/connections/wizard/steps/StepTest.vue`
+**Fix:** Replaced manual `err.response?.data?.message ?? err.message` chain with `extractApiError()`.
+
+### M15. `UpdateOrganization` validates slug format
+**File:** `handlers/organizations.go`
+**Fix:** Applied `slugRe.MatchString(req.Slug)` validation, matching the existing pattern in `CreateNewOrganization` and `Onboard`.
+
+### M16. Organization ref typed as `OrganizationWithRole`
+**File:** `stores/app.ts`
+**Fix:** Changed `ref<Organization | null>` to `ref<OrganizationWithRole | null>`. Fixed `onboard()` to spread `role: 'owner'` onto `organization.value`.
+
+### M17. Org delete re-initializes instead of forcing onboarding
+**File:** `pages/org/OrgSettingsPage.vue`
+**Fix:** After delete, calls `appStore.init()` instead of `reset()`. Routes to org selector if other orgs exist, onboarding only if none remain.
+
+### M18. Scheduler semaphore created once, not per tick
+**File:** `agent/scheduler.go`
+**Fix:** Semaphore hoisted from `schedulerTick` to `InvestigationScheduler`, passed as parameter. Matches the monitor pattern and prevents concurrent ticks from exceeding `maxConcurrentSchedules`.
+
+### M19. `toolQueryDatabase` connection-per-query documented
+**File:** `agent/tools_db.go`
+**Fix:** Added TODO comment documenting the no-pooling limitation and the recommended fix (cache connectors per connection ID for loop duration).
+
+### M20. GitHub installation token refreshes before expiry
+**File:** `connectors/codebase/github.go`
+**Fix:** Tracks `tokenExpiresAt` from the GitHub API response. `refreshTokenIfNeeded()` proactively refreshes when within 10 minutes of expiry. Called before every `apiGet`.
+
+### M21. Auth state change resets app store
+**File:** `stores/auth.ts`
+**Fix:** `onAuthStateChange` callback now calls `appStore.reset()` when session transitions from authenticated to null.
+
+### M22. Global `MaxBytesReader` middleware (1MB)
+**Files:** `middleware/cors.go`, `api/router.go`
+**Fix:** New `MaxBodySize` middleware applied globally. Caps request bodies at 1MB. The webhook endpoint's own `io.LimitReader(10MB)` takes precedence for its route.
+
+### M23. CORS preflight caches for 1 hour
+**File:** `middleware/cors.go`
+**Fix:** Added `Access-Control-Max-Age: 3600` to OPTIONS responses.
+
+### M24. Admin cannot attempt to remove owner in UI
+**File:** `pages/org/OrgTeamPage.vue`
+**Fix:** Added `&& member.role !== 'owner'` to remove button's `v-if` condition.
+
+### M25. Redundant index — deferred
+**Status:** Low write overhead, requires a dedicated migration. Deferred per assessment recommendation.
+
+### M26. `InviteMember` catches unique constraint race
+**File:** `handlers/org_members.go`
+**Fix:** Catches duplicate key / unique constraint error from `CreateOrgMember` and returns 409 instead of 500.
+
+### M27. LumberClassifier validates output count
+**File:** `agent/classifier_lumber.go`
+**Fix:** Added `len(events) != len(logs)` guard after `ClassifyBatch`. On mismatch, logs an error and escalates all logs (same fallback as classification failure).
+
+### M28. MongoDB hostname uses `sync.Once`
+**File:** `connectors/logs/mongodb.go`
+**Fix:** Replaced manual double-checked locking with `sync.Once`. Eliminates duplicate API calls from concurrent `Poll` invocations.
+
+### Files changed
+
+| File | Kind | Summary |
+|------|------|---------|
+| `agent/tools_memory.go` | Deleted | Dead placeholder file |
+| `agent/scheduler.go` | Fix | `shouldFire` returns error msg; semaphore hoisted |
+| `agent/scheduler_test.go` | Update | Tests for new `shouldFire` signature |
+| `agent/classifier_lumber.go` | Fix | Output length guard |
+| `agent/tools_db.go` | Doc | Connection-per-query TODO |
+| `api/notifications.ts` | Refactor | `async/await` pattern |
+| `connectors/codebase/github.go` | Fix | Token refresh + body drain |
+| `connectors/logs/syslog.go` | Doc | Stream() contract |
+| `connectors/logs/mongodb.go` | Fix | `sync.Once` hostname cache |
+| `ConnectionForm.vue` | Fix | `undefined` sentinel for empty numbers |
+| `BaseSelect.vue` | Fix | Bounds check on keyboard nav |
+| `stores/auth.ts` | Fix | Transient vs auth error; app store reset |
+| `api/client.ts` | Fix | Synchronous toast import |
+| `ScheduleModal.vue` | Fix | Reset custom cron on mode switch |
+| `StepTest.vue` | Fix | `extractApiError` usage |
+| `handlers/organizations.go` | Fix | Slug validation on update |
+| `stores/app.ts` | Fix | `OrganizationWithRole` ref type + onboard role |
+| `OrgSettingsPage.vue` | Fix | `init()` after org delete |
+| `OrgTeamPage.vue` | Fix | Hide remove for owners |
+| `handlers/org_members.go` | Fix | TOCTOU race → 409; limitation documented |
+| `middleware/cors.go` | Fix | `Max-Age` header + `MaxBodySize` middleware |
+| `api/router.go` | Fix | Apply `MaxBodySize` globally |
+
+---
+
+## 0.42.14 — High-Severity Fixes (2026-04-15)
+
+All eleven high-severity issues from the v0.42.10 code assessment. Fixes onboarding defaults, standardizes connector error handling, adds panic recovery to background goroutines, guards against UI double-clicks, removes dead code, and documents deferred multi-member org scoping.
+
+### H1. Onboard handler uses `agent.DefaultModelID` and sets Provider
+
+**File:** `handlers/organizations.go`
+**Issue:** The Onboard handler hardcoded `"claude-sonnet-4-6"` and omitted the `Provider` field, while `CreateApplication` correctly used `agent.DefaultModelID` and set `Provider: "anthropic"`. Apps created via onboarding had an empty Provider.
+**Fix:** Replaced hardcoded model with `agent.DefaultModelID` and added `Provider: "anthropic"`.
+
+### H2. `json.Marshal` errors handled in 4 connectors
+
+**Files:** `connectors/logs/flyio.go`, `vercel.go`, `railway.go`, `mongodb.go`
+**Issue:** All four used `payload, _ := json.Marshal(...)`, silently ignoring marshal errors. A nil payload would corrupt the DB entry.
+**Fix:** Check the error and `continue` (skip the entry) on failure, matching the Supabase connector pattern.
+
+### H3. Standardized poll error handling across connectors
+
+**Files:** `connectors/logs/flyio.go`, `vercel.go`, `railway.go`, `mongodb.go`
+**Issue:** These four connectors `return`ed immediately on the first insert error, aborting the entire polling batch. The Supabase connector used `continue` to skip bad rows.
+**Fix:** Changed all four from `return fmt.Errorf(...)` to `continue` on insert error, matching Supabase. A single malformed entry no longer blocks the entire poll cycle.
+
+### H4. `StopAll()` WaitGroup sufficiency documented
+
+**File:** `connectors/listener.go`
+**Issue:** `Stop()` waits on individual done channels; `StopAll()` uses only `wg.Wait()`. Subtle ordering inconsistency.
+**Fix:** Added comment explaining why `wg.Wait()` is sufficient — goroutines call `wg.Done()` as their final action.
+
+### H5. ConnectionWizard double-click guard on `goNext()`
+
+**File:** `components/connections/wizard/ConnectionWizard.vue`
+**Issue:** The "Continue" button was `:disabled="creating"`, but Vue batches DOM updates. Two click events in the same frame could both enter `goNext()` before the button was visually disabled.
+**Fix:** Added `creating.value` check as an early return in `goNext()` — a JS-level guard that doesn't depend on DOM update timing.
+
+### H6. NotificationChannels error handling on list refetch
+
+**File:** `components/notifications/NotificationChannels.vue`
+**Issue:** After a successful save, `listNotificationChannels()` was called to refresh the list. If that refetch failed, the UI showed stale data with no indication.
+**Fix:** Wrapped the refetch in a nested try/catch. On failure, a toast alerts the user to reload.
+
+### H7. Dead API exports removed
+
+**Files:** `api/applications.ts`, `api/connections.ts`, `api/conversations.ts`
+**Issue:** `getApplication()`, `getConnection()`, and `listConversations()` were exported but never imported anywhere.
+**Fix:** Removed all three. Cleaned up the now-unused `ConversationSummary` import.
+
+### H8. Migration 026 rollback guard for multi-org data
+
+**File:** `migrations/026_org_members.down.sql`
+**Issue:** The down migration silently discarded all org memberships except the earliest per user — permanent data loss for multi-org users.
+**Fix:** Added a `DO $$ ... RAISE EXCEPTION ... $$` guard that aborts the rollback if any user has memberships in more than one org.
+
+### H9. Multi-member org scoping limitation documented (deferred)
+
+**File:** `handlers/org_members.go`
+**Issue:** Leaf data tables (`connections`, `log_buffer`, `conversations`, `agent_log`, `investigations`) are user-scoped, not org-scoped. New team members see empty dashboards.
+**Fix:** Documented the limitation in the `InviteMember` handler. Full org-scoping rewrite deferred to a future release — requires RLS policy changes, leaf query rewrites, and a migration.
+
+### H10. Panic recovery in monitor/scheduler per-app goroutines
+
+**Files:** `agent/monitor.go`, `agent/scheduler.go`
+**Issue:** Per-app goroutines had no `recover()`. A panic would crash the entire server and hang `Stop()` indefinitely (via stuck `wg.Wait()`).
+**Fix:** Added `defer func() { if r := recover(); r != nil { slog.Error(...) } }()` to both `monitorTick` and `schedulerTick` goroutines.
+
+### H11. Agent log emitted when flagged logs exceed per-cycle cap
+
+**File:** `agent/monitor.go`
+**Issue:** When `len(flagged) > maxFlaggedForLLM`, excess logs were silently dropped. The cursor advanced past them, so they were never reassessed.
+**Fix:** Emit an agent_log entry noting the drop count, total flagged, and cap value. The dropped logs still advance past the cursor (changing that risks infinite reprocessing loops), but the team now has Activity feed visibility into the cap being hit.
+
+### Files changed
+
+| File | Kind | Summary |
+|------|------|---------|
+| `handlers/organizations.go` | Fix | `agent.DefaultModelID` + `Provider: "anthropic"` |
+| `connectors/logs/flyio.go` | Fix | Marshal error check + `continue` on insert error |
+| `connectors/logs/vercel.go` | Fix | Marshal error check + `continue` on insert error |
+| `connectors/logs/railway.go` | Fix | Marshal error check + `continue` on insert error |
+| `connectors/logs/mongodb.go` | Fix | Marshal error check + `continue` on insert error |
+| `connectors/listener.go` | Doc | Comment on `StopAll` WaitGroup sufficiency |
+| `wizard/ConnectionWizard.vue` | Fix | `creating.value` early return in `goNext()` |
+| `NotificationChannels.vue` | Fix | Refetch error handling with toast fallback |
+| `api/applications.ts` | Cleanup | Removed dead `getApplication()` |
+| `api/connections.ts` | Cleanup | Removed dead `getConnection()` |
+| `api/conversations.ts` | Cleanup | Removed dead `listConversations()` + unused import |
+| `migrations/026_org_members.down.sql` | Guard | `RAISE EXCEPTION` if multi-org memberships exist |
+| `handlers/org_members.go` | Doc | Documented leaf-table user-scoping limitation |
+| `agent/monitor.go` | Fix | Panic recovery + flagged-cap agent_log emit |
+| `agent/scheduler.go` | Fix | Panic recovery in per-schedule goroutines |
+
+---
+
+## 0.42.13 — Critical Security & Correctness Fixes (2026-04-15)
+
+All four critical issues from the v0.42.10 code assessment. Hardens SQL validation against CTE-based write injection, replaces a fragile provider-error string match with a typed return value, scopes ActivityPage connections to the current app, and enforces NOT NULL on `app_id` across leaf data tables.
+
+### C1. `isReadOnlySQL` hardened against CTE writes and multi-statement injection
+
+**File:** `agent/tools_db.go`
+**Issue:** The read-only SQL validator only checked whether the query started with `SELECT`, `EXPLAIN`, or `WITH`. A CTE like `WITH x AS (DELETE FROM users RETURNING *) SELECT * FROM x` passed the check. Multi-statement injection via `;` (`SELECT 1; DROP TABLE users`) was also unguarded. The Postgres connector's `default_transaction_read_only=on` mitigated this at the DB layer, but the application-layer check was incomplete — a future non-Postgres connector would have no protection.
+**Fix:** (1) Reject queries containing `;` outside of single-quoted string literals. (2) For `WITH`-prefixed queries, scan the normalized statement for write keywords (`INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER`, `TRUNCATE`, `CREATE`, `GRANT`, `REVOKE`) as whole words, stripping string literals to avoid false positives on data values like `'DELETE ME'`. Added 26 test cases covering allowed queries, CTE attacks, multi-statement injection, comments, and edge cases.
+
+### C2. Provider error detection uses typed return value instead of string match
+
+**Files:** `agent/loop.go`, `agent/monitor.go`, `agent/scheduler.go`
+**Issue:** `RunMonitoring` returned a hardcoded string `"Monitoring assessment failed: provider error"` when the LLM failed. The caller in `monitorApp` detected this via `strings.Contains(assessment, "provider error")`. If either string drifted, the monitoring cursor would advance past logs that were never assessed — permanent data loss.
+**Fix:** `RunMonitoring` now returns a third value `providerFailed bool`. The monitor and scheduler check this boolean directly instead of pattern-matching on the assessment string. The string-based contract is eliminated entirely.
+
+### C3. ActivityPage scoped to current app's connections
+
+**File:** `pages/ActivityPage.vue`
+**Issue:** `onMounted` called `connectionsStore.fetchConnections()` which hits `GET /connections` — returning all connections across all apps for the user. The connection filter dropdown showed connections from other apps. The app-switch watcher refetched logs but not connections, leaving stale cross-app data.
+**Fix:** Changed to `connectionsStore.fetchConnectionsByApp(appId)` matching the pattern already used by `ConnectionsPage`. Added connection refetch to the `currentAppId` watcher so switching apps updates both logs and connections.
+
+### C4. `app_id` NOT NULL constraint on `log_buffer` and `agent_log`
+
+**Files:** `migrations/029_app_id_not_null.up.sql`, `migrations/029_app_id_not_null.down.sql`, sqlc-regenerated files, 10 callers updated
+**Issue:** Migration 025 added `app_id` as nullable with a partial backfill. Rows that didn't match the backfill conditions retained `NULL app_id` permanently. These rows were invisible to the Activity feed (`app_id = $1` filters excluded them) but represented gaps in monitoring history and a schema integrity violation.
+**Fix:** New migration 029: (1) deletes orphaned rows where `app_id IS NULL` (already invisible to queries), (2) adds `NOT NULL` constraint on both tables, (3) replaces partial indexes (`WHERE app_id IS NOT NULL`) with full indexes. sqlc regenerated to produce `uuid.UUID` instead of `pgtype.UUID` for these fields. Ten callers across connectors, handlers, and agent code updated from `pgtype.UUID{Bytes: x, Valid: true}` to plain `uuid.UUID`.
+
+### Files changed
+
+| File | Kind | Summary |
+|------|------|---------|
+| `agent/tools_db.go` | Rewrite | `isReadOnlySQL` + `containsSemicolon`, `containsWriteKeyword`, `stripStringLiterals` helpers |
+| `agent/tools_db_test.go` | New | 26 test cases for SQL validation |
+| `agent/loop.go` | Signature | `RunMonitoring` returns `(string, string, bool)` |
+| `agent/monitor.go` | Fix | Uses `providerFailed` bool; removed `pgtype` import |
+| `agent/scheduler.go` | Fix | Handles `providerFailed` from `RunMonitoring` |
+| `agent/monitor_test.go` | Update | Three tests updated for new return signature |
+| `agent/emit.go` | Fix | `pgtype.UUID` → `uuid.UUID` for `app_id` |
+| `pages/ActivityPage.vue` | Fix | `fetchConnectionsByApp(appId)` + watcher refetch |
+| `migrations/029_app_id_not_null.up.sql` | New | NOT NULL constraint + index rebuild |
+| `migrations/029_app_id_not_null.down.sql` | New | Rollback to nullable + partial indexes |
+| `handlers/logs.go` | Fix | `pgtype.UUID` → `uuid.UUID` + `hasAppID` bool |
+| `handlers/applications.go` | Fix | `pgtype.UUID` → `uuid.UUID` for dashboard stats |
+| `handlers/webhooks.go` | Fix | `pgtype.UUID` → `uuid.UUID` for log insert |
+| `handlers/otlp.go` | Fix | `pgtype.UUID` → `uuid.UUID` for log insert |
+| `connectors/logs/flyio.go` | Fix | `pgtype.UUID` → `uuid.UUID` |
+| `connectors/logs/mongodb.go` | Fix | `pgtype.UUID` → `uuid.UUID` |
+| `connectors/logs/railway.go` | Fix | `pgtype.UUID` → `uuid.UUID`; removed `pgtype` import |
+| `connectors/logs/supabase.go` | Fix | `pgtype.UUID` → `uuid.UUID` |
+| `connectors/logs/syslog.go` | Fix | `pgtype.UUID` → `uuid.UUID` |
+| `connectors/logs/vercel.go` | Fix | `pgtype.UUID` → `uuid.UUID` |
+| `db/*.sql.go` | Regenerated | sqlc output reflects NOT NULL `app_id` |
+
+---
+
+## 0.42.12 — Low-Severity Polish (2026-04-15)
+
+Eleven of fifteen low-severity items from the v0.42.8 code assessment. Adds input validation, fixes a syslog parsing accuracy issue, removes dead types, and tightens the classifier escalation policy. Four items accepted as-is or deferred.
+
+### L2. Email format validation on invite
+
+**File:** `handlers/org_members.go`, `handlers/helpers.go`
+**Issue:** `InviteMember` accepted any non-empty string as an email address.
+**Fix:** Added `isValidEmail()` using Go's `net/mail.ParseAddress`. Rejects display names, checks for a dot in the domain, and caps length at 254 characters.
+
+### L3. Notification email recipients validated and capped
+
+**File:** `handlers/notifications.go`
+**Issue:** Email notification channel config accepted any strings as recipients with no count limit. Typos or injection of non-email strings would only fail at send time.
+**Fix:** Each recipient is validated with `isValidEmail()`. Maximum 20 recipients per channel.
+
+### L5. TestConnection returns 502 on failure
+
+**File:** `handlers/connections_test_handler.go`
+**Issue:** `POST /connections/{id}/test` always returned HTTP 200 with `{"success": false}` on test failure. Clients relying on status codes couldn't distinguish success from failure.
+**Fix:** Returns `502 Bad Gateway` when `result.Success == false`.
+
+### L6. RFC 5424 regex now handles STRUCTURED-DATA
+
+**File:** `connectors/logs/syslog.go`
+**Issue:** The regex lumped the RFC 5424 STRUCTURED-DATA field into the message capture group. Structured data blocks like `[exampleSDID@32473 iut="3"]` were incorrectly appended to the message text.
+**Fix:** Added an optional capture group for STRUCTURED-DATA (`-` or `[...]` blocks). The message is now captured in group 8. The group is optional to handle non-compliant syslog implementations that omit it.
+
+### L8. WSMessage union includes tool_start/tool_result types
+
+**File:** `types/agent.ts`
+**Issue:** The `WSMessage` discriminated union was missing `WSToolStartMessage` and `WSToolResultMessage` interfaces. The `useAgent` composable handled these message types but TypeScript had no exhaustiveness checking.
+**Fix:** Added both interfaces and included them in the union.
+
+### L9. Dead `PaginatedResponse<T>` type removed
+
+**File:** `types/api.ts`
+**Issue:** `PaginatedResponse<T>` used `page`/`per_page` pagination but was never imported anywhere. The logs API uses its own `PaginatedLogs` type with `limit`/`offset`.
+**Fix:** Removed the dead type.
+
+### L10. Toast timers cleared on manual dismiss
+
+**File:** `composables/useToast.ts`
+**Issue:** Manually dismissing a toast left a dangling `setTimeout` callback that would fire after `duration` ms, calling `dismiss()` again on an already-removed toast.
+**Fix:** Track timers in a `Map<number, Timeout>`. `dismiss()` calls `clearTimeout` before removing the toast.
+
+### L12. `deleteNotificationChannel` returns `void`
+
+**File:** `api/notifications.ts`
+**Issue:** Returned the raw `AxiosResponse` instead of `void`, inconsistent with all other API functions that chain `.then(r => r.data)`.
+**Fix:** Added `.then(() => {})` and explicit `Promise<void>` return type.
+
+### L13. `SupabaseURL` no longer required in config validation
+
+**File:** `config/config.go`
+**Issue:** `Validate()` required `SUPABASE_URL` but the value was never consumed by the agent, connectors, or handlers in the reviewed code. Missing it would prevent the server from starting even when Supabase connectors weren't configured.
+**Fix:** Removed from `Validate()`. The field is still loaded and available for the Supabase connector when configured.
+
+### L14. Classifier no longer escalates on low confidence alone
+
+**File:** `agent/classifier_lumber.go`
+**Issue:** `Confidence < 0.5` alone triggered escalation regardless of the severity gate. A poorly calibrated model would escalate nearly everything, inflating noise metrics and LLM API costs.
+**Fix:** Removed the confidence check. Escalation is now solely determined by `ShouldEscalate(event)` which checks type, category, and severity.
+
+### L15. Consistent `public.` schema prefix in 026 rollback
+
+**File:** `migrations/026_org_members.down.sql`
+**Issue:** One policy JOIN referenced `users` without the `public.` schema prefix while others used `public.users`. On databases where `public` is not in `search_path`, the unqualified reference could fail.
+**Fix:** Changed to `public.users` for consistency.
+
+### Accepted / Deferred
+
+- **L1** (duplicated `jsonError` in middleware vs handlers): Intentional — the packages cannot share a private function without creating a circular dependency or a new shared package. The 4-line function is acceptable duplication.
+- **L4** (`persistMessages` swallows errors): Intentional fire-and-forget design for the WebSocket chat flow. Blocking on persistence would freeze the UI. Errors are logged server-side.
+- **L7** (Railway unused `ServiceID`/`EnvironmentID` fields): Removing them would break existing connection configs stored in the database. Deferred until the Railway connector adds per-service filtering.
+- **L11** (duplicate unique index on `organizations.slug`): Requires a migration to drop the redundant index. Marginal write overhead. Deferred.
+
+### Files changed
+
+| File | Kind | Summary |
+|------|------|---------|
+| `handlers/helpers.go` | New fn | `isValidEmail()` using `net/mail` |
+| `handlers/org_members.go` | Fix | Email validation on invite |
+| `handlers/notifications.go` | Fix | Email validation + 20-recipient cap |
+| `handlers/connections_test_handler.go` | Fix | 502 status on test failure |
+| `connectors/logs/syslog.go` | Fix | RFC 5424 STRUCTURED-DATA capture |
+| `agent/classifier_lumber.go` | Fix | Removed low-confidence auto-escalation |
+| `config/config.go` | Fix | SupabaseURL no longer required |
+| `migrations/026_org_members.down.sql` | Fix | Consistent `public.` prefix |
+| `types/agent.ts` | Fix | WSToolStart/Result types added |
+| `types/api.ts` | Cleanup | Dead `PaginatedResponse` removed |
+| `composables/useToast.ts` | Fix | Timer cleanup on dismiss |
+| `api/notifications.ts` | Fix | `deleteNotificationChannel` returns void |
+
+---
+
+## 0.42.11 — Medium-Severity Fixes (2026-04-15)
+
+Fifteen medium-severity issues from the v0.42.8 code assessment. Fixes silent status resets, inconsistent response shapes, missing pagination, credential leaks in error messages, and query performance gaps. Three items (M4, M7, M11) are deferred to future releases as they require schema migrations or policy decisions.
+
+### M1. UpdateConnection preserves existing status
+
+**File:** `handlers/connections.go`
+**Issue:** When a client sent a `PUT /connections/{id}` without a `status` field (e.g. a rename-only update), the handler defaulted to `"inactive"`, silently deactivating a running connection.
+**Fix:** Fetch the existing connection before applying defaults. When `status` is omitted, preserve the existing value.
+
+### M2. Webhook ingest always returns an array
+
+**File:** `handlers/webhooks.go`
+**Issue:** `POST /api/webhooks/logs` returned a single object when one entry was inserted but an array when multiple were inserted. This polymorphic response broke clients that expected a consistent shape.
+**Fix:** Always return an array.
+
+### M3. Conversations endpoint supports pagination
+
+**File:** `handlers/conversations.go`
+**Issue:** `GET /api/conversations` hardcoded `LIMIT 50, OFFSET 0` with no query parameter support. Users with more than 50 conversations silently lost the rest.
+**Fix:** Parse `?limit=` (1–200, default 50) and `?offset=` (default 0) query parameters.
+
+### M5. Monitoring and stats queries use `lb.app_id` index
+
+**Files:** `db/queries/monitoring.sql`, `db/queries/stats.sql`
+**Issue:** `ListLogsSinceForApp` and `GetAppDashboardStats` joined through the `connections` table to filter by app, ignoring the `idx_log_buffer_app_id` partial index added in migration 025.
+**Fix:** Rewrote both queries to filter directly on `log_buffer.app_id`, eliminating the join and enabling index use. Updated callers to pass `pgtype.UUID` for the nullable `app_id` column.
+
+### M6. App-scoped log search queries added
+
+**File:** `db/queries/log_buffer.sql`
+**Issue:** `SearchLogsByUser` only scoped by `user_id`, making per-app Activity page search impossible.
+**Fix:** Added `SearchLogsByApp` and `SearchLogsByAppAndSeverity` queries that filter on both `user_id` and `app_id`.
+
+### M8. `selectOrg` no longer swallows network errors
+
+**File:** `stores/app.ts`
+**Issue:** The `catch` in `selectOrg` treated all errors — including network failures, 500s, and auth errors — as "org has no apps", showing an empty app list with no feedback.
+**Fix:** Only catch 404 (no apps found). All other errors re-throw so the UI can display them.
+
+### M9. WebSocket data wrapped to avoid same-value watch skip
+
+**Files:** `composables/useWebSocket.ts`, `composables/useAgent.ts`
+**Issue:** Vue's `watch` uses shallow equality. Two identical consecutive WebSocket messages (e.g. repeated `{"type":"status","content":"thinking"}`) would not trigger the watcher because the string value hadn't changed.
+**Fix:** `data` ref now holds `{ payload: string, ts: number }` instead of a raw string. Each message gets a unique `ts`, guaranteeing the watch fires. `useAgent` reads `msg.payload` instead of the raw ref.
+
+### M10. OrgTeamPage uses separate fetch and action error refs
+
+**File:** `pages/org/OrgTeamPage.vue`
+**Issue:** A single `error` ref was shared between fetch errors (loading the member list) and action errors (role changes, removals). Dismissing an action error could hide a still-relevant fetch error.
+**Fix:** Split into `fetchError` (shown when member list is empty) and `actionError` (shown inline with dismiss button).
+
+### M12. Connection test errors no longer leak internal details
+
+**File:** `handlers/connections_test_handler.go`
+**Issue:** Error messages included raw connector errors via `fmt.Sprintf("Failed to ...: %v", err)`. These could expose DSN strings, API keys, or internal hostnames to the browser.
+**Fix:** Replaced all `%v` error formatting with static, user-friendly messages. Detailed errors are logged server-side only.
+
+### M13. Slug format validation added
+
+**File:** `handlers/organizations.go`
+**Issue:** `CreateNewOrganization` and `Onboard` accepted arbitrary strings as org slugs — including spaces, unicode, control characters, and `/`.
+**Fix:** Added `slugRe` regex (`^[a-z0-9][a-z0-9-]{1,48}[a-z0-9]$`) validating 3–50 characters, lowercase alphanumeric and hyphens, must start and end with a letter or digit.
+
+### M14. Empty tool-results no longer appended to conversation
+
+**File:** `agent/loop.go`
+**Issue:** If all blocks in a tool-use response were non-`tool_use` types, an empty `ToolResults` message was appended. The provider would receive a malformed `user` turn with neither text nor tool results.
+**Fix:** Guarded with `if len(toolResults) > 0` before appending, in both `RunConversation` and `RunMonitoring`.
+
+### M15. `Vary: Origin` set unconditionally
+
+**File:** `middleware/cors.go`
+**Issue:** `Vary: Origin` was only set when the request origin matched the allowlist. Caching intermediaries could incorrectly serve a non-CORS response to a cross-origin request.
+**Fix:** Moved `Vary: Origin` before the origin check so it's always present.
+
+### M16. Onboarding route re-entry guard
+
+**File:** `router/index.ts`
+**Issue:** Authenticated users who had already completed onboarding could navigate directly to `/onboarding`, potentially creating duplicate organizations.
+**Fix:** Added a router guard that redirects to `/dashboard` when `auth.isAuthenticated && !app.needsOnboarding && to.name === 'onboarding'`.
+
+### M17. GitHub search returns empty when no repos connected
+
+**File:** `connectors/codebase/github.go`
+**Issue:** When no repos were connected and no specific repo was requested, `searchCode` built a query with no `repo:` filter, searching all of public GitHub — burning rate limit quota and returning irrelevant results.
+**Fix:** Return an empty result with a helpful message when `repo == ""` and `len(g.repos) == 0`.
+
+### M18. `UpdateGitHubRepos` capped at 100 entries
+
+**File:** `handlers/github_repos.go`
+**Issue:** The 1MB body limit still allowed thousands of repo entries, each triggering a separate DB upsert in a single transaction.
+**Fix:** Added a `len(repos) > 100` check returning 400 before processing.
+
+### Deferred
+
+- **M4** (role-based auth on app writes): Requires a policy decision on whether `member` role should have write access to agent config, schedules, and notifications. Deferred to a feature release.
+- **M7** (investigations/conversations org-scoping): Requires schema migration + data backfill to add `app_id` columns. Deferred to a feature release.
+- **M11** (store mutation error handling consistency): Low functional impact since callers already wrap mutations in try/catch. Deferred.
+
+### Files changed
+
+| File | Kind | Summary |
+|------|------|---------|
+| `handlers/connections.go` | Fix | Fetch existing connection for status default |
+| `handlers/webhooks.go` | Fix | Always return array |
+| `handlers/conversations.go` | Fix | Pagination via `?limit=`/`?offset=` query params |
+| `handlers/connections_test_handler.go` | Fix | Sanitized error messages (no `%v` leak) |
+| `handlers/organizations.go` | Fix | Slug regex validation |
+| `handlers/github_repos.go` | Fix | 100-repo cap on `UpdateGitHubRepos` |
+| `handlers/applications.go` | Fix | `pgtype.UUID` for stats query param |
+| `agent/loop.go` | Fix | Guard empty tool-results in both loops |
+| `agent/monitor.go` | Fix | `pgtype.UUID` for `ListLogsSinceForApp` param |
+| `connectors/codebase/github.go` | Fix | Empty-repo guard in `searchCode` |
+| `middleware/cors.go` | Fix | `Vary: Origin` unconditional |
+| `db/queries/monitoring.sql` | Perf | Direct `app_id` filter, no join |
+| `db/queries/stats.sql` | Perf | Direct `app_id` filter, no join |
+| `db/queries/log_buffer.sql` | New | `SearchLogsByApp` + `SearchLogsByAppAndSeverity` |
+| `db/*sql.go` (generated) | Regen | sqlc regenerated from updated queries |
+| `stores/app.ts` | Fix | `selectOrg` only catches 404 |
+| `composables/useWebSocket.ts` | Fix | Data wrapped in `{ payload, ts }` |
+| `composables/useAgent.ts` | Fix | Reads `msg.payload` from wrapped data |
+| `pages/org/OrgTeamPage.vue` | Fix | Separate `fetchError` / `actionError` refs |
+| `router/index.ts` | Fix | Onboarding re-entry guard |
+
+---
+
+## 0.42.10 — High-Severity Hardening (2026-04-14)
+
+Thirteen high-severity issues from the v0.42.8 code assessment. Fixes concurrency races in the agent and connector subsystems, hardens the auth store and dashboard against stale state, and adds defense-in-depth to the application delete path. Three assessment items (H6 MongoDB auth, H8 cursor advancement, H15 GitHub callback ordering) were confirmed correct on deeper review and are documented below as resolved-no-change.
+
+### H1. Agent Start/Stop race condition fixed
+
+**File:** `agent/agent.go`
+**Issue:** `a.cancel` was read and written from `Start()` and `Stop()` without synchronization. Concurrent calls could race on the cancel function.
+**Fix:** Added `sync.Mutex` (`a.mu`) protecting `a.cancel`. `Start()` acquires the lock, checks for an existing instance, releases before calling `Stop()` (which also acquires the lock), then re-acquires to set the new cancel. `Stop()` copies the cancel func under the lock, nils it, releases, then calls cancel + wg.Wait outside the lock.
+
+### H2. Poller Stop() now drains the goroutine
+
+**File:** `connectors/poller.go`
+**Issue:** `Stop()` cancelled the context and deleted the map entry but did not wait for the goroutine to exit. A subsequent `Start()` could race with the still-running old goroutine.
+**Fix:** `Stop()` now waits on `<-entry.done` after cancelling, matching the drain pattern already used in `Start()`.
+
+### H3. ListenerManager no longer holds mutex during Close()
+
+**File:** `connectors/listener.go`
+**Issue:** `Start()` held the mutex while calling `Close()` on an existing listener (which may block for up to 5 seconds). The unlock-relock pattern also had a TOCTOU race where another goroutine could insert a new entry between unlock and relock.
+**Fix:** Rewrote to use the `done` channel pattern from the poller. The old entry is extracted under the lock, the lock is released, then `cancel()` + `Close()` + `<-done` runs without blocking other operations. `Stop()` and `StopAll()` follow the same pattern.
+
+### H5. Syslog shutdown timeout documented as intentional
+
+**File:** `connectors/logs/syslog.go`
+**Issue:** The `go func() { s.wg.Wait(); close(done) }()` goroutine in `Close()` was leaked when the shutdown timeout fired.
+**Fix:** Added a comment documenting that the leaked goroutine will finish naturally once connections hit their read deadline (`syslogReadTimeout`). Switched from `time.After` to `time.NewTimer` with proper cleanup via `defer timer.Stop()`.
+
+### H6. MongoDB auth — confirmed correct (no change)
+
+**File:** `connectors/logs/mongodb.go`
+**Issue:** Assessment flagged `SetBasicAuth` as incorrect for Atlas v2 API. On deeper review, Atlas v2 programmatic API keys DO support HTTP Basic auth (public key as username, private key as password) when the `Accept: application/vnd.atlas.2023-01-01+json` header opts into the v2 contract. Digest auth is a legacy v1.0 requirement only.
+**Fix:** Corrected the misleading comment. No functional change.
+
+### H7. MongoDB hostname cached after first lookup
+
+**File:** `connectors/logs/mongodb.go`
+**Issue:** `getClusterHostname()` made an extra API call on every poll cycle to retrieve a hostname that doesn't change at runtime, doubling the request rate against the Atlas API.
+**Fix:** Added `cachedHostname()` which resolves the hostname on first call and caches it in `m.hostname` (protected by `m.mu`) for subsequent calls.
+
+### H8. Cursor advancement on insert failure — confirmed safe (no change)
+
+**Files:** `logs/flyio.go`, `logs/vercel.go`, `logs/railway.go`, `logs/mongodb.go`
+**Issue:** Assessment flagged cursor advancement past failed inserts. On deeper review, all four connectors `return fmt.Errorf(...)` immediately on insert failure, which exits `Poll()` before the cursor-advance block runs. For Fly.io specifically, the `pollMachineLogs` error causes the outer loop to `continue` (skipping the failed machine's `maxTS`), and successfully-inserted rows from other machines are correctly reflected in the cursor. No data loss occurs in any path.
+**Fix:** No change needed. Documented the control flow.
+
+### H9. Auth subscription leak fixed
+
+**File:** `stores/auth.ts`
+**Issue:** `supabase.auth.onAuthStateChange()` returned a subscription object that was never unsubscribed. On HMR or if `init()` was called twice, duplicate listeners would fire.
+**Fix:** Store the subscription in `authSubscription`. On re-init, `unsubscribe()` the previous listener before registering a new one.
+
+### H10. Auth refreshSession error now handled
+
+**File:** `stores/auth.ts`
+**Issue:** `refreshSession()` errors were silently discarded. A revoked refresh token would set `session.value = null` without any feedback — the user was silently logged out.
+**Fix:** Destructure and check the `error` property from `refreshSession()`. On failure, log a warning and clear the session explicitly so the user is redirected to login.
+
+### H11. OrgSettingsPage no longer mutates store directly
+
+**Files:** `pages/org/OrgSettingsPage.vue`, `stores/app.ts`
+**Issue:** `appStore.organization.name = updated.name` directly mutated the store's ref, bypassing Pinia's action tracking. The matching entry in `appStore.organizations[]` was not updated, so the `OrgDropdown` showed the old name until a full reload.
+**Fix:** Added `updateOrg()` action to the app store that replaces both `organization` and the matching entry in `organizations[]` via spread (immutable update). `OrgSettingsPage` now calls `appStore.updateOrg()`.
+
+### H12. ConnectionsPage bubble refs reset on fetch
+
+**File:** `pages/ConnectionsPage.vue`
+**Issue:** `bubbleEls` array never shrank when connections were deleted or the app switched. Stale DOM refs caused `FlowLines` to call `getBoundingClientRect()` on detached elements.
+**Fix:** Reset `bubbleEls.value = []` at the start of `fetchAppConnections()` before the store fetch repopulates the list.
+
+### H14. DashboardPage race condition on rapid app switch
+
+**File:** `pages/DashboardPage.vue`
+**Issue:** Multiple in-flight `Promise.allSettled` calls raced when the user switched apps rapidly. Whichever resolved last won, potentially overwriting the current app's data with stale data from a previous app.
+**Fix:** Added a generation counter (`loadGeneration`). Each `loadData` call increments it and captures the current value. After `await Promise.allSettled`, the results are discarded if a newer call has started (`gen !== loadGeneration`).
+
+### H15. GitHub callback — confirmed correct (no change)
+
+**File:** `handlers/github_install.go`
+**Issue:** Assessment flagged that the GitHub API call (`GetInstallation`) happened before the ownership check. On re-reading the code, `GetApplicationByOrgUser` (line 141) runs before `GetInstallation` (line 151). The ownership check is already in the correct order.
+**Fix:** No change needed.
+
+### H17. DeleteApplication now uses RLS-scoped transaction
+
+**File:** `handlers/applications.go`
+**Issue:** `CountApplicationsByOrg` and `DeleteApplication` used the bare `s.Queries` (pool, no RLS session variable), bypassing the defense-in-depth pattern used by other handlers.
+**Fix:** Switched to `s.UserQueries()` for the entire authorization + delete path, matching the pattern used by all other write handlers.
+
+### H18. Scheduler now runs schedules concurrently
+
+**File:** `agent/scheduler.go`
+**Issue:** `schedulerTick` ran schedules serially. A hung LLM call (up to 5-minute timeout) blocked all subsequent schedules, causing permanent schedule slip when many schedules fired on the same tick.
+**Fix:** Schedules now run in goroutines with a semaphore cap (`maxConcurrentSchedules = 5`) and shutdown-aware acquisition, matching the monitor's concurrency pattern. A `sync.WaitGroup` ensures the tick waits for all in-flight schedules before returning.
+
+### Files changed
+
+| File | Kind | Summary |
+|------|------|---------|
+| `agent/agent.go` | Fix | Mutex on Start/Stop protecting cancel + wg |
+| `agent/scheduler.go` | Fix | Concurrent schedule execution with semaphore |
+| `connectors/poller.go` | Fix | Stop() waits on done channel before returning |
+| `connectors/listener.go` | Fix | Done channel pattern, no mutex during Close() |
+| `connectors/logs/syslog.go` | Fix | Documented timeout goroutine, use NewTimer |
+| `connectors/logs/mongodb.go` | Fix | Cached hostname, corrected auth comment |
+| `handlers/applications.go` | Fix | DeleteApplication uses UserQueries() |
+| `stores/auth.ts` | Fix | Subscription cleanup + refresh error handling |
+| `stores/app.ts` | Fix | New updateOrg() action for immutable updates |
+| `pages/org/OrgSettingsPage.vue` | Fix | Uses appStore.updateOrg() |
+| `pages/ConnectionsPage.vue` | Fix | Reset bubbleEls on fetch |
+| `pages/DashboardPage.vue` | Fix | Generation counter prevents stale data |
+
+---
+
+## 0.42.9 — Critical Security & Correctness Fixes (2026-04-14)
+
+Twelve critical issues identified in the v0.42.8 comprehensive code assessment. Fixes a broken RLS migration, adds SQL injection prevention to the agent's database tool, hardens the WebSocket chat layer, and resolves several frontend functional bugs.
+
+### C1. Self-referential RLS policy on `org_members` fixed
+
+**File:** `migrations/028_fix_org_members_rls.up.sql` (new)
+**Issue:** Migration 027's RLS policy on `org_members` queried `org_members` in its own USING clause, causing PostgreSQL to throw `ERROR: infinite recursion detected`. This would crash every query against the table under RLS.
+**Fix:** Replaced with a `SECURITY DEFINER` function (`app_user_org_ids()`) that bypasses RLS when resolving the caller's org memberships, then the policy references that function.
+
+### C3. SQL statement validation added to `query_database` tool
+
+**File:** `agent/tools_db.go`
+**Issue:** LLM-generated SQL was passed directly to the user's connected Postgres database with no statement-type validation. Despite `default_transaction_read_only=on`, a `SET` statement could disable the guard.
+**Fix:** Added `isReadOnlySQL()` which strips leading comments, normalizes to uppercase, and only allows statements beginning with `SELECT`, `EXPLAIN`, or `WITH`. All other statement types (UPDATE, DELETE, DROP, SET, etc.) are rejected before reaching the database.
+
+### C4. Row-count limit added to database connector
+
+**File:** `connectors/database/postgres.go`
+**Issue:** `Query()` fetched all rows with no limit. An LLM-generated `SELECT * FROM large_table` could OOM the agent process.
+**Fix:** Results are now capped at 1,000 rows. When truncated, a `_truncated` sentinel row is appended explaining the limit and suggesting a `LIMIT` clause.
+
+### C5. Sole-owner guard added to `UpdateMemberRole`
+
+**File:** `handlers/org_members.go`
+**Issue:** An owner could demote themselves to `member` or `admin` via `PUT /api/org/members/{userId}/role`, leaving the org with zero owners and no way to recover. The guard existed in `RemoveMember` but not here.
+**Fix:** Added the same `CountOrgOwners` check: if the target is the current sole owner and the new role is not `owner`, the request returns `409 Conflict`.
+
+### C6. Activity page pagination filters fixed
+
+**File:** `pages/ActivityPage.vue:65-66`
+**Issue:** `@next` and `@prev` event handlers passed `activeFilters` (a `Ref` wrapper) instead of `activeFilters.value`. The logs store received the raw ref object, causing filters to be silently ignored on page navigation.
+**Fix:** Changed to `activeFilters.value`.
+
+### C7. Login flow now initializes app store
+
+**File:** `pages/LoginPage.vue`
+**Issue:** After `auth.login()`, the code called `router.push('/dashboard')` without calling `appStore.init()`. The app store remained uninitialized — `currentAppId` was `null`, `applications` was empty, and all dashboard API calls passed `undefined` as the app ID.
+**Fix:** Added `await appStore.init()` after login. If the user needs onboarding, redirects to `/onboarding` instead of `/dashboard`.
+
+### C8. WebSocket token and appId are now reactive
+
+**File:** `composables/useAgent.ts`
+**Issue:** `auth.token` and `appStore.currentAppId` were captured once at setup time. If the Supabase session refreshed or the user switched apps, the WebSocket continued using stale values.
+**Fix:** Added `watch()` on both `auth.token` and `appStore.currentAppId` that call `updateOptions()` on the WebSocket, triggering a reconnect with fresh credentials when they change.
+
+### C9. WebSocket reconnection with exponential backoff
+
+**File:** `composables/useWebSocket.ts`
+**Issue:** Any network interruption, server restart, or idle timeout permanently killed the WebSocket. The chat page showed a dead input with no recovery path short of a full page reload.
+**Fix:** Added automatic reconnection with exponential backoff (1s base, 30s cap). Intentional closes (component unmount, explicit `close()`) do not trigger reconnection. The `updateOptions()` method allows the parent composable to update connection parameters and trigger a reconnect.
+
+### C9b. Thinking/tool state reset on WebSocket close
+
+**File:** `composables/useAgent.ts`
+**Issue:** If the WebSocket disconnected while the agent was mid-thought, `isThinking` and `activeTools` remained set indefinitely — the UI showed a permanent spinner.
+**Fix:** Added a `watch(status)` that resets `isThinking = false` and `activeTools = []` when status becomes `'closed'`.
+
+### C10. Monitor cursor no longer advances on LLM provider failure
+
+**File:** `agent/monitor.go`
+**Issue:** When `RunMonitoring` returned a provider error, the cursor was still advanced past the unprocessed logs. Those logs were permanently skipped from re-analysis on the next tick.
+**Fix:** Added an early return (before cursor advancement) when the assessment indicates a provider failure. Logs will be reprocessed on the next monitoring tick.
+
+### C11. CORS middleware now allows PATCH and X-Org-ID
+
+**File:** `middleware/cors.go`
+**Issue:** `Access-Control-Allow-Methods` was missing `PATCH`. The `PATCH /api/apps/{appId}/schedules/{id}` endpoint would fail CORS preflight in browsers. Additionally, the `X-Org-ID` header (used for multi-org context) was not in `Access-Control-Allow-Headers`.
+**Fix:** Added `PATCH` to allowed methods and `X-Org-ID` to allowed headers.
+
+### C12. 404 page "Return to Dashboard" link fixed
+
+**File:** `pages/NotFoundPage.vue`
+**Issue:** The link pointed to `/` (public landing page) instead of `/dashboard`.
+**Fix:** Changed to `/dashboard`.
+
+### Test fix: `parseSeverityFromResponse` test cases updated
+
+**File:** `agent/monitor_test.go`
+**Issue:** Three test cases still expected the old heuristic keyword fallback removed in v0.42.8 (M6). Tests for bare "error"/"critical"/"warning" keywords (without `severity:` markers) expected those keywords to be parsed as severities, but the parser now correctly defaults to `"info"` for unstructured text.
+**Fix:** Updated expected values to `"info"` to match the v0.42.8 parser behavior.
+
+### Files changed
+
+| File | Kind | Summary |
+|------|------|---------|
+| `migrations/028_fix_org_members_rls.up.sql` | New | SECURITY DEFINER function + fixed RLS policy |
+| `migrations/028_fix_org_members_rls.down.sql` | New | Reverts to original policy |
+| `agent/tools_db.go` | Fix | SQL statement validation (`isReadOnlySQL`) |
+| `connectors/database/postgres.go` | Fix | 1,000-row query limit |
+| `handlers/org_members.go` | Fix | Sole-owner demotion guard |
+| `middleware/cors.go` | Fix | PATCH method + X-Org-ID header |
+| `agent/monitor.go` | Fix | Skip cursor advance on provider failure |
+| `agent/monitor_test.go` | Fix | Updated severity parser test expectations |
+| `pages/ActivityPage.vue` | Fix | Pass `.value` not ref to pagination |
+| `pages/LoginPage.vue` | Fix | Call `appStore.init()` after login |
+| `pages/NotFoundPage.vue` | Fix | Dashboard link points to `/dashboard` |
+| `composables/useWebSocket.ts` | Fix | Reconnection with exponential backoff |
+| `composables/useAgent.ts` | Fix | Reactive token/appId + close state reset |
+
+---
+
+## 0.42.8 — Concurrency, Correctness & Test Coverage (2026-04-14)
+
+Seven "should-fix" medium-severity items from the v0.42.5 code assessment. Fixes three concurrency bugs in the backend, removes a severity-parsing false-positive source, parallelizes dashboard loading, and adds integration tests for the org member management endpoints.
+
+### M1. Test router sync — already resolved
+
+**Resolved in:** v0.42.6 (H7)
+The test router in `testhelpers_test.go` was fully synced with `router.go` during the H7 fix. All `/api` routes now match. Non-API routes (`/health`, `/metrics`, `/ws/chat`) are intentionally omitted as they're not handler-level concerns.
+
+### M2. Integration tests for org_members handlers
+
+**File:** `handlers/org_members_test.go` (new)
+**Issue:** Four security-sensitive handler methods (`ListOrgMembers`, `InviteMember`, `UpdateMemberRole`, `RemoveMember`) had zero test coverage.
+**Fix:** Added 9 integration tests covering:
+- List members (verifies owner from testSetup)
+- Invite member (success, duplicate 409, missing email 400)
+- Authorization: member-role users cannot invite (403)
+- Update role (owner promotes member to admin, non-owner blocked)
+- Remove member (success, sole-owner blocked with 409, member-role cannot remove)
+
+The `envForUser` helper in `organizations_test.go` was expanded to mount the `/org/members` route group.
+
+### M5. Monitor semaphore no longer blocks shutdown
+
+**File:** `agent/monitor.go:68`
+**Issue:** `sem <- struct{}{}` blocked the main goroutine unconditionally. If all 10 semaphore slots were occupied, the monitor goroutine could not respond to context cancellation signals during shutdown.
+**Fix:** Replaced the bare send with a `select` on both `sem` and `ctx.Done()`. When shutdown fires, the loop returns immediately instead of waiting for a semaphore slot.
+
+### M6. Severity heuristic false-positives removed
+
+**File:** `agent/loop.go:346-361`
+**Issue:** `parseSeverityFromResponse` fell back to a keyword scan checking if the entire response contained "error" or "warning". Benign phrases like "No errors detected" or "Warning acknowledged" would incorrectly classify the response as severity `error` or `warning`.
+**Fix:** Removed the heuristic fallback entirely. The parser now only matches structured `severity: <level>` markers and defaults to `info` otherwise. The structured format is what the monitoring prompt asks Claude to emit, so the heuristic was redundant.
+
+### M9. Poller `Start` no longer allows concurrent polls
+
+**File:** `connectors/poller.go`
+**Issue:** Calling `Start` for a connection that was already polling cancelled the old context but immediately started the new goroutine without waiting for the old one to exit. Both goroutines could poll the same connection concurrently, producing duplicate log entries.
+**Fix:** Introduced a `pollerEntry` struct with a `done` channel (closed when the goroutine exits). `Start` now waits on `<-entry.done` after cancelling the old context, ensuring the previous goroutine has fully exited before launching the replacement.
+
+### M10. ListenerManager no longer holds mutex during `Close()`
+
+**File:** `connectors/listener.go:50-53`
+**Issue:** `Start` called `entry.listener.Close()` (which may block for up to a 5-second drain timeout) while holding `m.mu`, blocking all other listener operations.
+**Fix:** The lock is now released before calling `cancel()` and `Close()` on the old listener, then re-acquired for the new entry insertion. This matches the existing pattern in the `Stop()` method.
+
+### M14. DashboardPage API calls parallelized
+
+**File:** `pages/DashboardPage.vue`
+**Issue:** Five independent API calls (`getAppAgentConfig`, `listConnectionsByApp`, `fetchLogs`, `getAppStats`, `getMonitoringStatus`) were made sequentially, creating a visible waterfall delay on page load.
+**Fix:** All five calls now run concurrently via `Promise.allSettled()`. Each result is inspected individually — fulfilled values are assigned, rejected calls are collected into the error banner. Same error-handling behavior, substantially faster page load.
+
+### Files changed
+
+| File | Kind | Summary |
+|------|------|---------|
+| `agent/monitor.go` | Fix | Semaphore acquire selects on `ctx.Done()` for clean shutdown |
+| `agent/loop.go` | Fix | Removed heuristic keyword fallback from `parseSeverityFromResponse` |
+| `connectors/poller.go` | Fix | `Start` waits for old goroutine to exit via `done` channel before launching new one |
+| `connectors/listener.go` | Fix | `Start` releases mutex before calling `Close()` on existing listener |
+| `pages/DashboardPage.vue` | Fix | Sequential API calls replaced with `Promise.allSettled()` |
+| `handlers/org_members_test.go` | New | 9 integration tests for member CRUD + authorization |
+| `handlers/organizations_test.go` | Fix | `envForUser` helper expanded with org member routes |
+
+---
+
+## 0.42.7 — Medium-Severity Fixes (2026-04-14)
+
+Four medium-severity issues from the v0.42.5 code assessment resolved. These were the "must-fix for 8.5+" items from the assessment's recommended priority list.
+
+### M4. Prometheus `/metrics` endpoint moved behind auth
+
+**File:** `router.go`
+**Issue:** `/metrics` was mounted outside the protected route group, exposing operational data (goroutine counts, request latencies, error rates) to unauthenticated callers.
+**Fix:** Moved the `/metrics` handler into its own route group with the `Auth(jwks)` middleware applied. Prometheus scrapers now need a valid JWT.
+
+### M8. ILIKE wildcard escaping — already resolved
+
+**File:** `agent/tools_logs.go:15-20`
+**Issue:** The assessment flagged `SearchLogsByUser` ILIKE queries as vulnerable to wildcard injection (`%`, `_`). On review, the only caller (`tools_logs.go`) already escapes via `escapeLike()` which replaces `\` → `\\`, `%` → `\%`, `_` → `\_`, and the SQL query uses `ESCAPE '\'`. The HTTP `ListLogs` handler does not use ILIKE at all. No fix required.
+
+### M12. Dead navigation links removed
+
+**Files:** `PublicNav.vue`, `PublicFooter.vue`
+**Issue:** Links to `/security`, `/terms`, and `/privacy` had no corresponding routes — users clicking these landed on the 404 page.
+**Fix:** Removed the three dead links. `/security` was in both desktop and mobile nav sections of `PublicNav`. `/terms`, `/privacy`, and `/security` were in `PublicFooter`. Links to existing routes (`/features`, `/pricing`) are retained.
+
+### M16. App store no longer treats all errors as "needs onboarding"
+
+**File:** `frontend/src/stores/app.ts`
+**Issue:** The catch block in `init()` set `needsOnboarding = true` for any error — including network failures, 500s, or auth issues. A transient server error would incorrectly route users to the onboarding flow.
+**Fix:** The catch now inspects the Axios error's response status. Only a 404 (no org found) triggers onboarding. All other errors re-throw, propagating to `App.vue`'s top-level catch which redirects to `/login` so the user can retry.
+
+### Files changed
+
+| File | Kind | Summary |
+|------|------|---------|
+| `router.go` | Fix | `/metrics` moved behind JWT auth middleware |
+| `frontend/src/stores/app.ts` | Fix | `init()` catch differentiates 404 from other errors |
+| `frontend/src/components/public/PublicNav.vue` | Fix | Removed dead `/security` link (desktop + mobile) |
+| `frontend/src/components/public/PublicFooter.vue` | Fix | Removed dead `/terms`, `/privacy`, `/security` links |
+
+---
+
+## 0.42.6 — Post-Assessment Hardening (2026-04-14)
+
+Third code assessment (v0.42.5) identified 7 high-severity issues across backend and frontend. All seven are resolved in this release.
+
+### H1. Multi-org handlers now route through `UserQueries()` for RLS
+
+**Files:** `handlers/applications.go`, `handlers/org_members.go`, `handlers/organizations.go`
+**Issue:** Several handlers introduced during the multi-org phases (`CreateApplication`, `InviteMember`, `UpdateMemberRole`, `RemoveMember`, `CreateNewOrganization`, `Onboard`) used `s.Queries` directly instead of `UserQueries()`. This bypassed the `SET LOCAL app.current_user_id` session variable that RLS policies depend on for defense-in-depth enforcement. Handler-level authorization (`resolveOrgAndRole`) protected the endpoints functionally, but the DB layer had no independent access control.
+**Fix:** All write operations now go through `UserQueries()`. For `CreateNewOrganization` and `Onboard` (which manage their own transactions), `set_config('app.current_user_id', ...)` is now called explicitly within the transaction.
+
+### H2. WebSocket origin restricted to CORS allowlist
+
+**File:** `handlers/chat.go`
+**Issue:** `OriginPatterns: []string{"*"}` accepted WebSocket connections from any origin. Combined with the JWT token in the URL query string, a malicious page could potentially establish a WebSocket connection if the token were leaked via referrer or browser history.
+**Fix:** New `wsOriginPatterns()` helper reads `CORS_ALLOWED_ORIGINS` (same env var as the CORS middleware) and falls back to localhost dev origins. The wildcard is eliminated.
+
+### H3. Non-functional reports stack removed
+
+**Files:** Removed: `handlers/reports.go`, `ReportsPage.vue`, `stores/reports.ts`, `api/reports.ts`, `types/report.ts`, `components/reports/ReportCard.vue`, `components/reports/ReportList.vue`, `components/reports/ReportDetail.vue`. Modified: `router.go`, `testhelpers_test.go`, `router/index.ts`, `AppSidebar.vue`.
+**Issue:** `ListReports` and `GetReport` were stubs returning empty arrays unconditionally. The entire reports feature (backend handlers, frontend store, API client, page, 3 components, type definition, sidebar link, route) was wired end-to-end but served no data — the underlying `reports` DB table and investigation-to-report pipeline don't exist yet. `GetReport` also returned an array instead of an object, which is semantically wrong for a single-resource GET.
+**Fix:** Removed the entire dead stack. Marketing references to "reports" (PricingPage, FeaturesPage) are retained as they describe future capability. The feature will be rebuilt from scratch when the data model is implemented.
+
+### H4. 401 interceptor logout wrapped in try/catch
+
+**File:** `frontend/src/api/client.ts`
+**Issue:** The 401 response interceptor did `await auth.logout()` without error handling. If Supabase `signOut` failed (expired session, network error), the `window.location.href = '/login'` redirect never executed, leaving the user stuck on a broken authenticated page.
+**Fix:** Wrapped `auth.logout()` in try/catch so the redirect to `/login` fires unconditionally.
+
+### H5. WebSocket `send()` guarded on `readyState`
+
+**File:** `frontend/src/composables/useWebSocket.ts`
+**Issue:** `send()` checked for `ws` being null but not for `readyState !== OPEN`. Calling `send()` on a socket in `CONNECTING` state throws `DOMException`. While the chat page disables the send button when status isn't `open`, any other consumer of `useWebSocket` would crash.
+**Fix:** Added `ws.readyState === WebSocket.OPEN` guard before calling `ws.send()`.
+
+### H6. Wizard step `payloadExample` moved into `<script setup>`
+
+**Files:** `StepWebhookSetup.vue`, `StepOTLPSetup.vue`
+**Issue:** Both wizard step components defined `payloadExample` in a second `<script lang="ts">` block (non-setup). Variables from non-setup script blocks are not reliably available in the `<script setup>` template scope — the constant rendered as `undefined` in some Vue compiler versions.
+**Fix:** Moved the constant definitions into the `<script setup>` block and removed the orphaned `<script>` blocks.
+
+### H7. Test router synced with production router
+
+**File:** `handlers/testhelpers_test.go`
+**Issue:** The test router was missing 14 routes that exist in the production router: OTLP ingestion (`POST /v1/logs`), GitHub install + callback, all 8 notification endpoints, GitHub repo management, and the models endpoint. Any future tests targeting these routes would silently get 404/405 from the test router instead of exercising the handlers.
+**Fix:** Added all missing routes to match `router.go` exactly (minus auth middleware, which the test harness replaces with a user-ID injector).
+
+### Files changed
+
+| File | Kind | Summary |
+|------|------|---------|
+| `handlers/applications.go` | Fix | `CreateApplication` routes through `UserQueries()` |
+| `handlers/org_members.go` | Fix | `InviteMember`, `UpdateMemberRole`, `RemoveMember` route through `UserQueries()` |
+| `handlers/organizations.go` | Fix | `CreateNewOrganization` and `Onboard` set RLS session variable in their transactions |
+| `handlers/chat.go` | Fix | WebSocket origin restricted; `wsOriginPatterns()` helper added |
+| `handlers/reports.go` | Remove | Non-functional stub handlers deleted |
+| `handlers/testhelpers_test.go` | Fix | Test router synced: added 14 missing routes, removed reports routes |
+| `router.go` | Fix | Reports routes removed |
+| `frontend/src/api/client.ts` | Fix | 401 interceptor logout wrapped in try/catch |
+| `frontend/src/composables/useWebSocket.ts` | Fix | `send()` guards on `readyState === OPEN` |
+| `frontend/src/components/connections/wizard/steps/StepWebhookSetup.vue` | Fix | `payloadExample` moved into `<script setup>` |
+| `frontend/src/components/connections/wizard/steps/StepOTLPSetup.vue` | Fix | `payloadExample` moved into `<script setup>` |
+| `frontend/src/router/index.ts` | Fix | Reports route removed |
+| `frontend/src/components/common/AppSidebar.vue` | Fix | Reports sidebar link removed |
+| `frontend/src/pages/ReportsPage.vue` | Remove | Dead page |
+| `frontend/src/stores/reports.ts` | Remove | Dead store |
+| `frontend/src/api/reports.ts` | Remove | Dead API module |
+| `frontend/src/types/report.ts` | Remove | Dead type definition |
+| `frontend/src/components/reports/*` | Remove | Dead components (ReportCard, ReportList, ReportDetail) |
+
+---
+
+## 0.42.5 — Critical & High-Severity Fixes (2026-04-14)
+
+Second code assessment (v0.42.4) uncovered 2 critical and 6 high-severity issues. All eight are resolved in this release. The multi-org feature is now fully functional for users with multiple organizations.
+
+### C1. OTLP ingestion endpoint fixed
+
+**File:** `backend/internal/db/queries/log_buffer.sql:36-38`
+**Issue:** `GetConnectionByWebhookToken` hard-filtered on `type = 'webhook_logs'`, so OTLP connections (`type = 'otlp'`) could never match. Every OTLP ingest request returned 401 "invalid token" regardless of the token's validity — the entire OTLP path was non-functional.
+**Fix:** Changed the SQL filter to `type IN ('webhook_logs', 'otlp')`.
+
+### C2. Multi-org operations now respect the active org context
+
+**Files:** `backend/internal/api/handlers/org_members.go`, `organizations.go`, `applications.go`, `frontend/src/api/client.ts`
+**Issue:** All org-scoped backend operations (`resolveOrgAndRole`, `GetOrganization`, `ListApplications`, `CreateApplication`) called `GetOrganizationByUser`, which always returns the user's **earliest** (primary) org. Users with multiple orgs could not manage, view, or modify any org other than their primary — the frontend multi-org switcher was cosmetic only.
+**Fix:** Introduced an `X-Org-ID` header contract. The frontend Axios interceptor reads the active org ID from `localStorage` (already persisted by the app store's `selectOrg()`) and attaches it to every request. The backend's new `resolveOrgForUser` helper reads this header, validates the caller's membership via `GetOrgMembership`, and returns the target org. Falls back to the primary org when the header is absent (backward-compatible).
+
+### H1. WebSocket `app_id` now authorization-checked
+
+**File:** `backend/internal/api/handlers/chat.go:57-72`
+**Issue:** The `app_id` query parameter on the WebSocket endpoint was accepted without any ownership check. An authenticated user who knew another org's app UUID could scope the agent's `search_codebase` tool to that org's GitHub repos — a cross-tenant data access vulnerability.
+**Fix:** Added a `GetApplicationByOrgUser` check before accepting the `app_id`. Returns a WebSocket error if the app doesn't belong to the caller's org.
+
+### H2. Sole-owner removal guard now checks owner count
+
+**Files:** `backend/internal/db/queries/organizations.sql`, `backend/internal/api/handlers/org_members.go:290-299`
+**Issue:** The guard preventing removal of the last owner used `CountOrgMembers` (all roles). An org with 5 members but only 1 owner would pass the check, allowing the sole owner to remove themselves and leaving the org permanently unmanageable.
+**Fix:** Added a `CountOrgOwners` SQL query (`WHERE role = 'owner'`). The guard now checks whether the target is an owner and blocks removal when the owner count would drop to zero — regardless of who initiates the removal.
+
+### H3. `org_members` table now has RLS enabled
+
+**File:** `backend/migrations/027_org_members_rls.{up,down}.sql`
+**Issue:** Migration 026 created the `org_members` table but never enabled Row Level Security. Handler-level checks (`resolveOrgAndRole`) provided application-level protection, but any query through `UserQueries()` could read memberships for any org without DB-level enforcement.
+**Fix:** New migration 027 enables RLS and creates a policy that restricts access to orgs the caller belongs to, matching the pattern used on all other tenant-scoped tables.
+
+### H4. `InviteMember` Content-Type header now set correctly
+
+**File:** `backend/internal/api/handlers/org_members.go:146-147`
+**Issue:** `WriteHeader(201)` was called before `Header().Set("Content-Type", "application/json")`. In Go's `net/http`, `WriteHeader` flushes headers — subsequent `Set` calls are silently ignored. The response body was JSON but the Content-Type defaulted to `text/plain`.
+**Fix:** Swapped the two lines — header set before status write.
+
+### H5. UTF-8 safe conversation title truncation
+
+**File:** `backend/internal/api/handlers/chat.go:152-155`
+**Issue:** `title[:50]` sliced by byte index. On multi-byte UTF-8 content (CJK characters, emoji), this could split a rune mid-sequence, producing invalid UTF-8 or a runtime panic.
+**Fix:** Converted to `[]rune` before truncation: `string(titleRunes[:50]) + "..."`.
+
+### H6. Org mutations now route through `UserQueries()` for RLS
+
+**File:** `backend/internal/api/handlers/organizations.go:162-172,205-215`
+**Issue:** `UpdateOrganization` and `DeleteOrganization` called `s.Queries` directly (shared pool, no RLS session variable). The handler-level `resolveOrgAndRole` check was the only protection — no defense-in-depth at the DB layer.
+**Fix:** Both operations now use `s.UserQueries(ctx, userID)` to acquire a transaction with `app.current_user_id` set, matching the pattern used by all other write operations.
+
+### Files changed
+
+| File | Kind | Summary |
+|------|------|---------|
+| `backend/internal/db/queries/log_buffer.sql` | Fix | OTLP token lookup accepts `'otlp'` type |
+| `backend/internal/db/queries/organizations.sql` | Add | `CountOrgOwners` query |
+| `backend/internal/db/organizations.sql.go` | Regen | sqlc regenerated |
+| `backend/internal/db/log_buffer.sql.go` | Regen | sqlc regenerated |
+| `backend/internal/api/handlers/org_members.go` | Fix | `resolveOrgForUser` with `X-Org-ID` header; owner-count guard; Content-Type order |
+| `backend/internal/api/handlers/organizations.go` | Fix | `GetOrganization` uses `resolveOrgAndRole`; mutations via `UserQueries()` |
+| `backend/internal/api/handlers/applications.go` | Fix | `ListApplications`/`CreateApplication` use `resolveOrgAndRole` |
+| `backend/internal/api/handlers/chat.go` | Fix | `app_id` auth check; UTF-8 safe truncation |
+| `backend/migrations/027_org_members_rls.up.sql` | Add | RLS policy on `org_members` |
+| `backend/migrations/027_org_members_rls.down.sql` | Add | Rollback for 027 |
+| `frontend/src/api/client.ts` | Fix | `X-Org-ID` header in Axios interceptor |
+
+---
+
+## 0.42.4 — File Length Refactoring (2026-04-13)
+
+Three components that exceeded or approached the 500-line maintainability threshold have been split into smaller, focused modules. No behaviour changes — purely structural.
+
+### AgentNebula.vue: 654 → 47 lines
+
+The 3D particle nebula component was the only file exceeding the 500-line hard limit. The bulk was three self-contained particle layer factories (each with inline GLSL shaders) and the Three.js scene lifecycle.
+
+**Split into:**
+- `agentNebulaShaders.ts` (71 lines) — the Ashima 3D Simplex Noise GLSL constant, previously copy-pasted into three shader strings
+- `useAgentNebula.ts` (419 lines) — layer factories (`createPrimaryCloud`, `createWispTendrils`, `createCoreMotes`), scene initialisation, animation loop, resize handling, and disposal. Exports `initNebula()` which returns a `{ dispose }` handle
+- `AgentNebula.vue` (47 lines) — slim wrapper: template, refs, `onMounted` → `initNebula()`, `onBeforeUnmount` → `dispose()`
+
+### AppHeader.vue: 335 → 118 lines
+
+The header managed three independent dropdown state machines (org, app, profile) with their own toggle/select/close logic and templates. Each dropdown is now a self-contained sub-component:
+
+- `OrgDropdown.vue` (97 lines) — org list with role badges, create org action
+- `AppDropdown.vue` (83 lines) — app list with selection, create app action
+- `ProfileDropdown.vue` (90 lines) — user email, org link, settings, logout
+- `AppHeader.vue` (118 lines) — layout shell, breadcrumb separators, outside-click coordination via `expose`d refs
+
+### github.go: 479 → 236 + 252 lines
+
+The monolithic GitHub handler file was approaching the 500-line threshold. The two concerns — installation flow and repository management — are now in separate files:
+
+- `github_install.go` (236 lines) — `InstallGitHub` and `GitHubCallback`
+- `github_repos.go` (252 lines) — `ListGitHubRepos`, `UpdateGitHubRepos`, `TestGitHubConnection`
+
+### Files changed
+
+| File | Kind | Summary |
+|------|------|---------|
+| `frontend/src/components/connections/AgentNebula.vue` | Refactor | Slim wrapper (654 → 47 lines) |
+| `frontend/src/components/connections/useAgentNebula.ts` | New | Scene lifecycle + layer factories |
+| `frontend/src/components/connections/agentNebulaShaders.ts` | New | GLSL noise constant |
+| `frontend/src/components/common/AppHeader.vue` | Refactor | Layout shell (335 → 118 lines) |
+| `frontend/src/components/common/OrgDropdown.vue` | New | Org selector dropdown |
+| `frontend/src/components/common/AppDropdown.vue` | New | App selector dropdown |
+| `frontend/src/components/common/ProfileDropdown.vue` | New | Profile/logout dropdown |
+| `backend/internal/api/handlers/github.go` | Deleted | Replaced by split files |
+| `backend/internal/api/handlers/github_install.go` | New | Install + callback handlers |
+| `backend/internal/api/handlers/github_repos.go` | New | Repo management handlers |
+
+---
+
+## 0.42.3 — Medium-Severity Fixes (2026-04-13)
+
+Final sweep of the v0.42 code assessment. Six medium-severity issues across agent lifecycle, WebSocket observability, type consistency, and migration safety documentation.
+
+### M1. Agent cancel field zeroed on stop
+
+**File:** `backend/internal/agent/agent.go:111-117`
+**Issue:** `Stop()` called `a.cancel()` but never set `a.cancel = nil`. On restart via `Start()`, the nil check at line 83 always found a non-nil cancel, leading to fragile restart logic where the old cancel function was called a second time (harmless but confusing).
+**Fix:** `a.cancel = nil` is now set immediately after `a.cancel()` in `Stop()`.
+
+### M2. Down migration data loss documented
+
+**File:** `backend/migrations/026_org_members.down.sql`
+**Issue:** Rolling back migration 026 picks only the earliest org membership per user via `DISTINCT ON`. Users with multiple org memberships permanently lose all but one. This is inherent to the schema change but was undocumented.
+**Fix:** Added a prominent warning comment at the top of the down migration documenting the data loss and advising to export `org_members` before rolling back.
+
+### M3. WebSocket error now captured and logged
+
+**File:** `frontend/src/composables/useWebSocket.ts`
+**Issue:** `onerror` silently set status to `'closed'` without capturing the error event or logging anything. WebSocket failures were completely invisible to both the UI and dev console.
+**Fix:** Added `error` ref exposed from the composable. The error handler now stores the event and logs via `console.warn`. Consumers can display the error state if needed.
+
+### M4. Malformed WebSocket messages logged
+
+**File:** `frontend/src/composables/useAgent.ts:93-95`
+**Issue:** The JSON parse `catch` block silently ignored malformed server messages. If the backend sent invalid JSON, it disappeared without trace.
+**Fix:** The catch block now logs the parse error via `console.warn` for debuggability.
+
+### M5. Dead `"database"` connection type guard removed
+
+**File:** `backend/internal/agent/tools_db.go:39-42`
+**Issue:** The type check accepted both `"database"` and `"postgres"`, but `connections_validate.go` only allows `"postgres"` during creation. The `"database"` type can never exist in the database — the check was dead legacy code.
+**Fix:** Removed the `"database"` branch. The guard now only checks for `"postgres"`.
+
+### M6. Reports handler made consistent
+
+**File:** `backend/internal/api/handlers/reports.go`
+**Issue:** `ListReports` returned `200 []` while `GetReport` returned `501 Not Implemented`. Inconsistent contract — clients assumed reports were supported but empty for list, yet unimplemented for detail.
+**Fix:** Both endpoints now return `200 []` (empty array). This matches the frontend's expectation that reports are a supported but currently empty feature. When the reports system is built, both handlers will be replaced together.
+
+### Files changed
+
+| File | Kind | Summary |
+|------|------|---------|
+| `backend/internal/agent/agent.go` | Fix | Zero `cancel` in `Stop()` |
+| `backend/migrations/026_org_members.down.sql` | Doc | Data loss warning |
+| `frontend/src/composables/useWebSocket.ts` | Fix | Error ref + logging |
+| `frontend/src/composables/useAgent.ts` | Fix | Log malformed messages |
+| `backend/internal/agent/tools_db.go` | Fix | Remove dead type guard |
+| `backend/internal/api/handlers/reports.go` | Fix | Consistent empty response |
+
+---
+
+## 0.42.2 — High-Severity Fixes (2026-04-13)
+
+Continuation of the v0.42 code assessment. Fixes six high-severity issues across backend error handling, frontend state management, routing, and type safety.
+
+### H1. Logs multi-source pagination clarified
+
+**File:** `backend/internal/api/handlers/logs.go:254-271`
+**Issue:** When `source=all`, the total reported is the sum of raw + agent counts. The assessment flagged this as incorrect, but on closer inspection the total *is* the true dataset size — the pagination math is correct. Deep pages may return fewer than `limit` items because the merge window (offset+limit per source) can be exhausted before covering all interleaved entries. This is an acceptable approximation that avoids an expensive UNION count query.
+**Fix:** Added an explanatory comment documenting the design trade-off. No behaviour change needed.
+
+### H2. Chat title update error logging
+
+**File:** `backend/internal/api/handlers/chat.go:153-160`
+**Issue:** `UpdateConversationTitleByUser` silently discarded errors. If the DB call failed, the conversation title remained blank with no logging or observability.
+**Fix:** The return value is now checked and logged via `slog.Error` on failure.
+
+### H3. Logs pagination race condition
+
+**File:** `frontend/src/stores/logs.ts:38-50`
+**Issue:** `nextPage()` and `prevPage()` modified `offset.value` and fired `fetchLogs()` without awaiting. Rapid clicks triggered concurrent requests with inconsistent offset state.
+**Fix:** Both functions now `await fetchLogs()` and early-return if `loading.value` is already true.
+
+### H4. Async logout awaited on 401
+
+**File:** `frontend/src/api/client.ts:28-32`
+**Issue:** The 401 interceptor called `auth.logout()` (async) without awaiting, then immediately redirected. The logout could fail to complete before navigation.
+**Fix:** Interceptor callback is now `async`, and `auth.logout()` is awaited before the redirect.
+
+### H5. Router guard waits for app store initialisation
+
+**Files:** `frontend/src/stores/app.ts`, `frontend/src/router/index.ts`
+**Issue:** The `beforeEach` guard checked `app.needsOnboarding` without confirming the app store had initialised. If the guard fired before `app.init()` completed, stale default state could incorrectly redirect to onboarding.
+**Fix:** Added `initialized` ref to the app store (set `true` at the end of `init()`). The router guard now returns early if `!app.initialized`, matching the existing `!auth.initialized` pattern.
+
+### H6. Notification type safety tightened
+
+**File:** `frontend/src/types/notification.ts`
+**Issue:** `UpdatePreferencesPayload.severity_threshold` was typed as `string` instead of the `'info' | 'warning' | 'error' | 'critical'` union. `CreateChannelPayload.config` and `UpdateChannelPayload.config` used `Record<string, unknown>` instead of the proper `EmailConfig | SlackConfig | DiscordConfig` union. Both allowed invalid values to pass type checking.
+**Fix:** Aligned payload types with their model counterparts. Introduced `ChannelConfig` type alias for the config union.
+
+### Files changed
+
+| File | Kind | Summary |
+|------|------|---------|
+| `backend/internal/api/handlers/logs.go` | Fix | Documented merge-pagination trade-off |
+| `backend/internal/api/handlers/chat.go` | Fix | Log title update errors |
+| `frontend/src/stores/logs.ts` | Fix | Await pagination, guard against concurrent fetches |
+| `frontend/src/api/client.ts` | Fix | Await logout before redirect on 401 |
+| `frontend/src/stores/app.ts` | Fix | Added `initialized` flag |
+| `frontend/src/router/index.ts` | Fix | Guard on `app.initialized` before onboarding redirect |
+| `frontend/src/types/notification.ts` | Fix | Strict types for payloads |
+
+---
+
+## 0.42.1 — Post-Assessment Hardening (2026-04-13)
+
+Comprehensive code assessment of the v0.42.0 multi-org implementation surfaced four critical issues. All four are fixed in this patch — no feature changes, no schema changes beyond an added index.
+
+### C1. Resource leak in codebase tool
+
+**File:** `backend/internal/agent/tools_codebase.go`
+**Issue:** The GitHub codebase connector created via `codebase.New()` was never closed. Unlike `tools_db.go` which calls `defer pg.Close()`, the codebase tool leaked HTTP connections on every `search_codebase` invocation.
+**Fix:** Added `defer connector.Close()` immediately after connector creation.
+
+### C2. Dead stats query removed
+
+**File:** `backend/internal/db/queries/stats.sql`
+**Issue:** `GetDashboardStats` filtered by `user_id` without org scoping. With multi-org, a user in multiple orgs would see aggregated stats across all of them — potential cross-org data leakage. Investigation revealed this query was dead code: only `GetAppDashboardStats` (which is app-scoped and protected by `authorizeApp`) is called from any handler.
+**Fix:** Removed the unused `GetDashboardStats` query entirely. Regenerated sqlc.
+
+### C3. Missing `org_members` index
+
+**File:** `backend/migrations/026_org_members.up.sql`
+**Issue:** Only `idx_org_members_org_id` was created. RLS policies across 8 tables and queries like `GetOrganizationByUser`, `ListOrganizationsByUser`, `GetOrgMembership`, and `HasOrgMembership` all filter by `user_id`. While the composite PK `(user_id, org_id)` covers exact lookups, a dedicated index ensures optimal performance for user-only scans as the table grows.
+**Fix:** Added `CREATE INDEX idx_org_members_user_id ON org_members(user_id)` alongside the existing org_id index.
+
+### C4. Inconsistent API response unwrapping
+
+**Files:** `frontend/src/api/*.ts`, `frontend/src/stores/*.ts`, `frontend/src/pages/AgentChatPage.vue`
+**Issue:** API modules were split into two conventions — some returned raw `AxiosResponse<T>` (connections, conversations, reports, schedules, logs), others unwrapped and returned `T` directly (organizations, applications, notifications). Consumers had to handle responses differently, creating type confusion.
+**Fix:** Standardised all API functions to unwrap `{ data }` internally and return `Promise<T>`. Updated all store consumers and page components to receive data directly instead of destructuring `{ data }` from the response.
+
+### Files changed
+
+| File | Kind | Summary |
+|------|------|---------|
+| `backend/internal/agent/tools_codebase.go` | Fix | Added `defer connector.Close()` |
+| `backend/internal/db/queries/stats.sql` | Fix | Removed dead `GetDashboardStats` query |
+| `backend/internal/db/stats.sql.go` | Regen | Regenerated without dead query |
+| `backend/migrations/026_org_members.up.sql` | Fix | Added `user_id` index on `org_members` |
+| `frontend/src/api/connections.ts` | Fix | Async/await with data unwrap |
+| `frontend/src/api/conversations.ts` | Fix | Async/await with data unwrap |
+| `frontend/src/api/reports.ts` | Fix | Async/await with data unwrap |
+| `frontend/src/api/schedules.ts` | Fix | Async/await with data unwrap |
+| `frontend/src/api/logs.ts` | Fix | Async/await with data unwrap |
+| `frontend/src/api/github.ts` | Fix | Async/await with data unwrap |
+| `frontend/src/stores/connections.ts` | Fix | Consume unwrapped API responses |
+| `frontend/src/stores/logs.ts` | Fix | Consume unwrapped API responses |
+| `frontend/src/stores/reports.ts` | Fix | Consume unwrapped API responses |
+| `frontend/src/stores/schedules.ts` | Fix | Consume unwrapped API responses |
+| `frontend/src/pages/AgentChatPage.vue` | Fix | Consume unwrapped API response |
+
+---
+
+## 0.42.0 — Multi-Org Support & Team Management (2026-04-13)
+
+Heimdall now supports multiple organisations per user, role-based team management, and a dedicated org-level navigation context. The previous 1:1 relationship between users and organisations has been replaced with a many-to-many membership model with roles, and the frontend has been restructured into two navigation contexts — org-level and app-level — connected by an org switcher in the header.
+
+### The problem with single-org
+
+The original data model hard-wired each user to exactly one organisation via a `users.org_id` foreign key. This made multi-tenancy impossible: a consultant working across client orgs, a developer with personal and work projects, or a team lead overseeing multiple product orgs all had to use separate accounts. There was also no concept of team membership — every user in an org had identical permissions.
+
+### Database: `org_members` join table
+
+A new `org_members` table replaces `users.org_id` with a many-to-many relationship:
+
+| Column | Type | Purpose |
+|--------|------|---------|
+| `user_id` | uuid (PK, FK) | References `users.id` |
+| `org_id` | uuid (PK, FK) | References `organizations.id` |
+| `role` | `org_member_role` enum | `'owner'`, `'admin'`, `'member'` |
+| `created_at` | timestamptz | When membership was created |
+
+Migration `026_org_members` handles the full transition:
+1. Creates the `org_member_role` enum and `org_members` table
+2. Migrates all existing `users.org_id` relationships as `owner` memberships
+3. Rewrites 8 RLS policies across `organizations`, `applications`, `app_agent_config`, `monitoring_state`, `notification_channels`, `notification_preferences`, `notification_log`, and `investigation_schedules` — all changed from `JOIN users u ON u.org_id` to `JOIN org_members om ON om.org_id`
+4. Drops the `users.org_id` column
+
+The down migration is fully reversible.
+
+### Backend API — 9 new endpoints
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/api/orgs` | any | List all orgs the user belongs to (with roles) |
+| `POST` | `/api/orgs` | any | Create a new organisation (caller becomes owner) |
+| `PUT` | `/api/org` | admin+ | Update org name and/or slug |
+| `DELETE` | `/api/org` | owner | Delete org (requires typing slug to confirm) |
+| `GET` | `/api/org/members` | any member | List all members with email and role |
+| `POST` | `/api/org/members/invite` | admin+ | Add user by email (must have existing account) |
+| `PUT` | `/api/org/members/{userId}/role` | owner | Change a member's role |
+| `DELETE` | `/api/org/members/{userId}` | admin+ | Remove member (sole-owner guard) |
+| `GET` | `/api/org` (updated) | any member | Now includes caller's `role` in the response |
+
+Role-based authorization uses a `resolveOrgAndRole` helper that fetches the caller's org and membership in one call, paired with a `hasMinRole` comparison function. This is implemented as handler-level helpers rather than middleware — the authorization logic is visible in each handler rather than hidden in route configuration.
+
+The invite flow (V1) requires the target user to already have a Heimdall account. Future iterations can add pending invite tables, email notifications, and invite links.
+
+### Frontend — two-context navigation
+
+The UI now operates in two navigation contexts:
+
+**Org context** (`/org/*` routes) — OrgSidebar shows Projects, Team, Billing, Settings. The header hides the app selector.
+
+**App context** (all other routes) — AppSidebar shows Dashboard, Activity, Connections, etc. The header shows the full breadcrumb with app selector.
+
+Context switching is driven by the route path: `route.path.startsWith('/org')` determines which sidebar renders. The sidebar swap uses a `<Transition>` crossfade (150ms, `out-in` mode) so the switch feels deliberate rather than jarring.
+
+### Org-level pages
+
+**Org Overview** (`/org`) — Projects grid showing all applications in the organisation. Includes search (client-side filter by name), sort (by name, date, or status), grid/list toggle (persisted to localStorage), and a "New project" button that opens the existing app creation wizard. Each app card shows status badge, connection count, schedule count, and created date. Clicking a card calls `appStore.selectApp()` and navigates to `/dashboard`, switching to app context.
+
+**Team** (`/org/team`) — Full team management page. Members are listed with avatar initials, email, joined date, and role badge. Owners see inline role dropdowns on other members. Admins+ see an invite section with email input, role selector, and role description cards. Remove flow uses a confirmation modal. All controls are permission-gated in the UI and enforced server-side.
+
+**Org Settings** (`/org/settings`) — Editable name and slug (admin+), copyable org ID, created date. Owner-only danger zone with delete confirmation modal that requires typing the org slug. Successful deletion resets the app store and redirects to onboarding.
+
+**Billing** (`/org/billing`) — Placeholder for future billing integration.
+
+### Multi-org switching
+
+The header org breadcrumb is now a dropdown listing all organisations the user belongs to, each showing name and role badge (green for owner, amber for admin, neutral for member). Clicking a different org calls `appStore.selectOrg()` which updates the active org, refetches apps for that org, and navigates to `/org`. A "+ New organisation" option at the bottom opens a creation modal with auto-generated slug.
+
+The app store's `init()` method now fetches all orgs via `GET /api/orgs`, restores the last active org from localStorage (`heimdall_current_org`), and falls back to the first org if the stored ID is no longer valid.
+
+### Old settings page removed
+
+`SettingsPage.vue` and its sub-components (`ProfileSection`, `OrganisationSection`, `ApplicationsSection`) have been deleted. Their functionality is now distributed across the org-level pages. `/settings` redirects to `/org/settings` for bookmark preservation. `DeleteAppModal.vue` is retained as a reusable component.
+
+### Other polish
+
+- **Context-aware logo link** — logo navigates to `/org` in org context, `/dashboard` in app context
+- **Profile dropdown** — now includes "Organisation" link to `/org` overview
+- **Mobile nav** — auto-closes on context switch via `watch(isOrgContext)`
+
+### Files changed
+
+| File | Kind | Summary |
+|------|------|---------|
+| `backend/migrations/026_org_members.up.sql` | New | Join table, data migration, 8 RLS policy rewrites |
+| `backend/migrations/026_org_members.down.sql` | New | Full rollback |
+| `backend/internal/db/queries/organizations.sql` | Edit | 8 new membership queries |
+| `backend/internal/db/queries/users.sql` | Edit | `GetUserByEmail`, `HasOrgMembership`, removed `SetUserOrg` |
+| `backend/internal/db/queries/applications.sql` | Edit | Auth join via `org_members` |
+| `backend/internal/db/models.go` | Regen | `OrgMember` struct, `OrgMemberRole` enum |
+| `backend/internal/db/organizations.sql.go` | Regen | Membership CRUD functions |
+| `backend/internal/db/users.sql.go` | Regen | Updated user queries |
+| `backend/internal/db/applications.sql.go` | Regen | Updated app auth query |
+| `backend/internal/api/handlers/org_members.go` | New | Membership handlers + role helpers |
+| `backend/internal/api/handlers/organizations.go` | Edit | Updated + new org handlers |
+| `backend/internal/api/handlers/testhelpers_test.go` | Edit | Test routes + org_members setup |
+| `backend/internal/api/router.go` | Edit | 7 new routes |
+| `backend/internal/agent/monitor.go` | Edit | Removed `pgtype` wrapping |
+| `frontend/src/types/organization.ts` | Edit | `OrgMember`, `OrgMemberRole`, `OrganizationWithRole` |
+| `frontend/src/api/organizations.ts` | Edit | 7 new API client functions |
+| `frontend/src/stores/app.ts` | Edit | Multi-org state, `selectOrg`, `addOrg` |
+| `frontend/src/router/index.ts` | Edit | 4 org routes, `/settings` redirect |
+| `frontend/src/layouts/DefaultLayout.vue` | Edit | Context-aware sidebar with crossfade |
+| `frontend/src/components/common/AppHeader.vue` | Edit | Org switcher dropdown, context-aware logo |
+| `frontend/src/components/common/OrgSidebar.vue` | New | Org-level navigation sidebar |
+| `frontend/src/components/org/AppCard.vue` | New | Grid-view app card |
+| `frontend/src/components/org/AppListRow.vue` | New | List-view app row |
+| `frontend/src/components/org/CreateOrgModal.vue` | New | New org creation with auto-slug |
+| `frontend/src/pages/org/OrgOverviewPage.vue` | New | Projects grid with search/sort/toggle |
+| `frontend/src/pages/org/OrgTeamPage.vue` | New | Team management with invite/role/remove |
+| `frontend/src/pages/org/OrgSettingsPage.vue` | New | Org settings + danger zone |
+| `frontend/src/pages/org/OrgBillingPage.vue` | New | Billing placeholder |
+| `frontend/src/pages/SettingsPage.vue` | Delete | Replaced by org pages |
+| `frontend/src/components/settings/ProfileSection.vue` | Delete | Profile in header dropdown |
+| `frontend/src/components/settings/OrganisationSection.vue` | Delete | Replaced by OrgSettingsPage |
+| `frontend/src/components/settings/ApplicationsSection.vue` | Delete | Replaced by OrgOverviewPage |
+
+### Verification
+
+| Check | Result |
+|-------|--------|
+| `go build ./...` | Clean |
+| `go vet ./...` | Clean |
+| `vue-tsc --noEmit` | Clean |
+| `vite build` | Clean |
+| `vitest run` | 52/52 tests pass |
 
 ---
 

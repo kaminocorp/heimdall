@@ -43,9 +43,9 @@ func (a *Agent) emitLog(ctx context.Context, userID uuid.UUID, appID *uuid.UUID,
 		sev = pgtype.Text{String: severity, Valid: true}
 	}
 
-	var pgAppID pgtype.UUID
+	var appUUID uuid.UUID
 	if appID != nil {
-		pgAppID = pgtype.UUID{Bytes: *appID, Valid: true}
+		appUUID = *appID
 	}
 
 	row, err := a.queries.InsertAgentLog(ctx, db.InsertAgentLogParams{
@@ -55,7 +55,7 @@ func (a *Agent) emitLog(ctx context.Context, userID uuid.UUID, appID *uuid.UUID,
 		Detail:         detailBytes,
 		Severity:       sev,
 		ConversationID: convID,
-		AppID:          pgAppID,
+		AppID:          appUUID,
 	})
 	if err != nil {
 		slog.Warn("agent emit: failed to insert agent log", "err", err, "entry_type", entryType)

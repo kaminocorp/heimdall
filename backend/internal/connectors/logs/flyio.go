@@ -229,26 +229,30 @@ func (f *Flyio) pollMachineLogs(ctx context.Context, queries *db.Queries, machin
 			continue
 		}
 
-		payload, _ := json.Marshal(map[string]any{
+		payload, err := json.Marshal(map[string]any{
 			"timestamp": entry.Timestamp,
 			"message":   entry.Message,
 			"level":     entry.Level,
 			"machine":   machineName,
 		})
+		if err != nil {
+			slog.Error("flyio: marshal payload", "err", err, "connection_id", f.connectionID)
+			continue
+		}
 
 		severity := normalizeSev(entry.Level)
 
-		_, err := queries.InsertLogEntry(ctx, db.InsertLogEntryParams{
+		_, err = queries.InsertLogEntry(ctx, db.InsertLogEntryParams{
 			ConnectionID: f.connectionID,
 			SourceType:   "flyio/" + f.config.AppName,
 			Severity:     severity,
 			Payload:      payload,
 			UserID:       f.userID,
-			AppID:        pgtype.UUID{Bytes: f.appID, Valid: true},
+			AppID:        f.appID,
 		})
 		if err != nil {
 			slog.Error("flyio: insert log entry", "err", err, "connection_id", f.connectionID)
-			return count, maxTS, fmt.Errorf("flyio: insert log entry: %w", err)
+			continue
 		}
 
 		count++

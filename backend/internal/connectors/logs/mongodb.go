@@ -42,8 +42,9 @@ type MongoDB struct {
 	httpClient   *http.Client
 	apiBase      string
 
-	mu     sync.Mutex
-	cursor time.Time
+	mu       sync.Mutex
+	cursor   time.Time
+	hostname string // cached cluster hostname, resolved on first successful poll
 }
 
 func NewMongoDB(configJSON json.RawMessage, connectionID, userID, appID uuid.UUID) (*MongoDB, error) {
@@ -99,8 +100,10 @@ func (m *MongoDB) Poll(ctx context.Context, queries *db.Queries) error {
 	m.mu.Unlock()
 
 	// Fetch access logs for the cluster's primary hostname.
-	// Atlas returns logs for a specific hostname, which we discover from the cluster.
-	hostname, err := m.getClusterHostname(ctx)
+	// Atlas returns logs for a specific hostname, which we discover from the
+	// cluster API. The hostname is cached after the first successful lookup
+	// since it doesn't change at runtime.
+	hostname, err := m.cachedHostname(ctx)
 	if err != nil {
 		return fmt.Errorf("mongodb: get hostname: %w", err)
 	}
@@ -162,7 +165,7 @@ func (m *MongoDB) Poll(ctx context.Context, queries *db.Queries) error {
 			severity = pgtype.Text{String: "error", Valid: true}
 		}
 
-		payload, _ := json.Marshal(map[string]any{
+		payload, err := json.Marshal(map[string]any{
 			"timestamp":      entry.Timestamp,
 			"auth_result":    entry.AuthResult,
 			"auth_source":    entry.AuthSource,
@@ -172,18 +175,22 @@ func (m *MongoDB) Poll(ctx context.Context, queries *db.Queries) error {
 			"log_line":       entry.LogLine,
 			"username":       entry.Username,
 		})
+		if err != nil {
+			slog.Error("mongodb: marshal payload", "err", err, "connection_id", m.connectionID)
+			continue
+		}
 
-		_, err := queries.InsertLogEntry(ctx, db.InsertLogEntryParams{
+		_, err = queries.InsertLogEntry(ctx, db.InsertLogEntryParams{
 			ConnectionID: m.connectionID,
 			SourceType:   "mongodb/" + m.config.ClusterName,
 			Severity:     severity,
 			Payload:      payload,
 			UserID:       m.userID,
-			AppID:        pgtype.UUID{Bytes: m.appID, Valid: true},
+			AppID:        m.appID,
 		})
 		if err != nil {
 			slog.Error("mongodb: insert log entry", "err", err, "connection_id", m.connectionID)
-			return fmt.Errorf("mongodb: insert log entry: %w", err)
+			continue
 		}
 
 		insertCount++
@@ -204,6 +211,29 @@ func (m *MongoDB) Poll(ctx context.Context, queries *db.Queries) error {
 		slog.Info("mongodb poll complete", "cluster", m.config.ClusterName, "rows", insertCount, "connection_id", m.connectionID)
 	}
 	return nil
+}
+
+// cachedHostname returns the cluster hostname, resolving and caching it on
+// first successful call. Unlike sync.Once, a transient failure does not
+// permanently cache the error — the next Poll will retry the lookup.
+func (m *MongoDB) cachedHostname(ctx context.Context) (string, error) {
+	m.mu.Lock()
+	if m.hostname != "" {
+		h := m.hostname
+		m.mu.Unlock()
+		return h, nil
+	}
+	m.mu.Unlock()
+
+	h, err := m.getClusterHostname(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	m.mu.Lock()
+	m.hostname = h
+	m.mu.Unlock()
+	return h, nil
 }
 
 func (m *MongoDB) getClusterHostname(ctx context.Context) (string, error) {
@@ -246,7 +276,10 @@ func (m *MongoDB) apiRequest(ctx context.Context, path string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("mongodb: build request: %w", err)
 	}
-	// Atlas uses Digest auth, but the newer v2 API also supports API key via headers.
+	// Atlas programmatic API keys use Basic auth (public key as username,
+	// private key as password). The v2 API accepts this when the Accept
+	// header opts into the versioned contract. Digest auth is a legacy v1.0
+	// requirement that does not apply here.
 	req.SetBasicAuth(m.config.PublicKey, m.config.PrivateKey)
 	req.Header.Set("Accept", "application/vnd.atlas.2023-01-01+json")
 

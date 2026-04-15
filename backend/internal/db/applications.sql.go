@@ -80,8 +80,8 @@ func (q *Queries) GetApplication(ctx context.Context, id uuid.UUID) (Application
 
 const getApplicationByOrgUser = `-- name: GetApplicationByOrgUser :one
 SELECT a.id, a.org_id, a.name, a.status, a.created_at, a.updated_at FROM applications a
-JOIN users u ON u.org_id = a.org_id
-WHERE a.id = $1 AND u.id = $2
+JOIN org_members om ON om.org_id = a.org_id
+WHERE a.id = $1 AND om.user_id = $2
 `
 
 type GetApplicationByOrgUserParams struct {
@@ -89,7 +89,7 @@ type GetApplicationByOrgUserParams struct {
 	UserID uuid.UUID `json:"user_id"`
 }
 
-// Returns the application only if it belongs to the same org as the given user.
+// Returns the application only if it belongs to an org the given user is a member of.
 func (q *Queries) GetApplicationByOrgUser(ctx context.Context, arg GetApplicationByOrgUserParams) (Application, error) {
 	row := q.db.QueryRow(ctx, getApplicationByOrgUser, arg.AppID, arg.UserID)
 	var i Application

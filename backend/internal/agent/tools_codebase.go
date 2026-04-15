@@ -47,6 +47,7 @@ func (a *Agent) toolSearchCodebase(ctx context.Context, userID uuid.UUID, appID 
 	if err != nil {
 		return "", fmt.Errorf("search_codebase: %w", err)
 	}
+	defer connector.Close()
 
 	// Connect to get installation token.
 	if err := connector.Connect(ctx); err != nil {

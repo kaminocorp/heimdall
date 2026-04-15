@@ -7,17 +7,17 @@ package db
 
 import (
 	"context"
-	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const getFirstUserInOrg = `-- name: GetFirstUserInOrg :one
-SELECT id FROM users WHERE org_id = $1 ORDER BY created_at ASC LIMIT 1
+SELECT om.user_id AS id FROM org_members om
+WHERE om.org_id = $1
+ORDER BY om.created_at ASC LIMIT 1
 `
 
-func (q *Queries) GetFirstUserInOrg(ctx context.Context, orgID pgtype.UUID) (uuid.UUID, error) {
+func (q *Queries) GetFirstUserInOrg(ctx context.Context, orgID uuid.UUID) (uuid.UUID, error) {
 	row := q.db.QueryRow(ctx, getFirstUserInOrg, orgID)
 	var id uuid.UUID
 	err := row.Scan(&id)
@@ -25,38 +25,36 @@ func (q *Queries) GetFirstUserInOrg(ctx context.Context, orgID pgtype.UUID) (uui
 }
 
 const getUser = `-- name: GetUser :one
-SELECT id, email, org_id, created_at FROM users WHERE id = $1
+SELECT id, email, created_at FROM users WHERE id = $1
 `
 
-type GetUserRow struct {
-	ID        uuid.UUID   `json:"id"`
-	Email     string      `json:"email"`
-	OrgID     pgtype.UUID `json:"org_id"`
-	CreatedAt time.Time   `json:"created_at"`
-}
-
-func (q *Queries) GetUser(ctx context.Context, id uuid.UUID) (GetUserRow, error) {
+func (q *Queries) GetUser(ctx context.Context, id uuid.UUID) (User, error) {
 	row := q.db.QueryRow(ctx, getUser, id)
-	var i GetUserRow
-	err := row.Scan(
-		&i.ID,
-		&i.Email,
-		&i.OrgID,
-		&i.CreatedAt,
-	)
+	var i User
+	err := row.Scan(&i.ID, &i.Email, &i.CreatedAt)
 	return i, err
 }
 
-const setUserOrg = `-- name: SetUserOrg :exec
-UPDATE users SET org_id = $1 WHERE id = $2
+const getUserByEmail = `-- name: GetUserByEmail :one
+SELECT id, email, created_at FROM users WHERE email = $1
 `
 
-type SetUserOrgParams struct {
-	OrgID pgtype.UUID `json:"org_id"`
-	ID    uuid.UUID   `json:"id"`
+func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error) {
+	row := q.db.QueryRow(ctx, getUserByEmail, email)
+	var i User
+	err := row.Scan(&i.ID, &i.Email, &i.CreatedAt)
+	return i, err
 }
 
-func (q *Queries) SetUserOrg(ctx context.Context, arg SetUserOrgParams) error {
-	_, err := q.db.Exec(ctx, setUserOrg, arg.OrgID, arg.ID)
-	return err
+const hasOrgMembership = `-- name: HasOrgMembership :one
+SELECT EXISTS(SELECT 1 FROM org_members WHERE user_id = $1) AS has_org
+`
+
+// Returns true if the user belongs to any organization.
+// Used by the onboarding idempotency guard (replaces old user.OrgID.Valid check).
+func (q *Queries) HasOrgMembership(ctx context.Context, userID uuid.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, hasOrgMembership, userID)
+	var has_org bool
+	err := row.Scan(&has_org)
+	return has_org, err
 }

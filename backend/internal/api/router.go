@@ -21,19 +21,35 @@ func NewRouter(cfg *config.Config, pool *pgxpool.Pool, ag *agent.Agent, jwks *mi
 	r.Use(middleware.CORS)
 
 	r.Route("/api", func(r chi.Router) {
-		// Public routes — no JWT required.
+		// Public ingestion routes — no JWT required, larger body limits.
+		// These are outside the global MaxBodySize so they can accept payloads up to their own limits.
 		r.Post("/webhooks/logs", s.IngestWebhookLogs)
 		r.Post("/v1/logs", s.IngestOTLPLogs)
 		// GitHub callback is hit by browser redirect from GitHub — auth via state JWT, not session.
 		r.Get("/github/callback", s.GitHubCallback)
 
-		// Protected routes — require Supabase JWT.
+		// Protected routes — require Supabase JWT, 1MB body limit.
 		r.Group(func(r chi.Router) {
+			r.Use(middleware.MaxBodySize(1 << 20)) // 1MB for JSON endpoints
 			r.Use(middleware.Auth(jwks))
 
 			// Organization & onboarding
 			r.Get("/org", s.GetOrganization)
+			r.Put("/org", s.UpdateOrganization)
+			r.Delete("/org", s.DeleteOrganization)
 			r.Post("/onboard", s.Onboard)
+
+			// All orgs the user belongs to (multi-org switcher)
+			r.Get("/orgs", s.ListUserOrganizations)
+			r.Post("/orgs", s.CreateNewOrganization)
+
+			// Org membership management
+			r.Route("/org/members", func(r chi.Router) {
+				r.Get("/", s.ListOrgMembers)
+				r.Post("/invite", s.InviteMember)
+				r.Put("/{userId}/role", s.UpdateMemberRole)
+				r.Delete("/{userId}", s.RemoveMember)
+			})
 
 			// Applications
 			r.Get("/apps", s.ListApplications)
@@ -93,17 +109,17 @@ func NewRouter(cfg *config.Config, pool *pgxpool.Pool, ag *agent.Agent, jwks *mi
 
 			// Available models for the agent-config dropdown.
 			r.Get("/models", s.GetAvailableModels)
-
-			r.Route("/reports", func(r chi.Router) {
-				r.Get("/", s.ListReports)
-				r.Get("/{id}", s.GetReport)
-			})
 		})
 	})
 
 	r.Get("/health", s.Health)
-	r.Handle("/metrics", promhttp.Handler())
 	r.Get("/ws/chat", s.HandleChat)
+
+	// Metrics behind auth so operational data isn't publicly exposed.
+	r.Group(func(r chi.Router) {
+		r.Use(middleware.Auth(jwks))
+		r.Handle("/metrics", promhttp.Handler())
+	})
 
 	return r
 }

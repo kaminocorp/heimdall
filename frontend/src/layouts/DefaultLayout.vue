@@ -1,11 +1,19 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed, watch } from 'vue'
 import AppHeader from '@/components/common/AppHeader.vue'
 import AppSidebar from '@/components/common/AppSidebar.vue'
+import OrgSidebar from '@/components/common/OrgSidebar.vue'
 import { useRoute } from 'vue-router'
 
 const route = useRoute()
 const mobileMenuOpen = ref(false)
+
+const isOrgContext = computed(() => route.meta.context === 'org')
+
+// Close mobile menu when context switches (e.g. org → app via card click).
+watch(isOrgContext, () => {
+  mobileMenuOpen.value = false
+})
 </script>
 
 <template>
@@ -21,9 +29,12 @@ const mobileMenuOpen = ref(false)
 
       <!-- Below header: sidebar + content -->
       <div class="flex flex-1 min-h-0">
-        <!-- Desktop sidebar -->
+        <!-- Desktop sidebar (context-aware, crossfade on switch) -->
         <aside class="hidden lg:flex flex-shrink-0">
-          <AppSidebar />
+          <Transition name="sidebar" mode="out-in">
+            <OrgSidebar v-if="isOrgContext" key="org" />
+            <AppSidebar v-else key="app" />
+          </Transition>
         </aside>
 
         <!-- Mobile hamburger button -->
@@ -51,7 +62,8 @@ const mobileMenuOpen = ref(false)
               />
               <!-- Slide-over panel -->
               <div class="relative z-10">
-                <AppSidebar mobile @close="mobileMenuOpen = false" />
+                <OrgSidebar v-if="isOrgContext" mobile @close="mobileMenuOpen = false" />
+              <AppSidebar v-else mobile @close="mobileMenuOpen = false" />
               </div>
             </div>
           </Transition>
@@ -67,6 +79,16 @@ const mobileMenuOpen = ref(false)
 </template>
 
 <style scoped>
+/* Sidebar context-switch crossfade */
+.sidebar-enter-active,
+.sidebar-leave-active {
+  transition: opacity 0.15s ease;
+}
+.sidebar-enter-from,
+.sidebar-leave-to {
+  opacity: 0;
+}
+
 .overlay-enter-active,
 .overlay-leave-active {
   transition: opacity 0.2s ease;

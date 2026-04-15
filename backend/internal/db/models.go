@@ -5,12 +5,57 @@
 package db
 
 import (
+	"database/sql/driver"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 )
+
+type OrgMemberRole string
+
+const (
+	OrgMemberRoleOwner  OrgMemberRole = "owner"
+	OrgMemberRoleAdmin  OrgMemberRole = "admin"
+	OrgMemberRoleMember OrgMemberRole = "member"
+)
+
+func (e *OrgMemberRole) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = OrgMemberRole(s)
+	case string:
+		*e = OrgMemberRole(s)
+	default:
+		return fmt.Errorf("unsupported scan type for OrgMemberRole: %T", src)
+	}
+	return nil
+}
+
+type NullOrgMemberRole struct {
+	OrgMemberRole OrgMemberRole `json:"org_member_role"`
+	Valid         bool          `json:"valid"` // Valid is true if OrgMemberRole is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullOrgMemberRole) Scan(value interface{}) error {
+	if value == nil {
+		ns.OrgMemberRole, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.OrgMemberRole.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullOrgMemberRole) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.OrgMemberRole), nil
+}
 
 type AgentConfig struct {
 	ID                   int32       `json:"id"`
@@ -31,7 +76,7 @@ type AgentLog struct {
 	Severity       pgtype.Text `json:"severity"`
 	ConversationID pgtype.UUID `json:"conversation_id"`
 	CreatedAt      time.Time   `json:"created_at"`
-	AppID          pgtype.UUID `json:"app_id"`
+	AppID          uuid.UUID   `json:"app_id"`
 }
 
 type AppAgentConfig struct {
@@ -128,7 +173,7 @@ type LogBuffer struct {
 	Payload      json.RawMessage `json:"payload"`
 	IngestedAt   time.Time       `json:"ingested_at"`
 	UserID       uuid.UUID       `json:"user_id"`
-	AppID        pgtype.UUID     `json:"app_id"`
+	AppID        uuid.UUID       `json:"app_id"`
 }
 
 type MonitoringState struct {
@@ -170,6 +215,13 @@ type NotificationPreference struct {
 	UpdatedAt         time.Time `json:"updated_at"`
 }
 
+type OrgMember struct {
+	UserID    uuid.UUID     `json:"user_id"`
+	OrgID     uuid.UUID     `json:"org_id"`
+	Role      OrgMemberRole `json:"role"`
+	CreatedAt time.Time     `json:"created_at"`
+}
+
 type Organization struct {
 	ID        uuid.UUID `json:"id"`
 	Name      string    `json:"name"`
@@ -179,8 +231,7 @@ type Organization struct {
 }
 
 type User struct {
-	ID        uuid.UUID   `json:"id"`
-	Email     string      `json:"email"`
-	CreatedAt time.Time   `json:"created_at"`
-	OrgID     pgtype.UUID `json:"org_id"`
+	ID        uuid.UUID `json:"id"`
+	Email     string    `json:"email"`
+	CreatedAt time.Time `json:"created_at"`
 }

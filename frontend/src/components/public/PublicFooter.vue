@@ -8,15 +8,9 @@
       <div class="flex items-center gap-1.5 uppercase">
         <span>&copy; 2026 Heimdall</span>
         <span class="opacity-30">&middot;</span>
-        <RouterLink to="/terms" class="hover:text-text-secondary transition-colors">Terms</RouterLink>
-        <span class="opacity-30">&middot;</span>
-        <RouterLink to="/privacy" class="hover:text-text-secondary transition-colors">Privacy</RouterLink>
-        <span class="opacity-30">&middot;</span>
         <RouterLink to="/features" class="hover:text-text-secondary transition-colors">Platform</RouterLink>
         <span class="opacity-30">&middot;</span>
         <RouterLink to="/pricing" class="hover:text-text-secondary transition-colors">Pricing</RouterLink>
-        <span class="opacity-30">&middot;</span>
-        <RouterLink to="/security" class="hover:text-text-secondary transition-colors">Security</RouterLink>
         <span class="opacity-30">&middot;</span>
         <a href="https://github.com" target="_blank" rel="noopener noreferrer" class="hover:text-text-secondary transition-colors">GitHub</a>
         <span class="opacity-30">&middot;</span>

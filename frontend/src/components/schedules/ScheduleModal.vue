@@ -109,6 +109,11 @@ function buildInput(): ScheduleInput | null {
   return { ...base, interval_secs: intervalSecs.value }
 }
 
+// Reset stale values when switching modes to prevent old inputs leaking into buildInput().
+watch(mode, (newMode) => {
+  if (newMode !== 'custom') customCron.value = ''
+})
+
 const canSubmit = computed(() => {
   if (props.submitting) return false
   if (!name.value.trim() || !prompt.value.trim()) return false

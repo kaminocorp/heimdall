@@ -9,6 +9,13 @@ const emit = defineEmits<{
   valid: [isValid: boolean]
 }>()
 
+const payloadExample = `{
+  "source": "my-app",
+  "severity": "error",
+  "message": "Connection refused",
+  "metadata": { ... }
+}`
+
 // Webhook connections are auto-configured — always valid.
 // The actual token is generated server-side on creation.
 onMounted(() => {
@@ -38,12 +45,3 @@ onMounted(() => {
     </p>
   </div>
 </template>
-
-<script lang="ts">
-const payloadExample = `{
-  "source": "my-app",
-  "severity": "error",
-  "message": "Connection refused",
-  "metadata": { ... }
-}`
-</script>

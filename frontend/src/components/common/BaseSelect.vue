@@ -85,9 +85,9 @@ function onKeydown(e: KeyboardEvent) {
 
 function scrollToFocused() {
   const list = listRef.value
-  if (!list) return
-  const item = list.children[focusedIndex.value] as HTMLElement | undefined
-  item?.scrollIntoView({ block: 'nearest' })
+  if (!list || focusedIndex.value < 0 || focusedIndex.value >= list.children.length) return
+  const item = list.children[focusedIndex.value] as HTMLElement
+  item.scrollIntoView({ block: 'nearest' })
 }
 
 onMounted(() => document.addEventListener('click', onClickOutside))

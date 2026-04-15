@@ -1,10 +1,7 @@
 import client from './client'
-import type { ConversationSummary, Conversation } from '@/types/agent'
+import type { Conversation } from '@/types/agent'
 
-export function listConversations() {
-  return client.get<ConversationSummary[]>('/conversations')
-}
-
-export function getConversation(id: string) {
-  return client.get<Conversation>(`/conversations/${id}`)
+export async function getConversation(id: string): Promise<Conversation> {
+  const { data } = await client.get<Conversation>(`/conversations/${id}`)
+  return data
 }

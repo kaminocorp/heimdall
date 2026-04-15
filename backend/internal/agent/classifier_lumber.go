@@ -48,13 +48,29 @@ func (c *LumberClassifier) Classify(logs []db.LogBuffer) ([]ClassifiedLog, int) 
 		return flagged, 0
 	}
 
+	if len(events) != len(logs) {
+		slog.Error("lumber: ClassifyBatch returned mismatched count, escalating all",
+			"expected", len(logs), "got", len(events))
+		flagged := make([]ClassifiedLog, len(logs))
+		for i, log := range logs {
+			flagged[i] = ClassifiedLog{
+				Log:      log,
+				Type:     "UNCLASSIFIED",
+				Severity: "warning",
+				Summary:  texts[i],
+			}
+		}
+		return flagged, 0
+	}
+
 	var flagged []ClassifiedLog
 	safeCount := 0
 
 	for i, event := range events {
-		// We own the confidence threshold here rather than delegating to Lumber's
-		// WithConfidenceThreshold option, so the policy stays in one place.
-		if event.Confidence < 0.5 || ShouldEscalate(event) {
+		// Escalate if the severity gate says so. Low-confidence events are NOT
+		// auto-escalated — doing so caused PassthroughClassifier-like behavior
+		// where a poorly calibrated model flooded the LLM with noise.
+		if ShouldEscalate(event) {
 			flagged = append(flagged, ClassifiedLog{
 				Log:        logs[i],
 				Type:       event.Type,

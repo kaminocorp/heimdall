@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -25,17 +26,30 @@ func (s *Server) ListConversations(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	queries, done, err := s.UserQueries(r.Context(), userID)
+	queries, _, done, err := s.UserQueries(r.Context(), userID)
 	if err != nil {
 		jsonServerError(w, "database error", err)
 		return
 	}
 	defer done()
 
+	limit := int32(50)
+	offset := int32(0)
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 200 {
+			limit = int32(n)
+		}
+	}
+	if v := r.URL.Query().Get("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			offset = int32(n)
+		}
+	}
+
 	conversations, err := queries.ListConversationsByUser(r.Context(), db.ListConversationsByUserParams{
 		UserID: userID,
-		Limit:  50,
-		Offset: 0,
+		Limit:  limit,
+		Offset: offset,
 	})
 	if err != nil {
 		jsonServerError(w, "failed to list conversations", err)
@@ -68,7 +82,7 @@ func (s *Server) GetConversation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	queries, done, err := s.UserQueries(r.Context(), userID)
+	queries, _, done, err := s.UserQueries(r.Context(), userID)
 	if err != nil {
 		jsonServerError(w, "database error", err)
 		return

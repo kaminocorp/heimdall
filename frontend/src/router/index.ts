@@ -34,6 +34,31 @@ const router = createRouter({
       name: 'onboarding',
       component: () => import('@/pages/OnboardingPage.vue'),
     },
+    // ── Org-level routes (org sidebar) ──
+    {
+      path: '/org',
+      name: 'org-overview',
+      component: () => import('@/pages/org/OrgOverviewPage.vue'),
+      meta: { context: 'org' },
+    },
+    {
+      path: '/org/team',
+      name: 'org-team',
+      component: () => import('@/pages/org/OrgTeamPage.vue'),
+      meta: { context: 'org' },
+    },
+    {
+      path: '/org/settings',
+      name: 'org-settings',
+      component: () => import('@/pages/org/OrgSettingsPage.vue'),
+      meta: { context: 'org' },
+    },
+    {
+      path: '/org/billing',
+      name: 'org-billing',
+      component: () => import('@/pages/org/OrgBillingPage.vue'),
+      meta: { context: 'org' },
+    },
     // ── App routes ──
     {
       path: '/dashboard',
@@ -79,16 +104,8 @@ const router = createRouter({
       name: 'notifications',
       component: () => import('@/pages/NotificationsPage.vue'),
     },
-    {
-      path: '/reports',
-      name: 'reports',
-      component: () => import('@/pages/ReportsPage.vue'),
-    },
-    {
-      path: '/settings',
-      name: 'settings',
-      component: () => import('@/pages/SettingsPage.vue'),
-    },
+    // Legacy /settings redirects to org settings (preserves bookmarks).
+    { path: '/settings', redirect: '/org/settings' },
     {
       path: '/login',
       name: 'login',
@@ -116,6 +133,7 @@ router.beforeEach((to) => {
   }
   // Redirect to onboarding if user hasn't set up their org yet
   const app = useAppStore()
+  if (!app.initialized) return
   if (
     auth.isAuthenticated &&
     app.needsOnboarding &&
@@ -123,6 +141,15 @@ router.beforeEach((to) => {
     !isPublic
   ) {
     return { name: 'onboarding' }
+  }
+  // Prevent authenticated users who have already onboarded from
+  // reaching /onboarding again (which could create duplicate orgs).
+  if (
+    auth.isAuthenticated &&
+    !app.needsOnboarding &&
+    to.name === 'onboarding'
+  ) {
+    return { name: 'dashboard' }
   }
 })
 

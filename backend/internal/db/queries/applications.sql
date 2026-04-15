@@ -37,10 +37,10 @@ WHERE id = $1
 RETURNING *;
 
 -- name: GetApplicationByOrgUser :one
--- Returns the application only if it belongs to the same org as the given user.
+-- Returns the application only if it belongs to an org the given user is a member of.
 SELECT a.* FROM applications a
-JOIN users u ON u.org_id = a.org_id
-WHERE a.id = sqlc.arg(app_id) AND u.id = sqlc.arg(user_id);
+JOIN org_members om ON om.org_id = a.org_id
+WHERE a.id = sqlc.arg(app_id) AND om.user_id = sqlc.arg(user_id);
 
 -- name: DeleteApplication :exec
 DELETE FROM applications WHERE id = $1;

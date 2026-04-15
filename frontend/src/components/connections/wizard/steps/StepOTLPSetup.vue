@@ -9,6 +9,26 @@ const emit = defineEmits<{
   valid: [isValid: boolean]
 }>()
 
+const payloadExample = `{
+  "resourceLogs": [{
+    "resource": {
+      "attributes": [
+        { "key": "service.name",
+          "value": { "stringValue": "my-app" } }
+      ]
+    },
+    "scopeLogs": [{
+      "logRecords": [{
+        "timeUnixNano": "1712345678000000000",
+        "severityText": "ERROR",
+        "severityNumber": 17,
+        "body": { "stringValue": "connection refused" },
+        "attributes": []
+      }]
+    }]
+  }]
+}`
+
 // OTLP connections are auto-configured — always valid.
 // The token is generated server-side on creation.
 onMounted(() => {
@@ -50,25 +70,3 @@ onMounted(() => {
     </p>
   </div>
 </template>
-
-<script lang="ts">
-const payloadExample = `{
-  "resourceLogs": [{
-    "resource": {
-      "attributes": [
-        { "key": "service.name",
-          "value": { "stringValue": "my-app" } }
-      ]
-    },
-    "scopeLogs": [{
-      "logRecords": [{
-        "timeUnixNano": "1712345678000000000",
-        "severityText": "ERROR",
-        "severityNumber": 17,
-        "body": { "stringValue": "connection refused" },
-        "attributes": []
-      }]
-    }]
-  }]
-}`
-</script>

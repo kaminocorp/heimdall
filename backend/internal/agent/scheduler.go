@@ -2,7 +2,9 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -12,6 +14,8 @@ import (
 
 	"github.com/hejijunhao/heimdall/backend/internal/db"
 )
+
+const maxConcurrentSchedules = 5
 
 // cronParser is the shared 5-field cron parser (Minute Hour Dom Month Dow).
 // We construct it once at package init rather than per-call because the parser
@@ -60,13 +64,17 @@ func (a *Agent) InvestigationScheduler(ctx context.Context) {
 	slog.Info("investigation scheduler started", "tick", schedulerTickInterval)
 	defer slog.Info("investigation scheduler stopped")
 
+	// Create the semaphore once and pass it to every tick, matching the Monitor
+	// pattern. A per-tick semaphore would allow concurrent ticks to exceed the
+	// concurrency cap if schedules take longer than one tick interval.
+	sem := make(chan struct{}, maxConcurrentSchedules)
 	ticker := time.NewTicker(schedulerTickInterval)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ticker.C:
-			a.schedulerTick(ctx)
+			a.schedulerTick(ctx, sem)
 		case <-ctx.Done():
 			return
 		}
@@ -74,25 +82,55 @@ func (a *Agent) InvestigationScheduler(ctx context.Context) {
 }
 
 // schedulerTick performs a single scheduling pass: list enabled schedules,
-// fire any whose interval has elapsed. Runs schedules serially rather than
-// in parallel because the 1-minute tick interval leaves plenty of headroom
-// and because the rate limiter on RunMonitoring would serialize them anyway.
-// If this becomes a bottleneck, the fix is to mirror monitor.go's semaphore
-// pattern — ~10 lines of change.
-func (a *Agent) schedulerTick(ctx context.Context) {
+// fire any whose interval has elapsed. Schedules run concurrently with a
+// semaphore cap (maxConcurrentSchedules) to prevent a hung LLM call from
+// blocking all other schedules.
+func (a *Agent) schedulerTick(ctx context.Context, sem chan struct{}) {
 	schedules, err := a.queries.ListEnabledSchedules(ctx)
 	if err != nil {
 		slog.Error("scheduler: list enabled schedules failed", "err", err)
 		return
 	}
 
+	var wg sync.WaitGroup
+
 	now := time.Now()
 	for _, s := range schedules {
-		if !shouldFire(s, now) {
+		fire, cronErr := shouldFire(s, now)
+		if cronErr != "" {
+			// Emit to agent_log so the user sees broken cron expressions in the Activity feed.
+			// Resolve app → org → user for log attribution (best-effort).
+			if app, err := a.queries.GetApplication(ctx, s.AppID); err == nil {
+				if userID, err := a.resolveOrgUser(ctx, app.OrgID); err == nil {
+					a.EmitLog(ctx, userID, &s.AppID, nil, "schedule_error", cronErr,
+						map[string]any{"schedule_id": s.ID, "cron_expr": s.CronExpr.String})
+				}
+			}
+		}
+		if !fire {
 			continue
 		}
-		a.RunScheduledInvestigation(ctx, s)
+
+		wg.Add(1)
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			wg.Done()
+			return
+		}
+
+		go func(s db.InvestigationSchedule) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Error("scheduler: panic in per-schedule goroutine", "schedule_id", s.ID, "app_id", s.AppID, "panic", r)
+				}
+			}()
+			a.RunScheduledInvestigation(ctx, s)
+		}(s)
 	}
+	wg.Wait()
 }
 
 // shouldFire decides whether a schedule is due. A schedule fires when:
@@ -106,9 +144,12 @@ func (a *Agent) schedulerTick(ctx context.Context) {
 // The cron path tolerates a malformed cron_expr by logging and returning
 // false: we'd rather have a stuck schedule the user can fix via the UI than
 // an infinite error loop firing the same broken expression every tick.
-func shouldFire(s db.InvestigationSchedule, now time.Time) bool {
+// shouldFire returns (true, "") when the schedule is due. If a cron expression
+// is malformed, it returns (false, errorMessage) so the caller can surface
+// the error in the Activity feed.
+func shouldFire(s db.InvestigationSchedule, now time.Time) (bool, string) {
 	if s.LastRunAt == nil {
-		return true
+		return true, ""
 	}
 
 	// Prefer cron_expr when present. The handler guarantees that at create/
@@ -123,15 +164,15 @@ func shouldFire(s db.InvestigationSchedule, now time.Time) bool {
 				"schedule_id", s.ID,
 				"cron", s.CronExpr.String,
 				"err", err)
-			return false
+			return false, fmt.Sprintf("Schedule %s has invalid cron expression %q: %v", s.ID, s.CronExpr.String, err)
 		}
 		next := sched.Next(*s.LastRunAt)
-		return !next.After(now)
+		return !next.After(now), ""
 	}
 
 	// Legacy interval_secs path — unchanged from Phase 3.
 	elapsed := now.Sub(*s.LastRunAt)
-	return elapsed >= time.Duration(s.IntervalSecs)*time.Second
+	return elapsed >= time.Duration(s.IntervalSecs)*time.Second, ""
 }
 
 // RunScheduledInvestigation is the entire fire path for one schedule:
@@ -187,7 +228,15 @@ func (a *Agent) RunScheduledInvestigation(ctx context.Context, s db.Investigatio
 	// RunMonitoring doesn't care; it just feeds the string to the LLM as the
 	// first user message. This is the architectural reuse that justifies not
 	// building a parallel loop body.
-	assessment, severity := a.RunMonitoring(runCtx, userID, appConfig, s.Prompt)
+	assessment, severity, providerFailed := a.RunMonitoring(runCtx, userID, appConfig, s.Prompt)
+	if providerFailed {
+		slog.Warn("scheduler: LLM provider failed", "schedule_id", s.ID, "app_id", s.AppID)
+		// Mark the run as errored so last_run_at advances. Without this, the
+		// schedule fires again on the very next tick (every 60s), creating a
+		// tight retry loop that burns rate-limiter tokens while the provider is down.
+		a.markRunError(ctx, s.ID, "LLM provider failed")
+		return
+	}
 
 	// Truncate for storage/display. The 200-rune cap matches what monitor.go
 	// uses for its own summary field — keeps agent_log rows cheap to scan

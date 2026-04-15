@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/hejijunhao/heimdall/backend/internal/api/middleware"
 	"github.com/hejijunhao/heimdall/backend/internal/db"
 	"github.com/hejijunhao/heimdall/backend/internal/notifications"
 )
@@ -51,6 +52,12 @@ func (s *Server) UpdateNotificationPreferences(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	userID, ok := middleware.UserIDFromContext(r.Context())
+	if !ok {
+		jsonError(w, "missing user context", http.StatusUnauthorized)
+		return
+	}
+
 	var req updatePreferencesRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonError(w, "invalid request body", http.StatusBadRequest)
@@ -68,7 +75,14 @@ func (s *Server) UpdateNotificationPreferences(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	prefs, err := s.Queries.UpsertNotificationPreferences(r.Context(), db.UpsertNotificationPreferencesParams{
+	queries, commit, done, err := s.UserQueries(r.Context(), userID)
+	if err != nil {
+		jsonServerError(w, "failed to begin transaction", err)
+		return
+	}
+	defer done()
+
+	prefs, err := queries.UpsertNotificationPreferences(r.Context(), db.UpsertNotificationPreferencesParams{
 		AppID:             app.ID,
 		Enabled:           req.Enabled,
 		SeverityThreshold: req.SeverityThreshold,
@@ -76,6 +90,11 @@ func (s *Server) UpdateNotificationPreferences(w http.ResponseWriter, r *http.Re
 	})
 	if err != nil {
 		jsonServerError(w, "failed to update notification preferences", err)
+		return
+	}
+
+	if err := commit(); err != nil {
+		jsonServerError(w, "failed to save changes", err)
 		return
 	}
 
@@ -117,6 +136,12 @@ func (s *Server) CreateNotificationChannel(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	userID, ok := middleware.UserIDFromContext(r.Context())
+	if !ok {
+		jsonError(w, "missing user context", http.StatusUnauthorized)
+		return
+	}
+
 	var req createChannelRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonError(w, "invalid request body", http.StatusBadRequest)
@@ -141,7 +166,14 @@ func (s *Server) CreateNotificationChannel(w http.ResponseWriter, r *http.Reques
 		enabled = *req.Enabled
 	}
 
-	channel, err := s.Queries.CreateNotificationChannel(r.Context(), db.CreateNotificationChannelParams{
+	queries, commit, done, err := s.UserQueries(r.Context(), userID)
+	if err != nil {
+		jsonServerError(w, "failed to begin transaction", err)
+		return
+	}
+	defer done()
+
+	channel, err := queries.CreateNotificationChannel(r.Context(), db.CreateNotificationChannelParams{
 		AppID:   app.ID,
 		Type:    req.Type,
 		Name:    req.Name,
@@ -150,6 +182,11 @@ func (s *Server) CreateNotificationChannel(w http.ResponseWriter, r *http.Reques
 	})
 	if err != nil {
 		jsonServerError(w, "failed to create notification channel", err)
+		return
+	}
+
+	if err := commit(); err != nil {
+		jsonServerError(w, "failed to save changes", err)
 		return
 	}
 
@@ -167,6 +204,12 @@ type updateChannelRequest struct {
 func (s *Server) UpdateNotificationChannel(w http.ResponseWriter, r *http.Request) {
 	app := s.authorizeApp(w, r)
 	if app == nil {
+		return
+	}
+
+	userID, ok := middleware.UserIDFromContext(r.Context())
+	if !ok {
+		jsonError(w, "missing user context", http.StatusUnauthorized)
 		return
 	}
 
@@ -202,7 +245,14 @@ func (s *Server) UpdateNotificationChannel(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	channel, err := s.Queries.UpdateNotificationChannel(r.Context(), db.UpdateNotificationChannelParams{
+	queries, commit, done, err := s.UserQueries(r.Context(), userID)
+	if err != nil {
+		jsonServerError(w, "failed to begin transaction", err)
+		return
+	}
+	defer done()
+
+	channel, err := queries.UpdateNotificationChannel(r.Context(), db.UpdateNotificationChannelParams{
 		ID:      channelID,
 		Name:    req.Name,
 		Config:  req.Config,
@@ -213,6 +263,11 @@ func (s *Server) UpdateNotificationChannel(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	if err := commit(); err != nil {
+		jsonServerError(w, "failed to save changes", err)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(channel)
 }
@@ -220,6 +275,12 @@ func (s *Server) UpdateNotificationChannel(w http.ResponseWriter, r *http.Reques
 func (s *Server) DeleteNotificationChannel(w http.ResponseWriter, r *http.Request) {
 	app := s.authorizeApp(w, r)
 	if app == nil {
+		return
+	}
+
+	userID, ok := middleware.UserIDFromContext(r.Context())
+	if !ok {
+		jsonError(w, "missing user context", http.StatusUnauthorized)
 		return
 	}
 
@@ -239,8 +300,20 @@ func (s *Server) DeleteNotificationChannel(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if err := s.Queries.DeleteNotificationChannel(r.Context(), channelID); err != nil {
+	queries, commit, done, err := s.UserQueries(r.Context(), userID)
+	if err != nil {
+		jsonServerError(w, "failed to begin transaction", err)
+		return
+	}
+	defer done()
+
+	if err := queries.DeleteNotificationChannel(r.Context(), channelID); err != nil {
 		jsonServerError(w, "failed to delete notification channel", err)
+		return
+	}
+
+	if err := commit(); err != nil {
+		jsonServerError(w, "failed to save changes", err)
 		return
 	}
 
@@ -356,6 +429,14 @@ func validateChannelConfig(channelType string, config json.RawMessage) error {
 		}
 		if len(c.Recipients) == 0 {
 			return &validationError{"email config requires at least one recipient"}
+		}
+		if len(c.Recipients) > 20 {
+			return &validationError{"email config allows a maximum of 20 recipients"}
+		}
+		for _, r := range c.Recipients {
+			if !isValidEmail(r) {
+				return &validationError{"invalid email address: " + r}
+			}
 		}
 
 	case "slack":

@@ -14,12 +14,17 @@ const activeFilters = ref<{ severity?: string; connection_id?: string }>({})
 
 onMounted(() => {
   logsStore.fetchLogs()
-  connectionsStore.fetchConnections()
+  if (appStore.currentAppId) {
+    connectionsStore.fetchConnectionsByApp(appStore.currentAppId)
+  }
 })
 
-watch(() => appStore.currentAppId, () => {
+watch(() => appStore.currentAppId, (appId) => {
   logsStore.resetPagination()
   logsStore.fetchLogs(activeFilters.value)
+  if (appId) {
+    connectionsStore.fetchConnectionsByApp(appId)
+  }
 })
 
 function handleFilter(filters: { severity?: string; connection_id?: string; source?: string }) {
@@ -62,8 +67,8 @@ function handleFilter(filters: { severity?: string; connection_id?: string; sour
       :limit="logsStore.limit"
       :offset="logsStore.offset"
       @filter="handleFilter"
-      @next="logsStore.nextPage(activeFilters)"
-      @prev="logsStore.prevPage(activeFilters)"
+      @next="logsStore.nextPage(activeFilters.value)"
+      @prev="logsStore.prevPage(activeFilters.value)"
     />
   </div>
 </template>

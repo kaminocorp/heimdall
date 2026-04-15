@@ -23,7 +23,7 @@ func (s *Server) ListConnections(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	queries, done, err := s.UserQueries(r.Context(), userID)
+	queries, _, done, err := s.UserQueries(r.Context(), userID)
 	if err != nil {
 		jsonServerError(w, "database error", err)
 		return
@@ -47,7 +47,7 @@ func (s *Server) GetConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	queries, done, err := s.UserQueries(r.Context(), userID)
+	queries, _, done, err := s.UserQueries(r.Context(), userID)
 	if err != nil {
 		jsonServerError(w, "database error", err)
 		return
@@ -113,16 +113,6 @@ func (s *Server) CreateConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verify the app belongs to the authenticated user's org.
-	_, err = s.Queries.GetApplicationByOrgUser(r.Context(), db.GetApplicationByOrgUserParams{
-		AppID:  appID,
-		UserID: userID,
-	})
-	if err != nil {
-		jsonError(w, "application not found", http.StatusNotFound)
-		return
-	}
-
 	direction := req.Direction
 	if direction == "" {
 		direction = "one_way"
@@ -166,12 +156,23 @@ func (s *Server) CreateConnection(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	queries, done, err := s.UserQueries(r.Context(), userID)
+	queries, commit, done, err := s.UserQueries(r.Context(), userID)
 	if err != nil {
 		jsonServerError(w, "database error", err)
 		return
 	}
 	defer done()
+
+	// Verify the app belongs to the authenticated user's org inside the
+	// transaction to avoid a TOCTOU gap between the auth check and the write.
+	_, err = queries.GetApplicationByOrgUser(r.Context(), db.GetApplicationByOrgUserParams{
+		AppID:  appID,
+		UserID: userID,
+	})
+	if err != nil {
+		jsonError(w, "application not found", http.StatusNotFound)
+		return
+	}
 
 	conn, err := queries.CreateConnection(r.Context(), db.CreateConnectionParams{
 		UserID:    userID,
@@ -208,6 +209,11 @@ func (s *Server) CreateConnection(w http.ResponseWriter, r *http.Request) {
 				slog.Error("failed to persist listener error status", "connection_id", conn.ID, "err", err)
 			}
 		}
+	}
+
+	if err := commit(); err != nil {
+		jsonServerError(w, "failed to save changes", err)
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -259,6 +265,16 @@ func (s *Server) UpdateConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Fetch existing connection to preserve defaults for omitted fields.
+	existing, err := s.Queries.GetConnectionByUser(r.Context(), db.GetConnectionByUserParams{
+		ID:     connID,
+		UserID: userID,
+	})
+	if err != nil {
+		jsonError(w, "connection not found", http.StatusNotFound)
+		return
+	}
+
 	direction := req.Direction
 	if direction == "" {
 		direction = "one_way"
@@ -269,7 +285,9 @@ func (s *Server) UpdateConnection(w http.ResponseWriter, r *http.Request) {
 	}
 	status := req.Status
 	if status == "" {
-		status = "inactive"
+		// Preserve the existing status when the client omits the field,
+		// so a rename-only update doesn't silently deactivate a connection.
+		status = existing.Status
 	}
 
 	// Validate connector config eagerly — before DB update.
@@ -292,15 +310,7 @@ func (s *Server) UpdateConnection(w http.ResponseWriter, r *http.Request) {
 			cfgMap = make(map[string]interface{})
 		}
 		if _, ok := cfgMap["webhook_token"]; !ok {
-			// Fetch existing connection to preserve the token.
-			existing, err := s.Queries.GetConnectionByUser(r.Context(), db.GetConnectionByUserParams{
-				ID:     connID,
-				UserID: userID,
-			})
-			if err != nil {
-				jsonError(w, "connection not found", http.StatusNotFound)
-				return
-			}
+			// Use the already-fetched existing connection to preserve the token.
 			var oldCfg map[string]interface{}
 			if err := json.Unmarshal(existing.Config, &oldCfg); err == nil {
 				if tok, ok := oldCfg["webhook_token"]; ok {
@@ -316,7 +326,7 @@ func (s *Server) UpdateConnection(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	queries, done, err := s.UserQueries(r.Context(), userID)
+	queries, commit, done, err := s.UserQueries(r.Context(), userID)
 	if err != nil {
 		jsonServerError(w, "database error", err)
 		return
@@ -362,6 +372,11 @@ func (s *Server) UpdateConnection(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if err := commit(); err != nil {
+		jsonServerError(w, "failed to save changes", err)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(conn)
 }
@@ -373,7 +388,7 @@ func (s *Server) DeleteConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	queries, done, err := s.UserQueries(r.Context(), userID)
+	queries, commit, done, err := s.UserQueries(r.Context(), userID)
 	if err != nil {
 		jsonServerError(w, "database error", err)
 		return
@@ -396,6 +411,11 @@ func (s *Server) DeleteConnection(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		jsonServerError(w, "failed to delete connection", err)
+		return
+	}
+
+	if err := commit(); err != nil {
+		jsonServerError(w, "failed to save changes", err)
 		return
 	}
 

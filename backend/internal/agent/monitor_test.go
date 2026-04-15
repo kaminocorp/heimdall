@@ -130,19 +130,19 @@ func TestParseSeverityFromResponse(t *testing.T) {
 			expected: "error",
 		},
 		{
-			name:     "heuristic error keyword",
+			name:     "keyword without structured marker defaults to info",
 			text:     "Multiple error conditions detected in the application logs.",
-			expected: "error",
+			expected: "info",
 		},
 		{
-			name:     "heuristic critical keyword",
+			name:     "critical keyword without marker defaults to info",
 			text:     "This is a critical failure in the database layer.",
-			expected: "critical",
+			expected: "info",
 		},
 		{
-			name:     "heuristic warning keyword",
+			name:     "warning keyword without marker defaults to info",
 			text:     "This is a warning about elevated latency.",
-			expected: "warning",
+			expected: "info",
 		},
 		{
 			name:     "no severity keywords defaults to info",
@@ -208,10 +208,11 @@ func TestRunMonitoring_SimpleResponse(t *testing.T) {
 		Model: "claude-sonnet-4-6",
 	}
 
-	assessment, severity := agent.RunMonitoring(ctx, userID, appConfig, "Flagged logs:\nERROR: connection refused")
+	assessment, severity, providerFailed := agent.RunMonitoring(ctx, userID, appConfig, "Flagged logs:\nERROR: connection refused")
 
 	assert.Contains(t, assessment, "connection errors detected")
 	assert.Equal(t, "error", severity)
+	assert.False(t, providerFailed)
 }
 
 func TestRunMonitoring_WithToolUse(t *testing.T) {
@@ -244,10 +245,11 @@ func TestRunMonitoring_WithToolUse(t *testing.T) {
 		Model: "claude-sonnet-4-6",
 	}
 
-	assessment, severity := agent.RunMonitoring(ctx, userID, appConfig, "Flagged: ERROR connection refused")
+	assessment, severity, providerFailed := agent.RunMonitoring(ctx, userID, appConfig, "Flagged: ERROR connection refused")
 
 	assert.Contains(t, assessment, "transient network issue")
 	assert.Equal(t, "warning", severity)
+	assert.False(t, providerFailed)
 	assert.Equal(t, 2, callCount)
 }
 
@@ -268,10 +270,11 @@ func TestRunMonitoring_MaxIterations(t *testing.T) {
 		Model: "claude-sonnet-4-6",
 	}
 
-	assessment, severity := agent.RunMonitoring(ctx, userID, appConfig, "Flagged: some error")
+	assessment, severity, providerFailed := agent.RunMonitoring(ctx, userID, appConfig, "Flagged: some error")
 
 	assert.Contains(t, assessment, "exceeded max iterations")
 	assert.Equal(t, "warning", severity)
+	assert.False(t, providerFailed)
 }
 
 func TestMonitorStartStop(t *testing.T) {

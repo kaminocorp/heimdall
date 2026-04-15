@@ -18,19 +18,35 @@ const stats = ref<{ log_count_24h: number; connection_count: number; active_conn
 const statsError = ref('')
 const fetchError = ref('')
 
+// Generation counter prevents stale responses from overwriting fresh data
+// when the user switches apps rapidly.
+let loadGeneration = 0
+
 async function loadData() {
   const appId = appStore.currentAppId
   if (!appId) return
 
+  const gen = ++loadGeneration
   fetchError.value = ''
   statsError.value = ''
-  const errors: string[] = []
 
-  try { agentConfig.value = await getAppAgentConfig(appId) } catch { errors.push('agent config') }
-  try { connections.value = await listConnectionsByApp(appId) } catch { errors.push('connections') }
-  try { await logsStore.fetchLogs() } catch { errors.push('logs') }
-  try { stats.value = await getAppStats(appId) } catch { statsError.value = 'Failed to load stats' }
-  try { monitoring.value = await getMonitoringStatus(appId) } catch { /* optional */ }
+  const [agentRes, connRes, logsRes, statsRes, monitorRes] = await Promise.allSettled([
+    getAppAgentConfig(appId),
+    listConnectionsByApp(appId),
+    logsStore.fetchLogs(),
+    getAppStats(appId),
+    getMonitoringStatus(appId),
+  ])
+
+  // Discard results if a newer loadData call has started since we fired.
+  if (gen !== loadGeneration) return
+
+  const errors: string[] = []
+  if (agentRes.status === 'fulfilled') { agentConfig.value = agentRes.value } else { errors.push('agent config') }
+  if (connRes.status === 'fulfilled') { connections.value = connRes.value } else { errors.push('connections') }
+  if (logsRes.status === 'rejected') { errors.push('logs') }
+  if (statsRes.status === 'fulfilled') { stats.value = statsRes.value } else { statsError.value = 'Failed to load stats' }
+  if (monitorRes.status === 'fulfilled') { monitoring.value = monitorRes.value }
 
   if (errors.length) {
     fetchError.value = `Failed to load: ${errors.join(', ')}`

@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	ghpkg "github.com/hejijunhao/heimdall/backend/internal/github"
@@ -22,12 +24,20 @@ const (
 	apiTimeout       = 10 * time.Second
 )
 
+// tokenRefreshMargin is how long before expiry we proactively refresh.
+// GitHub installation tokens expire after 1 hour; refreshing at 50 minutes
+// avoids 401s during in-flight requests.
+const tokenRefreshMargin = 10 * time.Minute
+
 // GitHub implements the QueryConnector interface for code search and file reading.
 type GitHub struct {
 	ghClient       *ghpkg.Client
 	installationID int64
 	repos          []string // enabled repo full names (e.g. "org/repo")
-	token          string   // cached installation token
+
+	mu             sync.Mutex // guards token and tokenExpiresAt
+	token          string     // cached installation token
+	tokenExpiresAt time.Time  // when the cached token expires
 }
 
 // New creates a GitHub connector from a connection's config.
@@ -55,21 +65,46 @@ func New(configJSON json.RawMessage, ghClient *ghpkg.Client, repos []string) (*G
 
 // Connect obtains an installation token.
 func (g *GitHub) Connect(ctx context.Context) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.refreshToken(ctx)
+}
+
+// refreshToken obtains (or re-obtains) an installation token from the GitHub App.
+// Caller must hold g.mu.
+func (g *GitHub) refreshToken(ctx context.Context) error {
 	token, err := g.ghClient.InstallationTokenFor(ctx, g.installationID)
 	if err != nil {
 		return fmt.Errorf("github connector: %w", err)
 	}
 	g.token = token.Token
+	g.tokenExpiresAt = token.ExpiresAt
 	return nil
+}
+
+// refreshTokenIfNeeded proactively refreshes the token when it's approaching expiry.
+// Returns the current valid token.
+func (g *GitHub) refreshTokenIfNeeded(ctx context.Context) string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if time.Until(g.tokenExpiresAt) < tokenRefreshMargin {
+		if err := g.refreshToken(ctx); err != nil {
+			slog.Warn("github connector: token refresh failed, continuing with current token", "err", err)
+		}
+	}
+	return g.token
 }
 
 // Health checks the rate limit endpoint.
 func (g *GitHub) Health(ctx context.Context) error {
-	resp, err := g.ghClient.APIRequest(ctx, "GET", "https://api.github.com/rate_limit", g.token, nil)
+	token := g.refreshTokenIfNeeded(ctx)
+	resp, err := g.ghClient.APIRequest(ctx, "GET", "https://api.github.com/rate_limit", token, nil)
 	if err != nil {
 		return fmt.Errorf("github connector: health check: %w", err)
 	}
 	defer resp.Body.Close()
+	// Drain the body so the underlying TCP connection can be reused by the HTTP client pool.
+	_, _ = io.Copy(io.Discard, resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("github connector: health check failed (%d)", resp.StatusCode)
 	}
@@ -109,6 +144,12 @@ func (g *GitHub) Query(ctx context.Context, query string) (any, error) {
 func (g *GitHub) searchCode(ctx context.Context, query, repo string) (any, error) {
 	if query == "" {
 		return nil, fmt.Errorf("search_code: query is required")
+	}
+
+	// If no specific repo is requested and no repos are connected, return
+	// empty rather than searching all of public GitHub.
+	if repo == "" && len(g.repos) == 0 {
+		return map[string]any{"items": []any{}, "total_count": 0, "message": "No repositories connected. Add repos via the GitHub connection settings."}, nil
 	}
 
 	// Build the GitHub search query string (uses spaces as boolean AND).
@@ -333,10 +374,12 @@ func (g *GitHub) listTree(ctx context.Context, path, repo, ref string) (any, err
 
 // apiGet makes an authenticated GET request to the GitHub API via ghClient.
 func (g *GitHub) apiGet(ctx context.Context, apiURL string) ([]byte, error) {
+	token := g.refreshTokenIfNeeded(ctx)
+
 	ctx, cancel := context.WithTimeout(ctx, apiTimeout)
 	defer cancel()
 
-	resp, err := g.ghClient.APIRequest(ctx, "GET", apiURL, g.token, nil)
+	resp, err := g.ghClient.APIRequest(ctx, "GET", apiURL, token, nil)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}

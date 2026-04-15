@@ -68,6 +68,9 @@ const bubbleCategories = computed<ConnectionCategory[]>(() => {
 async function fetchAppConnections() {
   const appId = appStore.currentAppId
   if (!appId) return
+  // Reset bubble refs so stale DOM elements from a previous render don't
+  // linger when connections are added or removed.
+  bubbleEls.value = []
   await store.fetchConnectionsByApp(appId)
 }
 

@@ -214,7 +214,9 @@ func (a *Agent) runConversationCore(ctx context.Context, userID uuid.UUID, appID
 					emitEvent(ctx, events, AgentEvent{Type: "tool_result", Tool: tu.Name})
 				}
 			}
-			messages = append(messages, ChatMessage{Role: "user", ToolResults: toolResults})
+			if len(toolResults) > 0 {
+				messages = append(messages, ChatMessage{Role: "user", ToolResults: toolResults})
+			}
 			continue
 		}
 
@@ -228,13 +230,17 @@ func (a *Agent) runConversationCore(ctx context.Context, userID uuid.UUID, appID
 // RunMonitoring executes the agent's tool-use loop for monitoring mode.
 // Unlike RunConversation, this is sessionless (no conversation persistence),
 // uses the monitoring-specific system prompt, and loads per-app agent config.
-// Returns (assessment text, severity string).
+// Returns (assessment text, severity string, providerFailed bool).
+//
+// providerFailed is true when the LLM provider returned an error. The caller
+// should NOT advance the monitoring cursor so these logs are reprocessed on
+// the next tick.
 //
 // IMPORTANT: This path MUST stay blocking (non-streaming). The 0.27.0 rate
 // limiter wraps each invocation as a single atomic unit; streaming would
 // muddy that contract. See docs/executing/openrouter-implementation.md
 // (Phase 1, Task 1.4) for the full reasoning.
-func (a *Agent) RunMonitoring(ctx context.Context, userID uuid.UUID, appConfig db.AppAgentConfig, flaggedLogs string) (string, string) {
+func (a *Agent) RunMonitoring(ctx context.Context, userID uuid.UUID, appConfig db.AppAgentConfig, flaggedLogs string) (string, string, bool) {
 	monAppID := appConfig.AppID // local copy for pointer-taking
 	model := appConfig.Model
 	if model == "" {
@@ -269,13 +275,13 @@ func (a *Agent) RunMonitoring(ctx context.Context, userID uuid.UUID, appConfig d
 		})
 		if err != nil {
 			slog.Error("monitoring loop: provider error", "err", err, "app_id", appConfig.AppID)
-			return "Monitoring assessment failed: provider error", "error"
+			return "Monitoring assessment failed: provider error", "error", true
 		}
 
 		if resp.StopReason == StopReasonEndTurn {
 			text := extractText(resp)
 			severity := parseSeverityFromResponse(text)
-			return text, severity
+			return text, severity, false
 		}
 
 		if resp.StopReason == StopReasonToolUse {
@@ -331,14 +337,16 @@ func (a *Agent) RunMonitoring(ctx context.Context, userID uuid.UUID, appConfig d
 					)
 				}
 			}
-			messages = append(messages, ChatMessage{Role: "user", ToolResults: toolResults})
+			if len(toolResults) > 0 {
+				messages = append(messages, ChatMessage{Role: "user", ToolResults: toolResults})
+			}
 			continue
 		}
 
-		return extractText(resp), "info"
+		return extractText(resp), "info", false
 	}
 
-	return "Monitoring assessment exceeded max iterations", "warning"
+	return "Monitoring assessment exceeded max iterations", "warning", false
 }
 
 // parseSeverityFromResponse attempts to extract a severity keyword from
@@ -351,12 +359,10 @@ func parseSeverityFromResponse(text string) string {
 			return sev
 		}
 	}
-	// Fall back to heuristic keyword scan.
-	for _, sev := range []string{"critical", "error", "warning"} {
-		if strings.Contains(lower, sev) {
-			return sev
-		}
-	}
+	// No structured severity marker found — default to info.
+	// A previous heuristic keyword scan ("error", "warning" anywhere in text)
+	// was removed because it produced false positives: "no errors detected"
+	// would be classified as severity "error".
 	return "info"
 }
 

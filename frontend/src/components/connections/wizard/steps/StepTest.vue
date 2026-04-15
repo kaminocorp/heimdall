@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
 import { useConnectionsStore } from '@/stores/connections'
+import { extractApiError } from '@/utils/apiError'
 import type { WizardState } from '../flows'
 
 const props = defineProps<{
@@ -41,8 +42,7 @@ onMounted(async () => {
     }
   } catch (e: unknown) {
     phase.value = 'error'
-    const err = e as { response?: { data?: { message?: string } }; message?: string }
-    message.value = err.response?.data?.message ?? err.message ?? 'Unexpected error during connection test'
+    message.value = extractApiError(e, 'Unexpected error during connection test')
     emit('valid', false)
   } finally {
     if (timer) clearInterval(timer)

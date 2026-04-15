@@ -199,7 +199,7 @@ func (s *Supabase) pollTable(ctx context.Context, queries *db.Queries, table str
 			Severity:     severity,
 			Payload:      payload,
 			UserID:       s.userID,
-			AppID:        pgtype.UUID{Bytes: s.appID, Valid: true},
+			AppID:        s.appID,
 		})
 		if err != nil {
 			slog.Error("supabase: insert log entry", "err", err)

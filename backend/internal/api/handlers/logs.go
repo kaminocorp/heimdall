@@ -39,7 +39,7 @@ func (s *Server) ListLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	queries, done, err := s.UserQueries(r.Context(), userID)
+	queries, _, done, err := s.UserQueries(r.Context(), userID)
 	if err != nil {
 		jsonServerError(w, "database error", err)
 		return
@@ -77,7 +77,8 @@ func (s *Server) ListLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Parse optional app_id for per-app filtering.
-	var appID pgtype.UUID
+	var appID uuid.UUID
+	hasAppID := false
 	if v := r.URL.Query().Get("app_id"); v != "" {
 		parsed, parseErr := uuid.Parse(v)
 		if parseErr != nil {
@@ -92,7 +93,8 @@ func (s *Server) ListLogs(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, "application not found", http.StatusNotFound)
 			return
 		}
-		appID = pgtype.UUID{Bytes: parsed, Valid: true}
+		appID = parsed
+		hasAppID = true
 	}
 
 	var unified []unifiedLogEntry
@@ -134,7 +136,7 @@ func (s *Server) ListLogs(w http.ResponseWriter, r *http.Request) {
 				Limit:        fetchLimit,
 				Offset:       fetchOffset,
 			})
-		case appID.Valid && severity != "":
+		case hasAppID && severity != "":
 			rawLogs, err = queries.ListLogsByAppAndSeverity(r.Context(), db.ListLogsByAppAndSeverityParams{
 				UserID:   userID,
 				AppID:    appID,
@@ -142,7 +144,7 @@ func (s *Server) ListLogs(w http.ResponseWriter, r *http.Request) {
 				Limit:    fetchLimit,
 				Offset:   fetchOffset,
 			})
-		case appID.Valid:
+		case hasAppID:
 			rawLogs, err = queries.ListLogsByApp(r.Context(), db.ListLogsByAppParams{
 				UserID: userID,
 				AppID:  appID,
@@ -177,13 +179,13 @@ func (s *Server) ListLogs(w http.ResponseWriter, r *http.Request) {
 				UserID:       userID,
 				ConnectionID: connID,
 			})
-		case appID.Valid && severity != "":
+		case hasAppID && severity != "":
 			rawCount, err = queries.CountLogsByAppAndSeverity(r.Context(), db.CountLogsByAppAndSeverityParams{
 				UserID:   userID,
 				AppID:    appID,
 				Severity: pgtype.Text{String: severity, Valid: true},
 			})
-		case appID.Valid:
+		case hasAppID:
 			rawCount, err = queries.CountLogsByApp(r.Context(), db.CountLogsByAppParams{
 				UserID: userID,
 				AppID:  appID,
@@ -213,7 +215,7 @@ func (s *Server) ListLogs(w http.ResponseWriter, r *http.Request) {
 		var agentCount int64
 		var err error
 
-		if appID.Valid {
+		if hasAppID {
 			agentLogs, err = queries.ListAgentLogByApp(r.Context(), db.ListAgentLogByAppParams{
 				UserID: userID,
 				AppID:  appID,
@@ -251,9 +253,12 @@ func (s *Server) ListLogs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// When fetching from both sources, sort the full merged set by timestamp
-	// descending, then apply the original offset and limit to produce the
-	// correct page from the interleaved timeline.
+	// When fetching from both sources, sort the merged set by timestamp
+	// descending, then apply the original offset and limit. The reported
+	// total is the sum of both source counts (the true dataset size). Deep
+	// pages may return fewer than `limit` items if the merge window
+	// (offset+limit per source) is exhausted — an acceptable approximation
+	// that avoids an expensive UNION count query.
 	if source == "all" && len(unified) > 0 {
 		sort.Slice(unified, func(i, j int) bool {
 			return unified[i].Timestamp > unified[j].Timestamp

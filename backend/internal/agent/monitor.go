@@ -10,7 +10,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/hejijunhao/heimdall/backend/internal/db"
 	"github.com/hejijunhao/heimdall/backend/internal/metrics"
@@ -66,10 +65,22 @@ func (a *Agent) monitorTick(ctx context.Context, sem chan struct{}) {
 			continue
 		}
 		wg.Add(1)
-		sem <- struct{}{} // acquire semaphore
+		// Acquire semaphore with shutdown awareness so a full semaphore
+		// doesn't prevent the monitor goroutine from responding to ctx cancellation.
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			wg.Done()
+			return
+		}
 		go func(app db.ListActiveApplicationsRow) {
 			defer wg.Done()
 			defer func() { <-sem }() // release semaphore
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Error("monitor: panic in per-app goroutine", "app_id", app.ID, "panic", r)
+				}
+			}()
 			appCtx, cancel := context.WithTimeout(ctx, monitorAppTimeout)
 			defer cancel()
 			a.monitorApp(appCtx, app)
@@ -143,8 +154,14 @@ func (a *Agent) monitorApp(ctx context.Context, app db.ListActiveApplicationsRow
 	if len(flagged) > 0 {
 		escalated := flagged
 		if len(escalated) > maxFlaggedForLLM {
-			slog.Warn("monitor: capping flagged logs for LLM", "total", len(flagged), "cap", maxFlaggedForLLM, "app_id", app.ID)
+			dropped := len(flagged) - maxFlaggedForLLM
+			slog.Warn("monitor: capping flagged logs for LLM", "total", len(flagged), "cap", maxFlaggedForLLM, "dropped", dropped, "app_id", app.ID)
 			escalated = escalated[:maxFlaggedForLLM]
+
+			a.EmitLog(ctx, userID, &app.ID, nil, "monitoring",
+				fmt.Sprintf("%d flagged logs exceeded the per-cycle cap (%d) and were not assessed by the LLM", dropped, maxFlaggedForLLM),
+				map[string]any{"app_id": app.ID, "total_flagged": len(flagged), "cap": maxFlaggedForLLM, "dropped": dropped},
+			)
 		}
 
 		appConfig, err := a.queries.GetAppAgentConfig(ctx, app.ID)
@@ -165,7 +182,14 @@ func (a *Agent) monitorApp(ctx context.Context, app db.ListActiveApplicationsRow
 		}
 
 		input := formatFlaggedLogs(app, escalated)
-		assessment, severity := a.RunMonitoring(ctx, userID, appConfig, input)
+		assessment, severity, providerFailed := a.RunMonitoring(ctx, userID, appConfig, input)
+
+		// If the LLM provider failed, do not advance the cursor so these
+		// logs are reprocessed on the next tick.
+		if providerFailed {
+			slog.Warn("monitor: LLM provider failed, cursor not advanced", "app_id", app.ID)
+			return
+		}
 
 		summary := assessment
 		if utf8.RuneCountInString(summary) > 200 {
@@ -201,8 +225,7 @@ func (a *Agent) monitorApp(ctx context.Context, app db.ListActiveApplicationsRow
 
 // resolveOrgUser finds the first user in the organization for log attribution.
 func (a *Agent) resolveOrgUser(ctx context.Context, orgID uuid.UUID) (uuid.UUID, error) {
-	pgOrgID := pgtype.UUID{Bytes: orgID, Valid: true}
-	return a.queries.GetFirstUserInOrg(ctx, pgOrgID)
+	return a.queries.GetFirstUserInOrg(ctx, orgID)
 }
 
 // formatFlaggedLogs builds a text summary of flagged logs for the LLM.

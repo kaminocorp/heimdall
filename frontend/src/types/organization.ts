@@ -4,6 +4,20 @@ export interface Organization {
   slug: string
   created_at: string
   updated_at: string
+  role?: 'owner' | 'admin' | 'member'
+}
+
+export type OrgMemberRole = 'owner' | 'admin' | 'member'
+
+export interface OrgMember {
+  user_id: string
+  email: string
+  role: OrgMemberRole
+  created_at: string
+}
+
+export interface OrganizationWithRole extends Organization {
+  role: OrgMemberRole
 }
 
 export interface Application {

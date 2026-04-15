@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"net/mail"
+	"strings"
 )
 
 func jsonError(w http.ResponseWriter, message string, status int) {
@@ -24,6 +26,19 @@ func jsonErrorWithCode(w http.ResponseWriter, message, code string, status int) 
 		"error": message,
 		"code":  code,
 	})
+}
+
+// isValidEmail performs a basic format check using Go's net/mail parser.
+func isValidEmail(email string) bool {
+	if len(email) > 254 {
+		return false
+	}
+	addr, err := mail.ParseAddress(email)
+	if err != nil {
+		return false
+	}
+	// Reject display names like "Name <email@x.com>" — require bare address.
+	return addr.Address == email && strings.Contains(email, ".")
 }
 
 // jsonServerError logs the internal error for debugging, then sends a generic message to the client.

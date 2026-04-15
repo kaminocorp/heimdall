@@ -15,8 +15,7 @@ export const useConnectionsStore = defineStore('connections', () => {
     loading.value = true
     error.value = null
     try {
-      const { data } = await connectionsApi.listConnections()
-      connections.value = data
+      connections.value = await connectionsApi.listConnections()
     } catch (e: unknown) {
       error.value = extractApiError(e, 'Failed to load connections')
     } finally {
@@ -37,27 +36,27 @@ export const useConnectionsStore = defineStore('connections', () => {
   }
 
   async function createConnection(payload: CreateConnectionPayload) {
-    const { data } = await connectionsApi.createConnection(payload)
-    connections.value.unshift(data)
-    return data
+    const conn = await connectionsApi.createConnection(payload)
+    connections.value.unshift(conn)
+    return conn
   }
 
   async function updateConnection(id: string, payload: UpdateConnectionPayload) {
-    const { data } = await connectionsApi.updateConnection(id, payload)
+    const updated = await connectionsApi.updateConnection(id, payload)
     const idx = connections.value.findIndex((c) => c.id === id)
-    if (idx !== -1) connections.value[idx] = data
-    return data
+    if (idx !== -1) connections.value[idx] = updated
+    return updated
   }
 
   async function testConnection(id: string) {
     testingId.value = id
     try {
-      const { data } = await connectionsApi.testConnection(id)
+      const result = await connectionsApi.testConnection(id)
       const idx = connections.value.findIndex((c) => c.id === id)
       if (idx !== -1) {
-        connections.value[idx].status = data.success ? 'active' : 'error'
+        connections.value[idx].status = result.success ? 'active' : 'error'
       }
-      return data
+      return result
     } finally {
       testingId.value = null
     }

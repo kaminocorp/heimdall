@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/coder/websocket"
@@ -45,8 +47,10 @@ func (s *Server) HandleChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Accept WebSocket connection after auth succeeds.
+	// Use the same origin allowlist as the CORS middleware to prevent
+	// cross-origin WebSocket connections from untrusted pages.
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		OriginPatterns: []string{"*"},
+		OriginPatterns: wsOriginPatterns(s.Config.FrontendURL),
 	})
 	if err != nil {
 		slog.Error("websocket accept error", "err", err)
@@ -55,61 +59,31 @@ func (s *Server) HandleChat(w http.ResponseWriter, r *http.Request) {
 	defer conn.CloseNow()
 
 	// Parse optional app_id for app-scoped tools (e.g. search_codebase).
+	// Validate that the app belongs to the caller's org to prevent cross-tenant access.
 	var appID uuid.UUID
 	if appIDStr := r.URL.Query().Get("app_id"); appIDStr != "" {
 		parsed, err := uuid.Parse(appIDStr)
 		if err == nil {
+			if _, authErr := s.Queries.GetApplicationByOrgUser(r.Context(), db.GetApplicationByOrgUserParams{
+				AppID:  parsed,
+				UserID: userID,
+			}); authErr != nil {
+				writeWSError(r.Context(), conn, "app not found or access denied")
+				return
+			}
 			appID = parsed
 		}
 	}
 
 	ctx := r.Context()
 
-	// Load or create conversation.
-	var convID uuid.UUID
-	var storedMessages []chatMessage
-
-	queries, done, err := s.UserQueries(ctx, userID)
-	if err != nil {
-		writeWSError(ctx, conn, "database error")
+	// Load or create conversation. Extracted into a helper so defer done()
+	// handles transaction cleanup on all return paths.
+	convID, storedMessages, setupErr := s.setupConversation(ctx, userID, r.URL.Query().Get("conversation_id"))
+	if setupErr != "" {
+		writeWSError(ctx, conn, setupErr)
 		return
 	}
-
-	if cidStr := r.URL.Query().Get("conversation_id"); cidStr != "" {
-		cid, err := uuid.Parse(cidStr)
-		if err != nil {
-			done()
-			writeWSError(ctx, conn, "invalid conversation_id")
-			return
-		}
-		conv, err := queries.GetConversationByUser(ctx, db.GetConversationByUserParams{
-			ID:     cid,
-			UserID: userID,
-		})
-		if err != nil {
-			done()
-			writeWSError(ctx, conn, "conversation not found")
-			return
-		}
-		convID = conv.ID
-		if err := json.Unmarshal(conv.Messages, &storedMessages); err != nil {
-			storedMessages = []chatMessage{}
-		}
-	} else {
-		conv, err := queries.CreateConversation(ctx, db.CreateConversationParams{
-			UserID:   userID,
-			Messages: json.RawMessage(`[]`),
-		})
-		if err != nil {
-			done()
-			slog.Error("failed to create conversation", "err", err)
-			writeWSError(ctx, conn, "failed to create conversation")
-			return
-		}
-		convID = conv.ID
-		storedMessages = []chatMessage{}
-	}
-	done()
 
 	// Send system message with conversation ID.
 	if err := wsjson.Write(ctx, conn, map[string]any{
@@ -147,15 +121,20 @@ func (s *Server) HandleChat(w http.ResponseWriter, r *http.Request) {
 		// Set conversation title from first user message.
 		if len(storedMessages) == 1 {
 			title := userMsg.Content
-			if len(title) > 50 {
-				title = title[:50] + "..."
+			titleRunes := []rune(title)
+			if len(titleRunes) > 50 {
+				title = string(titleRunes[:50]) + "..."
 			}
-			if q, d, err := s.UserQueries(ctx, userID); err == nil {
-				q.UpdateConversationTitleByUser(ctx, db.UpdateConversationTitleByUserParams{
+			if q, c, d, err := s.UserQueries(ctx, userID); err == nil {
+				if err := q.UpdateConversationTitleByUser(ctx, db.UpdateConversationTitleByUserParams{
 					ID:     convID,
 					Title:  pgtype.Text{String: title, Valid: true},
 					UserID: userID,
-				})
+				}); err != nil {
+					slog.Error("failed to set conversation title", "err", err, "conversation_id", convID)
+				} else if err := c(); err != nil {
+					slog.Error("failed to commit conversation title", "err", err, "conversation_id", convID)
+				}
 				d()
 			}
 		}
@@ -242,6 +221,57 @@ func (s *Server) HandleChat(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// setupConversation loads an existing conversation or creates a new one inside a
+// single transactional scope with proper defer-based cleanup.  Returns the
+// conversation ID, stored messages, and an error string for the WebSocket client
+// (empty on success).
+func (s *Server) setupConversation(ctx context.Context, userID uuid.UUID, cidStr string) (uuid.UUID, []chatMessage, string) {
+	queries, commit, done, err := s.UserQueries(ctx, userID)
+	if err != nil {
+		return uuid.Nil, nil, "database error"
+	}
+	defer done()
+
+	var convID uuid.UUID
+	var storedMessages []chatMessage
+
+	if cidStr != "" {
+		cid, err := uuid.Parse(cidStr)
+		if err != nil {
+			return uuid.Nil, nil, "invalid conversation_id"
+		}
+		conv, err := queries.GetConversationByUser(ctx, db.GetConversationByUserParams{
+			ID:     cid,
+			UserID: userID,
+		})
+		if err != nil {
+			return uuid.Nil, nil, "conversation not found"
+		}
+		convID = conv.ID
+		if err := json.Unmarshal(conv.Messages, &storedMessages); err != nil {
+			storedMessages = []chatMessage{}
+		}
+	} else {
+		conv, err := queries.CreateConversation(ctx, db.CreateConversationParams{
+			UserID:   userID,
+			Messages: json.RawMessage(`[]`),
+		})
+		if err != nil {
+			slog.Error("failed to create conversation", "err", err)
+			return uuid.Nil, nil, "failed to create conversation"
+		}
+		convID = conv.ID
+		storedMessages = []chatMessage{}
+	}
+
+	if err := commit(); err != nil {
+		slog.Error("failed to commit conversation", "err", err)
+		return uuid.Nil, nil, "failed to save conversation"
+	}
+
+	return convID, storedMessages, ""
+}
+
 // toAgentHistory converts stored chat messages to the agent's Message type.
 func toAgentHistory(msgs []chatMessage) []agent.Message {
 	history := make([]agent.Message, len(msgs))
@@ -268,7 +298,7 @@ func (s *Server) persistMessages(ctx context.Context, convID, userID uuid.UUID, 
 		slog.Error("failed to marshal messages", "err", err)
 		return
 	}
-	queries, done, err := s.UserQueries(ctx, userID)
+	queries, commit, done, err := s.UserQueries(ctx, userID)
 	if err != nil {
 		slog.Error("failed to acquire user queries", "err", err)
 		return
@@ -280,7 +310,36 @@ func (s *Server) persistMessages(ctx context.Context, convID, userID uuid.UUID, 
 		UserID:   userID,
 	}); err != nil {
 		slog.Error("failed to persist messages", "err", err, "conversation_id", convID)
+		return
 	}
+	if err := commit(); err != nil {
+		slog.Error("failed to commit messages", "err", err, "conversation_id", convID)
+	}
+}
+
+// wsOriginPatterns returns the list of allowed WebSocket origin patterns.
+// Reads CORS_ALLOWED_ORIGINS (same env as the CORS middleware), falling back
+// to the configured FrontendURL and localhost dev origins.
+func wsOriginPatterns(frontendURL string) []string {
+	if env := os.Getenv("CORS_ALLOWED_ORIGINS"); env != "" {
+		var patterns []string
+		for _, o := range strings.Split(env, ",") {
+			o = strings.TrimSpace(o)
+			if o != "" {
+				patterns = append(patterns, o)
+			}
+		}
+		return patterns
+	}
+	// Dev defaults — matches the CORS middleware fallback.
+	patterns := []string{
+		"http://localhost:5173",
+		"http://localhost:4173",
+	}
+	if frontendURL != "" && frontendURL != "http://localhost:5173" {
+		patterns = append(patterns, frontendURL)
+	}
+	return patterns
 }
 
 // writeWSError writes an error message over WebSocket.

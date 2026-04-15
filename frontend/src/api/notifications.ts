@@ -8,36 +8,43 @@ import type {
   NotificationLogEntry,
 } from '@/types/notification'
 
-export function getNotificationPreferences(appId: string) {
-  return client.get<NotificationPreferences>(`/apps/${appId}/notifications/preferences`).then(r => r.data)
+export async function getNotificationPreferences(appId: string): Promise<NotificationPreferences> {
+  const { data } = await client.get<NotificationPreferences>(`/apps/${appId}/notifications/preferences`)
+  return data
 }
 
-export function updateNotificationPreferences(appId: string, prefs: UpdatePreferencesPayload) {
-  return client.put<NotificationPreferences>(`/apps/${appId}/notifications/preferences`, prefs).then(r => r.data)
+export async function updateNotificationPreferences(appId: string, prefs: UpdatePreferencesPayload): Promise<NotificationPreferences> {
+  const { data } = await client.put<NotificationPreferences>(`/apps/${appId}/notifications/preferences`, prefs)
+  return data
 }
 
-export function listNotificationChannels(appId: string) {
-  return client.get<NotificationChannel[]>(`/apps/${appId}/notifications/channels`).then(r => r.data)
+export async function listNotificationChannels(appId: string): Promise<NotificationChannel[]> {
+  const { data } = await client.get<NotificationChannel[]>(`/apps/${appId}/notifications/channels`)
+  return data
 }
 
-export function createNotificationChannel(appId: string, channel: CreateChannelPayload) {
-  return client.post<NotificationChannel>(`/apps/${appId}/notifications/channels`, channel).then(r => r.data)
+export async function createNotificationChannel(appId: string, channel: CreateChannelPayload): Promise<NotificationChannel> {
+  const { data } = await client.post<NotificationChannel>(`/apps/${appId}/notifications/channels`, channel)
+  return data
 }
 
-export function updateNotificationChannel(appId: string, channelId: string, channel: UpdateChannelPayload) {
-  return client.put<NotificationChannel>(`/apps/${appId}/notifications/channels/${channelId}`, channel).then(r => r.data)
+export async function updateNotificationChannel(appId: string, channelId: string, channel: UpdateChannelPayload): Promise<NotificationChannel> {
+  const { data } = await client.put<NotificationChannel>(`/apps/${appId}/notifications/channels/${channelId}`, channel)
+  return data
 }
 
-export function deleteNotificationChannel(appId: string, channelId: string) {
-  return client.delete(`/apps/${appId}/notifications/channels/${channelId}`)
+export async function deleteNotificationChannel(appId: string, channelId: string): Promise<void> {
+  await client.delete(`/apps/${appId}/notifications/channels/${channelId}`)
 }
 
-export function testNotificationChannel(appId: string, channelId: string) {
-  return client.post<{ status: string }>(`/apps/${appId}/notifications/channels/${channelId}/test`).then(r => r.data)
+export async function testNotificationChannel(appId: string, channelId: string): Promise<{ status: string }> {
+  const { data } = await client.post<{ status: string }>(`/apps/${appId}/notifications/channels/${channelId}/test`)
+  return data
 }
 
-export function listNotificationHistory(appId: string, limit = 20, offset = 0) {
-  return client.get<NotificationLogEntry[]>(`/apps/${appId}/notifications/history`, {
+export async function listNotificationHistory(appId: string, limit = 20, offset = 0): Promise<NotificationLogEntry[]> {
+  const { data } = await client.get<NotificationLogEntry[]>(`/apps/${appId}/notifications/history`, {
     params: { limit, offset },
-  }).then(r => r.data)
+  })
+  return data
 }

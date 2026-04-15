@@ -123,7 +123,7 @@ function getFieldValue(field: FieldDef): string | number {
 
 function setFieldValue(field: FieldDef, value: string) {
   if (field.type === 'number') {
-    config.value[field.key] = value === '' ? '' as unknown as number : Number(value)
+    config.value[field.key] = value === '' ? undefined : Number(value)
   } else {
     config.value[field.key] = value
   }

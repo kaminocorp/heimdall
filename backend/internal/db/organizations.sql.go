@@ -7,9 +7,49 @@ package db
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 )
+
+const countOrgMembers = `-- name: CountOrgMembers :one
+SELECT COUNT(*) FROM org_members WHERE org_id = $1
+`
+
+func (q *Queries) CountOrgMembers(ctx context.Context, orgID uuid.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countOrgMembers, orgID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countOrgOwners = `-- name: CountOrgOwners :one
+SELECT COUNT(*) FROM org_members WHERE org_id = $1 AND role = 'owner'
+`
+
+// Counts how many owners an org has. Used by the sole-owner removal guard.
+func (q *Queries) CountOrgOwners(ctx context.Context, orgID uuid.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countOrgOwners, orgID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const createOrgMember = `-- name: CreateOrgMember :exec
+INSERT INTO org_members (user_id, org_id, role)
+VALUES ($1, $2, $3)
+`
+
+type CreateOrgMemberParams struct {
+	UserID uuid.UUID     `json:"user_id"`
+	OrgID  uuid.UUID     `json:"org_id"`
+	Role   OrgMemberRole `json:"role"`
+}
+
+func (q *Queries) CreateOrgMember(ctx context.Context, arg CreateOrgMemberParams) error {
+	_, err := q.db.Exec(ctx, createOrgMember, arg.UserID, arg.OrgID, arg.Role)
+	return err
+}
 
 const createOrganization = `-- name: CreateOrganization :one
 INSERT INTO organizations (name, slug)
@@ -31,6 +71,53 @@ func (q *Queries) CreateOrganization(ctx context.Context, arg CreateOrganization
 		&i.Slug,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const deleteOrgMember = `-- name: DeleteOrgMember :exec
+DELETE FROM org_members WHERE user_id = $1 AND org_id = $2
+`
+
+type DeleteOrgMemberParams struct {
+	UserID uuid.UUID `json:"user_id"`
+	OrgID  uuid.UUID `json:"org_id"`
+}
+
+func (q *Queries) DeleteOrgMember(ctx context.Context, arg DeleteOrgMemberParams) error {
+	_, err := q.db.Exec(ctx, deleteOrgMember, arg.UserID, arg.OrgID)
+	return err
+}
+
+const deleteOrganization = `-- name: DeleteOrganization :exec
+DELETE FROM organizations WHERE id = $1
+`
+
+// Cascade-deletes all applications, connections, configs, logs, schedules, etc.
+// via FK ON DELETE CASCADE constraints.
+func (q *Queries) DeleteOrganization(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, deleteOrganization, id)
+	return err
+}
+
+const getOrgMembership = `-- name: GetOrgMembership :one
+SELECT user_id, org_id, role, created_at FROM org_members WHERE user_id = $1 AND org_id = $2
+`
+
+type GetOrgMembershipParams struct {
+	UserID uuid.UUID `json:"user_id"`
+	OrgID  uuid.UUID `json:"org_id"`
+}
+
+// Returns the membership row for a specific user+org pair.
+func (q *Queries) GetOrgMembership(ctx context.Context, arg GetOrgMembershipParams) (OrgMember, error) {
+	row := q.db.QueryRow(ctx, getOrgMembership, arg.UserID, arg.OrgID)
+	var i OrgMember
+	err := row.Scan(
+		&i.UserID,
+		&i.OrgID,
+		&i.Role,
+		&i.CreatedAt,
 	)
 	return i, err
 }
@@ -71,12 +158,16 @@ func (q *Queries) GetOrganizationBySlug(ctx context.Context, slug string) (Organ
 
 const getOrganizationByUser = `-- name: GetOrganizationByUser :one
 SELECT o.id, o.name, o.slug, o.created_at, o.updated_at FROM organizations o
-JOIN users u ON u.org_id = o.id
-WHERE u.id = $1
+JOIN org_members om ON om.org_id = o.id
+WHERE om.user_id = $1
+ORDER BY om.created_at ASC
+LIMIT 1
 `
 
-func (q *Queries) GetOrganizationByUser(ctx context.Context, id uuid.UUID) (Organization, error) {
-	row := q.db.QueryRow(ctx, getOrganizationByUser, id)
+// Returns the user's primary org (earliest membership).
+// For multi-org users, use ListOrganizationsByUser instead.
+func (q *Queries) GetOrganizationByUser(ctx context.Context, userID uuid.UUID) (Organization, error) {
+	row := q.db.QueryRow(ctx, getOrganizationByUser, userID)
 	var i Organization
 	err := row.Scan(
 		&i.ID,
@@ -86,6 +177,107 @@ func (q *Queries) GetOrganizationByUser(ctx context.Context, id uuid.UUID) (Orga
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const listOrgMembers = `-- name: ListOrgMembers :many
+SELECT om.user_id, u.email, om.role, om.created_at
+FROM org_members om
+JOIN users u ON u.id = om.user_id
+WHERE om.org_id = $1
+ORDER BY om.created_at ASC
+`
+
+type ListOrgMembersRow struct {
+	UserID    uuid.UUID     `json:"user_id"`
+	Email     string        `json:"email"`
+	Role      OrgMemberRole `json:"role"`
+	CreatedAt time.Time     `json:"created_at"`
+}
+
+// Returns all members of an organization with their email.
+func (q *Queries) ListOrgMembers(ctx context.Context, orgID uuid.UUID) ([]ListOrgMembersRow, error) {
+	rows, err := q.db.Query(ctx, listOrgMembers, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListOrgMembersRow{}
+	for rows.Next() {
+		var i ListOrgMembersRow
+		if err := rows.Scan(
+			&i.UserID,
+			&i.Email,
+			&i.Role,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listOrganizationsByUser = `-- name: ListOrganizationsByUser :many
+SELECT o.id, o.name, o.slug, o.created_at, o.updated_at, om.role FROM organizations o
+JOIN org_members om ON om.org_id = o.id
+WHERE om.user_id = $1
+ORDER BY om.created_at ASC
+`
+
+type ListOrganizationsByUserRow struct {
+	ID        uuid.UUID     `json:"id"`
+	Name      string        `json:"name"`
+	Slug      string        `json:"slug"`
+	CreatedAt time.Time     `json:"created_at"`
+	UpdatedAt time.Time     `json:"updated_at"`
+	Role      OrgMemberRole `json:"role"`
+}
+
+// Returns all organizations the user belongs to.
+func (q *Queries) ListOrganizationsByUser(ctx context.Context, userID uuid.UUID) ([]ListOrganizationsByUserRow, error) {
+	rows, err := q.db.Query(ctx, listOrganizationsByUser, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListOrganizationsByUserRow{}
+	for rows.Next() {
+		var i ListOrganizationsByUserRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Slug,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Role,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const updateOrgMemberRole = `-- name: UpdateOrgMemberRole :exec
+UPDATE org_members SET role = $3
+WHERE user_id = $1 AND org_id = $2
+`
+
+type UpdateOrgMemberRoleParams struct {
+	UserID uuid.UUID     `json:"user_id"`
+	OrgID  uuid.UUID     `json:"org_id"`
+	Role   OrgMemberRole `json:"role"`
+}
+
+func (q *Queries) UpdateOrgMemberRole(ctx context.Context, arg UpdateOrgMemberRoleParams) error {
+	_, err := q.db.Exec(ctx, updateOrgMemberRole, arg.UserID, arg.OrgID, arg.Role)
+	return err
 }
 
 const updateOrganization = `-- name: UpdateOrganization :one

@@ -27,11 +27,6 @@ export async function deleteApplication(appId: string): Promise<void> {
   await client.delete(`/apps/${appId}`)
 }
 
-export async function getApplication(appId: string): Promise<Application> {
-  const { data } = await client.get<Application>(`/apps/${appId}`)
-  return data
-}
-
 export async function getAppAgentConfig(appId: string): Promise<AppAgentConfig> {
   const { data } = await client.get<AppAgentConfig>(`/apps/${appId}/agent/config`)
   return data

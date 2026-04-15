@@ -9,6 +9,7 @@ export interface Toast {
 
 // Module-level state — shared singleton across all components
 const toasts = ref<Toast[]>([])
+const timers = new Map<number, ReturnType<typeof setTimeout>>()
 let nextId = 0
 
 export function useToast() {
@@ -17,11 +18,17 @@ export function useToast() {
     toasts.value.push({ id, message, type, duration })
 
     if (duration > 0) {
-      setTimeout(() => dismiss(id), duration)
+      timers.set(id, setTimeout(() => dismiss(id), duration))
     }
   }
 
   function dismiss(id: number) {
+    // Clear any pending auto-dismiss timer so it doesn't fire after removal.
+    const timer = timers.get(id)
+    if (timer) {
+      clearTimeout(timer)
+      timers.delete(id)
+    }
     const idx = toasts.value.findIndex((t) => t.id === id)
     if (idx !== -1) toasts.value.splice(idx, 1)
   }

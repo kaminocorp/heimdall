@@ -32,4 +32,20 @@ export interface WSErrorMessage {
   content: string
 }
 
-export type WSMessage = WSSystemMessage | WSStatusMessage | WSErrorMessage | ChatMessage
+export interface WSToolStartMessage {
+  type: 'tool_start'
+  tool: string
+}
+
+export interface WSToolResultMessage {
+  type: 'tool_result'
+  tool: string
+}
+
+export type WSMessage =
+  | WSSystemMessage
+  | WSStatusMessage
+  | WSErrorMessage
+  | WSToolStartMessage
+  | WSToolResultMessage
+  | ChatMessage

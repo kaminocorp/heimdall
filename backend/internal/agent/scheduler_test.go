@@ -29,7 +29,8 @@ func TestShouldFire_NeverRun(t *testing.T) {
 		IntervalSecs: 300,
 		LastRunAt:    nil,
 	}
-	assert.True(t, shouldFire(s, time.Now()))
+	fire, _ := shouldFire(s, time.Now())
+	assert.True(t, fire)
 }
 
 func TestShouldFire_IntervalNotYetElapsed(t *testing.T) {
@@ -39,7 +40,8 @@ func TestShouldFire_IntervalNotYetElapsed(t *testing.T) {
 		IntervalSecs: 60,
 		LastRunAt:    ptrTime(now.Add(-30 * time.Second)),
 	}
-	assert.False(t, shouldFire(s, now))
+	fire, _ := shouldFire(s, now)
+	assert.False(t, fire)
 }
 
 func TestShouldFire_IntervalJustElapsed(t *testing.T) {
@@ -50,7 +52,8 @@ func TestShouldFire_IntervalJustElapsed(t *testing.T) {
 		IntervalSecs: 60,
 		LastRunAt:    ptrTime(now.Add(-60 * time.Second)),
 	}
-	assert.True(t, shouldFire(s, now))
+	fire, _ := shouldFire(s, now)
+	assert.True(t, fire)
 }
 
 func TestShouldFire_IntervalLongPast(t *testing.T) {
@@ -62,7 +65,8 @@ func TestShouldFire_IntervalLongPast(t *testing.T) {
 		IntervalSecs: 60,
 		LastRunAt:    ptrTime(now.Add(-2 * time.Hour)),
 	}
-	assert.True(t, shouldFire(s, now))
+	fire, _ := shouldFire(s, now)
+	assert.True(t, fire)
 }
 
 func TestSchedulerTick_DBError(t *testing.T) {
@@ -72,7 +76,7 @@ func TestSchedulerTick_DBError(t *testing.T) {
 	ctx := context.Background()
 
 	require.NotPanics(t, func() {
-		agent.schedulerTick(ctx)
+		agent.schedulerTick(ctx, make(chan struct{}, maxConcurrentSchedules))
 	})
 }
 
@@ -118,7 +122,8 @@ func TestShouldFire_CronDue(t *testing.T) {
 		CronExpr:     cronText("*/5 * * * *"),
 		LastRunAt:    ptrTime(now.Add(-6 * time.Minute)),
 	}
-	assert.True(t, shouldFire(s, now))
+	fire, _ := shouldFire(s, now)
+	assert.True(t, fire)
 }
 
 func TestShouldFire_CronNotYetDue(t *testing.T) {
@@ -131,7 +136,8 @@ func TestShouldFire_CronNotYetDue(t *testing.T) {
 		CronExpr:     cronText("0 * * * *"),
 		LastRunAt:    ptrTime(now.Add(-10 * time.Minute)), // 14:15
 	}
-	assert.False(t, shouldFire(s, now))
+	fire, _ := shouldFire(s, now)
+	assert.False(t, fire)
 }
 
 func TestShouldFire_CronPrefersCronOverInterval(t *testing.T) {
@@ -146,7 +152,8 @@ func TestShouldFire_CronPrefersCronOverInterval(t *testing.T) {
 		CronExpr:     cronText("*/1 * * * *"),
 		LastRunAt:    ptrTime(now.Add(-35 * time.Second)), // 14:24:55
 	}
-	assert.True(t, shouldFire(s, now))
+	fire, _ := shouldFire(s, now)
+	assert.True(t, fire)
 }
 
 func TestShouldFire_CronInvalidExpression(t *testing.T) {
@@ -160,7 +167,9 @@ func TestShouldFire_CronInvalidExpression(t *testing.T) {
 		CronExpr:     cronText("not a cron expression"),
 		LastRunAt:    ptrTime(now.Add(-1 * time.Hour)),
 	}
-	assert.False(t, shouldFire(s, now))
+	fire, cronErr := shouldFire(s, now)
+	assert.False(t, fire)
+	assert.NotEmpty(t, cronErr, "should return error message for invalid cron")
 }
 
 func TestShouldFire_CronNeverRun(t *testing.T) {
@@ -172,7 +181,8 @@ func TestShouldFire_CronNeverRun(t *testing.T) {
 		CronExpr:     cronText("0 9 * * *"), // "every day at 09:00"
 		LastRunAt:    nil,
 	}
-	assert.True(t, shouldFire(s, time.Now()))
+	fire, _ := shouldFire(s, time.Now())
+	assert.True(t, fire)
 }
 
 func TestParseCronExpression_Valid(t *testing.T) {

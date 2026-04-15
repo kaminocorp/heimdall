@@ -27,6 +27,7 @@ const showForm = ref(false)
 const editingChannelId = ref<string | null>(null)
 const saving = ref(false)
 const testingChannelId = ref<string | null>(null)
+const deleteTarget = ref<NotificationChannel | null>(null)
 
 const formType = ref<NotificationChannelType>('slack')
 const formName = ref('')
@@ -116,7 +117,11 @@ async function save() {
     }
     showForm.value = false
     editingChannelId.value = null
-    emit('update:channels', await listNotificationChannels(props.appId))
+    try {
+      emit('update:channels', await listNotificationChannels(props.appId))
+    } catch {
+      toast.show('Saved, but failed to refresh the list — please reload', 'error')
+    }
   } catch (e: unknown) {
     toast.show(extractApiError(e, 'Failed to save channel'), 'error')
   } finally {
@@ -124,7 +129,14 @@ async function save() {
   }
 }
 
-async function remove(ch: NotificationChannel) {
+function confirmDelete(ch: NotificationChannel) {
+  deleteTarget.value = ch
+}
+
+async function handleDelete() {
+  if (!deleteTarget.value) return
+  const ch = deleteTarget.value
+  deleteTarget.value = null
   try {
     await deleteNotificationChannel(props.appId, ch.id)
     emit('update:channels', props.channels.filter(c => c.id !== ch.id))
@@ -281,7 +293,7 @@ defineExpose({ resetForm: () => { showForm.value = false; editingChannelId.value
             Edit
           </button>
           <button
-            @click="remove(ch)"
+            @click="confirmDelete(ch)"
             class="px-2.5 py-1 border border-border text-text-secondary font-mono text-xs uppercase tracking-wider rounded hover:border-status-critical/50 hover:text-status-critical transition-colors cursor-pointer"
           >
             Del
@@ -289,5 +301,44 @@ defineExpose({ resetForm: () => { showForm.value = false; editingChannelId.value
         </div>
       </div>
     </div>
+    <!-- Delete confirmation modal -->
+    <Teleport to="body">
+      <Transition
+        enter-active-class="transition duration-150 ease-out"
+        enter-from-class="opacity-0"
+        enter-to-class="opacity-100"
+        leave-active-class="transition duration-100 ease-in"
+        leave-from-class="opacity-100"
+        leave-to-class="opacity-0"
+      >
+        <div v-if="deleteTarget" class="fixed inset-0 z-50 flex items-center justify-center">
+          <div class="absolute inset-0 bg-black/60 backdrop-blur-sm" @click="deleteTarget = null" />
+          <div class="relative z-10 w-full max-w-md mx-4 rounded-lg border border-border bg-bg-elevated shadow-xl shadow-black/40 p-6">
+            <h3 class="font-mono text-sm font-bold uppercase tracking-wider text-text-primary mb-2">
+              Delete channel
+            </h3>
+            <p class="font-sans text-sm text-text-secondary mb-6">
+              Are you sure you want to delete
+              <span class="font-mono text-text-primary">{{ deleteTarget.name }}</span>?
+              Notifications will no longer be sent to this channel.
+            </p>
+            <div class="flex items-center justify-end gap-3">
+              <button
+                @click="deleteTarget = null"
+                class="px-4 py-2 font-mono text-xs uppercase tracking-wider rounded border border-border text-text-secondary hover:text-text-primary hover:border-border-hover transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                @click="handleDelete"
+                class="px-4 py-2 font-mono text-xs uppercase tracking-wider rounded bg-status-critical text-white hover:bg-status-critical/80 transition-colors cursor-pointer"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
   </section>
 </template>

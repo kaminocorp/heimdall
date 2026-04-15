@@ -18,9 +18,9 @@ function formatTool(name: string): string {
 onMounted(async () => {
   if (existingId) {
     try {
-      const { data } = await getConversation(existingId)
-      if (data.messages?.length) {
-        loadMessages(data.messages)
+      const conversation = await getConversation(existingId)
+      if (conversation.messages?.length) {
+        loadMessages(conversation.messages)
       }
     } catch {
       // Conversation not found — start fresh.

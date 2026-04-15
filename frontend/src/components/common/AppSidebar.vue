@@ -36,7 +36,6 @@ const sections = [
   {
     label: 'Intelligence',
     items: [
-      { name: 'Reports', to: '/reports', routeName: 'reports' },
       { name: 'Notifications', to: '/notifications', routeName: 'notifications' },
     ],
   },
