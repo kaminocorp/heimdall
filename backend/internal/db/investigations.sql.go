@@ -217,12 +217,12 @@ WHERE id = $1 AND user_id = $6
 `
 
 type UpdateInvestigationFindingsParams struct {
-	ID         uuid.UUID  `json:"id"`
-	Findings   []byte     `json:"findings"`
-	ToolTrace  []byte     `json:"tool_trace"`
-	Status     string     `json:"status"`
-	ResolvedAt *time.Time `json:"resolved_at"`
-	UserID     uuid.UUID  `json:"user_id"`
+	ID         uuid.UUID       `json:"id"`
+	Findings   json.RawMessage `json:"findings"`
+	ToolTrace  json.RawMessage `json:"tool_trace"`
+	Status     string          `json:"status"`
+	ResolvedAt *time.Time      `json:"resolved_at"`
+	UserID     uuid.UUID       `json:"user_id"`
 }
 
 func (q *Queries) UpdateInvestigationFindings(ctx context.Context, arg UpdateInvestigationFindingsParams) error {

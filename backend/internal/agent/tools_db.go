@@ -124,6 +124,16 @@ func isReadOnlySQL(sql string) bool {
 		return false
 	}
 
+	// Block dangerous PostgreSQL functions that can bypass read-only mode
+	// or access the filesystem. SELECT set_config('default_transaction_read_only','off',false)
+	// would pass a naive "starts with SELECT" check but disable write protection.
+	dangerousFuncs := []string{"SET_CONFIG", "PG_READ_FILE", "PG_WRITE_FILE", "LO_IMPORT", "LO_EXPORT"}
+	for _, fn := range dangerousFuncs {
+		if strings.Contains(upper, fn) {
+			return false
+		}
+	}
+
 	// SELECT, EXPLAIN, and WITH (CTE): allowed only if no write keywords
 	// appear outside of string literals. The write-keyword scan is applied
 	// even to SELECT statements as defence-in-depth — it blocks attempts

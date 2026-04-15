@@ -265,16 +265,6 @@ func (s *Server) UpdateConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fetch existing connection to preserve defaults for omitted fields.
-	existing, err := s.Queries.GetConnectionByUser(r.Context(), db.GetConnectionByUserParams{
-		ID:     connID,
-		UserID: userID,
-	})
-	if err != nil {
-		jsonError(w, "connection not found", http.StatusNotFound)
-		return
-	}
-
 	direction := req.Direction
 	if direction == "" {
 		direction = "one_way"
@@ -283,18 +273,36 @@ func (s *Server) UpdateConnection(w http.ResponseWriter, r *http.Request) {
 	if config == nil {
 		config = json.RawMessage(`{}`)
 	}
-	status := req.Status
-	if status == "" {
-		// Preserve the existing status when the client omits the field,
-		// so a rename-only update doesn't silently deactivate a connection.
-		status = existing.Status
-	}
 
 	// Validate connector config eagerly — before DB update.
 	config, err = s.validateConnectorConfig(req.Type, config)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
+	}
+
+	queries, commit, done, err := s.UserQueries(r.Context(), userID)
+	if err != nil {
+		jsonServerError(w, "database error", err)
+		return
+	}
+	defer done()
+
+	// Fetch existing connection inside the transaction to avoid TOCTOU gap.
+	existing, err := queries.GetConnectionByUser(r.Context(), db.GetConnectionByUserParams{
+		ID:     connID,
+		UserID: userID,
+	})
+	if err != nil {
+		jsonError(w, "connection not found", http.StatusNotFound)
+		return
+	}
+
+	status := req.Status
+	if status == "" {
+		// Preserve the existing status when the client omits the field,
+		// so a rename-only update doesn't silently deactivate a connection.
+		status = existing.Status
 	}
 
 	// Preserve webhook token for webhook_logs/otlp connections.
@@ -310,7 +318,6 @@ func (s *Server) UpdateConnection(w http.ResponseWriter, r *http.Request) {
 			cfgMap = make(map[string]interface{})
 		}
 		if _, ok := cfgMap["webhook_token"]; !ok {
-			// Use the already-fetched existing connection to preserve the token.
 			var oldCfg map[string]interface{}
 			if err := json.Unmarshal(existing.Config, &oldCfg); err == nil {
 				if tok, ok := oldCfg["webhook_token"]; ok {
@@ -325,13 +332,6 @@ func (s *Server) UpdateConnection(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-
-	queries, commit, done, err := s.UserQueries(r.Context(), userID)
-	if err != nil {
-		jsonServerError(w, "database error", err)
-		return
-	}
-	defer done()
 
 	conn, err := queries.UpdateConnection(r.Context(), db.UpdateConnectionParams{
 		ID:        connID,

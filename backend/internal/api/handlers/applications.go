@@ -99,12 +99,15 @@ func (s *Server) CreateApplication(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fire-and-forget activity-feed entry. The agent_log table is keyed by
-	// user_id (not app_id), so we stash the app identity in the detail
-	// JSONB column — the row survives app deletion and remains meaningful
-	// as audit history. Nil-check matches the pattern used elsewhere: the
-	// test harness leaves s.Agent nil to avoid pulling in the full agent
-	// stack, and we don't want handler coverage to blow up for that reason.
+	if err := commit(); err != nil {
+		jsonServerError(w, "failed to save changes", err)
+		return
+	}
+
+	// Fire-and-forget activity-feed entry — emitted after commit so we never
+	// record a creation that was rolled back. Matches the pattern in
+	// DeleteApplication. The agent_log table is keyed by user_id (not app_id),
+	// so we stash the app identity in the detail JSONB column.
 	if s.Agent != nil {
 		s.Agent.EmitLog(
 			r.Context(), userID, nil, nil,
@@ -115,11 +118,6 @@ func (s *Server) CreateApplication(w http.ResponseWriter, r *http.Request) {
 				"app_name": app.Name,
 			},
 		)
-	}
-
-	if err := commit(); err != nil {
-		jsonServerError(w, "failed to save changes", err)
-		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")

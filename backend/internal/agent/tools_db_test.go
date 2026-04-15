@@ -45,6 +45,14 @@ func TestIsReadOnlySQL(t *testing.T) {
 		{"alter table", "ALTER TABLE t ADD COLUMN x int", false},
 		{"truncate", "TRUNCATE users", false},
 		{"grant", "GRANT ALL ON users TO public", false},
+
+		// Dangerous function blocklist (H1).
+		{"set_config bypass", "SELECT set_config('default_transaction_read_only', 'off', false)", false},
+		{"pg_read_file", "SELECT pg_read_file('/etc/passwd')", false},
+		{"pg_write_file", "SELECT pg_write_file('/tmp/evil', 'data')", false},
+		{"lo_import", "SELECT lo_import('/etc/passwd')", false},
+		{"lo_export", "SELECT lo_export(12345, '/tmp/evil')", false},
+		{"set_config in CTE", "WITH x AS (SELECT set_config('a','b',true)) SELECT * FROM x", false},
 	}
 
 	for _, tt := range tests {

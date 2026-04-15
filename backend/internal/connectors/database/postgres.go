@@ -58,6 +58,9 @@ func New(configJSON json.RawMessage) (*Postgres, error) {
 	if cfg.Port == 0 {
 		cfg.Port = 5432
 	}
+	if cfg.Port < 1 || cfg.Port > 65535 {
+		return nil, fmt.Errorf("postgres: port must be between 1 and 65535")
+	}
 	if cfg.SSLMode == "" {
 		cfg.SSLMode = "require"
 	}
@@ -66,15 +69,16 @@ func New(configJSON json.RawMessage) (*Postgres, error) {
 	}
 
 	// Build connection string with read-only enforcement.
-	connStr := fmt.Sprintf(
-		"postgres://%s:%s@%s:%d/%s?sslmode=%s&default_transaction_read_only=on",
-		url.PathEscape(cfg.User),
-		url.PathEscape(cfg.Password),
-		url.PathEscape(cfg.Host),
-		cfg.Port,
-		url.PathEscape(cfg.Database),
-		cfg.SSLMode,
-	)
+	// Use url.URL struct builder so userinfo characters (@, :) are correctly
+	// percent-encoded — url.PathEscape does not escape these.
+	u := &url.URL{
+		Scheme:   "postgres",
+		User:     url.UserPassword(cfg.User, cfg.Password),
+		Host:     fmt.Sprintf("%s:%d", cfg.Host, cfg.Port),
+		Path:     cfg.Database,
+		RawQuery: fmt.Sprintf("sslmode=%s&default_transaction_read_only=on", cfg.SSLMode),
+	}
+	connStr := u.String()
 
 	return &Postgres{connStr: connStr}, nil
 }

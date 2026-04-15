@@ -7,6 +7,7 @@ package db
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -48,13 +49,13 @@ RETURNING id, user_id, entry_type, summary, detail, severity, conversation_id, c
 `
 
 type InsertAgentLogParams struct {
-	UserID         uuid.UUID   `json:"user_id"`
-	EntryType      string      `json:"entry_type"`
-	Summary        string      `json:"summary"`
-	Detail         []byte      `json:"detail"`
-	Severity       pgtype.Text `json:"severity"`
-	ConversationID pgtype.UUID `json:"conversation_id"`
-	AppID          uuid.UUID   `json:"app_id"`
+	UserID         uuid.UUID       `json:"user_id"`
+	EntryType      string          `json:"entry_type"`
+	Summary        string          `json:"summary"`
+	Detail         json.RawMessage `json:"detail"`
+	Severity       pgtype.Text     `json:"severity"`
+	ConversationID pgtype.UUID     `json:"conversation_id"`
+	AppID          uuid.UUID       `json:"app_id"`
 }
 
 func (q *Queries) InsertAgentLog(ctx context.Context, arg InsertAgentLogParams) (AgentLog, error) {

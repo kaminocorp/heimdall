@@ -93,6 +93,7 @@ func (a *Agent) schedulerTick(ctx context.Context, sem chan struct{}) {
 	}
 
 	var wg sync.WaitGroup
+	defer wg.Wait() // always join, even on early return from ctx cancellation
 
 	now := time.Now()
 	for _, s := range schedules {
@@ -130,7 +131,6 @@ func (a *Agent) schedulerTick(ctx context.Context, sem chan struct{}) {
 			a.RunScheduledInvestigation(ctx, s)
 		}(s)
 	}
-	wg.Wait()
 }
 
 // shouldFire decides whether a schedule is due. A schedule fires when:

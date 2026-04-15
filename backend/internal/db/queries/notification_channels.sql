@@ -15,11 +15,11 @@ RETURNING *;
 -- name: UpdateNotificationChannel :one
 UPDATE notification_channels
 SET name = $2, config = $3, enabled = $4, updated_at = now()
-WHERE id = $1
+WHERE id = $1 AND app_id = $5
 RETURNING *;
 
 -- name: DeleteNotificationChannel :exec
-DELETE FROM notification_channels WHERE id = $1;
+DELETE FROM notification_channels WHERE id = $1 AND app_id = $2;
 
 -- name: ListEnabledChannelsByApp :many
 SELECT * FROM notification_channels

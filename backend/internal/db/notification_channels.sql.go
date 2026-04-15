@@ -49,11 +49,16 @@ func (q *Queries) CreateNotificationChannel(ctx context.Context, arg CreateNotif
 }
 
 const deleteNotificationChannel = `-- name: DeleteNotificationChannel :exec
-DELETE FROM notification_channels WHERE id = $1
+DELETE FROM notification_channels WHERE id = $1 AND app_id = $2
 `
 
-func (q *Queries) DeleteNotificationChannel(ctx context.Context, id uuid.UUID) error {
-	_, err := q.db.Exec(ctx, deleteNotificationChannel, id)
+type DeleteNotificationChannelParams struct {
+	ID    uuid.UUID `json:"id"`
+	AppID uuid.UUID `json:"app_id"`
+}
+
+func (q *Queries) DeleteNotificationChannel(ctx context.Context, arg DeleteNotificationChannelParams) error {
+	_, err := q.db.Exec(ctx, deleteNotificationChannel, arg.ID, arg.AppID)
 	return err
 }
 
@@ -150,7 +155,7 @@ func (q *Queries) ListNotificationChannelsByApp(ctx context.Context, appID uuid.
 const updateNotificationChannel = `-- name: UpdateNotificationChannel :one
 UPDATE notification_channels
 SET name = $2, config = $3, enabled = $4, updated_at = now()
-WHERE id = $1
+WHERE id = $1 AND app_id = $5
 RETURNING id, app_id, type, name, config, enabled, created_at, updated_at
 `
 
@@ -159,6 +164,7 @@ type UpdateNotificationChannelParams struct {
 	Name    string          `json:"name"`
 	Config  json.RawMessage `json:"config"`
 	Enabled bool            `json:"enabled"`
+	AppID   uuid.UUID       `json:"app_id"`
 }
 
 func (q *Queries) UpdateNotificationChannel(ctx context.Context, arg UpdateNotificationChannelParams) (NotificationChannel, error) {
@@ -167,6 +173,7 @@ func (q *Queries) UpdateNotificationChannel(ctx context.Context, arg UpdateNotif
 		arg.Name,
 		arg.Config,
 		arg.Enabled,
+		arg.AppID,
 	)
 	var i NotificationChannel
 	err := row.Scan(

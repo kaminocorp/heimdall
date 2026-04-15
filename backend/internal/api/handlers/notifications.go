@@ -219,17 +219,6 @@ func (s *Server) UpdateNotificationChannel(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Verify channel belongs to this app.
-	existing, err := s.Queries.GetNotificationChannel(r.Context(), channelID)
-	if err != nil {
-		jsonError(w, "notification channel not found", http.StatusNotFound)
-		return
-	}
-	if existing.AppID != app.ID {
-		jsonError(w, "notification channel not found", http.StatusNotFound)
-		return
-	}
-
 	var req updateChannelRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonError(w, "invalid request body", http.StatusBadRequest)
@@ -240,10 +229,6 @@ func (s *Server) UpdateNotificationChannel(w http.ResponseWriter, r *http.Reques
 		jsonError(w, "name is required", http.StatusBadRequest)
 		return
 	}
-	if err := validateChannelConfig(existing.Type, req.Config); err != nil {
-		jsonError(w, err.Error(), http.StatusBadRequest)
-		return
-	}
 
 	queries, commit, done, err := s.UserQueries(r.Context(), userID)
 	if err != nil {
@@ -252,11 +237,23 @@ func (s *Server) UpdateNotificationChannel(w http.ResponseWriter, r *http.Reques
 	}
 	defer done()
 
+	// Verify channel belongs to this app inside the transaction to avoid TOCTOU.
+	existing, err := queries.GetNotificationChannel(r.Context(), channelID)
+	if err != nil || existing.AppID != app.ID {
+		jsonError(w, "notification channel not found", http.StatusNotFound)
+		return
+	}
+	if err := validateChannelConfig(existing.Type, req.Config); err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
 	channel, err := queries.UpdateNotificationChannel(r.Context(), db.UpdateNotificationChannelParams{
 		ID:      channelID,
 		Name:    req.Name,
 		Config:  req.Config,
 		Enabled: req.Enabled,
+		AppID:   app.ID,
 	})
 	if err != nil {
 		jsonServerError(w, "failed to update notification channel", err)
@@ -290,16 +287,6 @@ func (s *Server) DeleteNotificationChannel(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	existing, err := s.Queries.GetNotificationChannel(r.Context(), channelID)
-	if err != nil {
-		jsonError(w, "notification channel not found", http.StatusNotFound)
-		return
-	}
-	if existing.AppID != app.ID {
-		jsonError(w, "notification channel not found", http.StatusNotFound)
-		return
-	}
-
 	queries, commit, done, err := s.UserQueries(r.Context(), userID)
 	if err != nil {
 		jsonServerError(w, "failed to begin transaction", err)
@@ -307,7 +294,17 @@ func (s *Server) DeleteNotificationChannel(w http.ResponseWriter, r *http.Reques
 	}
 	defer done()
 
-	if err := queries.DeleteNotificationChannel(r.Context(), channelID); err != nil {
+	// Verify channel belongs to this app inside the transaction to avoid TOCTOU.
+	existing, err := queries.GetNotificationChannel(r.Context(), channelID)
+	if err != nil || existing.AppID != app.ID {
+		jsonError(w, "notification channel not found", http.StatusNotFound)
+		return
+	}
+
+	if err := queries.DeleteNotificationChannel(r.Context(), db.DeleteNotificationChannelParams{
+		ID:    channelID,
+		AppID: app.ID,
+	}); err != nil {
 		jsonServerError(w, "failed to delete notification channel", err)
 		return
 	}

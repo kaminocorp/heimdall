@@ -59,11 +59,16 @@ func (q *Queries) CreateSchedule(ctx context.Context, arg CreateScheduleParams) 
 }
 
 const deleteSchedule = `-- name: DeleteSchedule :exec
-DELETE FROM investigation_schedules WHERE id = $1
+DELETE FROM investigation_schedules WHERE id = $1 AND app_id = $2
 `
 
-func (q *Queries) DeleteSchedule(ctx context.Context, id uuid.UUID) error {
-	_, err := q.db.Exec(ctx, deleteSchedule, id)
+type DeleteScheduleParams struct {
+	ID    uuid.UUID `json:"id"`
+	AppID uuid.UUID `json:"app_id"`
+}
+
+func (q *Queries) DeleteSchedule(ctx context.Context, arg DeleteScheduleParams) error {
+	_, err := q.db.Exec(ctx, deleteSchedule, arg.ID, arg.AppID)
 	return err
 }
 
@@ -213,7 +218,7 @@ SET name = $2,
     cron_expr = $5,
     enabled = $6,
     updated_at = now()
-WHERE id = $1
+WHERE id = $1 AND app_id = $7
 RETURNING id, app_id, name, prompt, interval_secs, cron_expr, enabled, last_run_at, last_status, last_error, last_summary, created_at, updated_at
 `
 
@@ -224,6 +229,7 @@ type UpdateScheduleParams struct {
 	IntervalSecs int32       `json:"interval_secs"`
 	CronExpr     pgtype.Text `json:"cron_expr"`
 	Enabled      bool        `json:"enabled"`
+	AppID        uuid.UUID   `json:"app_id"`
 }
 
 // PATCH-style update that overwrites all four scheduling fields; the handler
@@ -236,6 +242,7 @@ func (q *Queries) UpdateSchedule(ctx context.Context, arg UpdateScheduleParams) 
 		arg.IntervalSecs,
 		arg.CronExpr,
 		arg.Enabled,
+		arg.AppID,
 	)
 	var i InvestigationSchedule
 	err := row.Scan(

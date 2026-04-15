@@ -68,15 +68,15 @@ type AgentConfig struct {
 }
 
 type AgentLog struct {
-	ID             uuid.UUID   `json:"id"`
-	UserID         uuid.UUID   `json:"user_id"`
-	EntryType      string      `json:"entry_type"`
-	Summary        string      `json:"summary"`
-	Detail         []byte      `json:"detail"`
-	Severity       pgtype.Text `json:"severity"`
-	ConversationID pgtype.UUID `json:"conversation_id"`
-	CreatedAt      time.Time   `json:"created_at"`
-	AppID          uuid.UUID   `json:"app_id"`
+	ID             uuid.UUID       `json:"id"`
+	UserID         uuid.UUID       `json:"user_id"`
+	EntryType      string          `json:"entry_type"`
+	Summary        string          `json:"summary"`
+	Detail         json.RawMessage `json:"detail"`
+	Severity       pgtype.Text     `json:"severity"`
+	ConversationID pgtype.UUID     `json:"conversation_id"`
+	CreatedAt      time.Time       `json:"created_at"`
+	AppID          uuid.UUID       `json:"app_id"`
 }
 
 type AppAgentConfig struct {
@@ -141,8 +141,8 @@ type Investigation struct {
 	Severity      string          `json:"severity"`
 	Status        string          `json:"status"`
 	Context       json.RawMessage `json:"context"`
-	Findings      []byte          `json:"findings"`
-	ToolTrace     []byte          `json:"tool_trace"`
+	Findings      json.RawMessage `json:"findings"`
+	ToolTrace     json.RawMessage `json:"tool_trace"`
 	Resolution    pgtype.Text     `json:"resolution"`
 	StartedAt     time.Time       `json:"started_at"`
 	ResolvedAt    *time.Time      `json:"resolved_at"`

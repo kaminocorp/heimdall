@@ -60,6 +60,7 @@ func (a *Agent) monitorTick(ctx context.Context, sem chan struct{}) {
 	}
 
 	var wg sync.WaitGroup
+	defer wg.Wait() // always join, even on early return from ctx cancellation
 	for _, app := range apps {
 		if !a.shouldMonitor(ctx, app) {
 			continue
@@ -86,7 +87,6 @@ func (a *Agent) monitorTick(ctx context.Context, sem chan struct{}) {
 			a.monitorApp(appCtx, app)
 		}(app)
 	}
-	wg.Wait()
 }
 
 // shouldMonitor checks whether enough time has elapsed since the last
@@ -207,9 +207,14 @@ func (a *Agent) monitorApp(ctx context.Context, app db.ListActiveApplicationsRow
 		)
 
 		// Dispatch notification (fire-and-forget).
-		// Use context.WithoutCancel so the notification isn't killed when monitorApp returns.
+		// Use context.WithoutCancel so the notification isn't killed when monitorApp returns,
+		// plus a 30s timeout to prevent permanent goroutine leaks if the target hangs.
 		if a.notifier != nil && logEntryID != uuid.Nil {
-			go a.notifier.Notify(context.WithoutCancel(ctx), app.ID, logEntryID, app.Name, severity, summary, assessment)
+			go func() {
+				notifyCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+				defer cancel()
+				a.notifier.Notify(notifyCtx, app.ID, logEntryID, app.Name, severity, summary, assessment)
+			}()
 		}
 	}
 

@@ -225,21 +225,6 @@ func (s *Server) UpdateSchedule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Ownership check: make sure the schedule actually belongs to this app.
-	// Without this, a user with access to app A could PATCH app B's schedule
-	// by constructing a URL with /apps/A/schedules/{B-schedule-id}.
-	existing, err := s.Queries.GetSchedule(r.Context(), scheduleID)
-	if err != nil {
-		jsonError(w, "schedule not found", http.StatusNotFound)
-		return
-	}
-	if existing.AppID != app.ID {
-		// 404 rather than 403 — don't leak the existence of schedules in
-		// other apps via timing/error-message differences.
-		jsonError(w, "schedule not found", http.StatusNotFound)
-		return
-	}
-
 	var req scheduleRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonError(w, "invalid request body", http.StatusBadRequest)
@@ -247,11 +232,6 @@ func (s *Server) UpdateSchedule(w http.ResponseWriter, r *http.Request) {
 	}
 	if !validateSchedule(w, &req) {
 		return
-	}
-	// On update, nil enabled means "keep current value".
-	enabled := existing.Enabled
-	if req.Enabled != nil {
-		enabled = *req.Enabled
 	}
 
 	queries, commit, done, err := s.UserQueries(r.Context(), userID)
@@ -261,6 +241,19 @@ func (s *Server) UpdateSchedule(w http.ResponseWriter, r *http.Request) {
 	}
 	defer done()
 
+	// Verify schedule belongs to this app inside the transaction to avoid TOCTOU.
+	existing, err := queries.GetSchedule(r.Context(), scheduleID)
+	if err != nil || existing.AppID != app.ID {
+		jsonError(w, "schedule not found", http.StatusNotFound)
+		return
+	}
+
+	// On update, nil enabled means "keep current value".
+	enabled := existing.Enabled
+	if req.Enabled != nil {
+		enabled = *req.Enabled
+	}
+
 	intervalSecs, cronExpr := toDBScheduleParams(&req)
 	updated, err := queries.UpdateSchedule(r.Context(), db.UpdateScheduleParams{
 		ID:           scheduleID,
@@ -269,6 +262,7 @@ func (s *Server) UpdateSchedule(w http.ResponseWriter, r *http.Request) {
 		IntervalSecs: intervalSecs,
 		CronExpr:     cronExpr,
 		Enabled:      enabled,
+		AppID:        app.ID,
 	})
 	if err != nil {
 		jsonServerError(w, "failed to update schedule", err)
@@ -303,17 +297,6 @@ func (s *Server) DeleteSchedule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Same ownership check as UpdateSchedule — defense against path confusion.
-	existing, err := s.Queries.GetSchedule(r.Context(), scheduleID)
-	if err != nil {
-		jsonError(w, "schedule not found", http.StatusNotFound)
-		return
-	}
-	if existing.AppID != app.ID {
-		jsonError(w, "schedule not found", http.StatusNotFound)
-		return
-	}
-
 	queries, commit, done, err := s.UserQueries(r.Context(), userID)
 	if err != nil {
 		jsonServerError(w, "failed to begin transaction", err)
@@ -321,7 +304,17 @@ func (s *Server) DeleteSchedule(w http.ResponseWriter, r *http.Request) {
 	}
 	defer done()
 
-	if err := queries.DeleteSchedule(r.Context(), scheduleID); err != nil {
+	// Verify schedule belongs to this app inside the transaction to avoid TOCTOU.
+	existing, err := queries.GetSchedule(r.Context(), scheduleID)
+	if err != nil || existing.AppID != app.ID {
+		jsonError(w, "schedule not found", http.StatusNotFound)
+		return
+	}
+
+	if err := queries.DeleteSchedule(r.Context(), db.DeleteScheduleParams{
+		ID:    scheduleID,
+		AppID: app.ID,
+	}); err != nil {
 		jsonServerError(w, "failed to delete schedule", err)
 		return
 	}

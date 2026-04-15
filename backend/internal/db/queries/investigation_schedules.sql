@@ -32,11 +32,11 @@ SET name = $2,
     cron_expr = $5,
     enabled = $6,
     updated_at = now()
-WHERE id = $1
+WHERE id = $1 AND app_id = $7
 RETURNING *;
 
 -- name: DeleteSchedule :exec
-DELETE FROM investigation_schedules WHERE id = $1;
+DELETE FROM investigation_schedules WHERE id = $1 AND app_id = $2;
 
 -- name: MarkScheduleRun :exec
 -- Called by the scheduler after every run (success or error) to advance

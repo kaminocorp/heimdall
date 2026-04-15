@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.43.1 — Defense-in-Depth Hardening](#0431--defense-in-depth-hardening-2026-04-15)
 - [0.43.0 — RLS on System Tables](#0430--rls-on-system-tables-2026-04-15)
 - [0.42.21 — TypeScript Build Fixes](#04221--typescript-build-fixes-2026-04-15)
 - [0.42.20 — Post-Assessment Hardening](#04220--post-assessment-hardening-2026-04-15)
@@ -111,6 +112,54 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.43.1 — Defense-in-Depth Hardening (2026-04-15)
+
+Ten fixes from a post-v0.42.20 assessment covering one critical performance issue, three high-severity defense-in-depth gaps, and six medium correctness/robustness improvements. None were functionally blocking — all are hardening for production resilience at scale.
+
+**Migration:** `031_assessment_fixes`
+
+### C1. Webhook token index now covers OTLP connections
+**File:** `migrations/031_assessment_fixes.up.sql`
+**Fix:** The partial index `idx_connections_webhook_token` had predicate `WHERE type = 'webhook_logs'`, but `GetConnectionByWebhookToken` filters on `type IN ('webhook_logs', 'otlp')`. OTLP connections fell through to a sequential scan on `connections`. Dropped and recreated the index with the wider predicate.
+
+### H1. SQL validator blocks dangerous Postgres functions
+**File:** `agent/tools_db.go`
+**Fix:** `isReadOnlySQL` allowed any statement starting with `SELECT`. The PostgreSQL function `set_config('default_transaction_read_only', 'off', false)` is callable via `SELECT set_config(...)` and would pass validation, potentially disabling the write guard. Added a blocklist for `SET_CONFIG`, `PG_READ_FILE`, `PG_WRITE_FILE`, `LO_IMPORT`, and `LO_EXPORT`. Six new test cases in `tools_db_test.go`.
+
+### H2. `monitorTick` / `schedulerTick` always join goroutines
+**Files:** `agent/monitor.go`, `agent/scheduler.go`
+**Fix:** When the context was cancelled while waiting for the semaphore, both functions returned immediately — `wg.Wait()` at the end was never reached, orphaning in-flight goroutines. Moved to `defer wg.Wait()` at the top of both functions so goroutines are always joined regardless of control flow.
+
+### H3. TOCTOU gap closed in notification channel + schedule CRUD
+**Files:** `handlers/notifications.go`, `handlers/investigation_schedules.go`, `queries/notification_channels.sql`, `queries/investigation_schedules.sql`
+**Fix:** Two compounding problems: ownership checks ran outside the transaction (via `s.Queries`), and the Update/Delete SQL filtered only by `id` with no `app_id` guard. Added `AND app_id` to the `UPDATE` and `DELETE` queries for both `notification_channels` and `investigation_schedules`, and moved all ownership checks inside the `UserQueries` transaction.
+
+### M1. Postgres connector uses `url.URL` struct builder
+**File:** `connectors/database/postgres.go`
+**Fix:** User and password were escaped with `url.PathEscape`, which does not escape `@` or `:` — characters with structural meaning in URL userinfo. A password containing `@` would be misinterpreted as the host delimiter. Replaced `fmt.Sprintf` + `PathEscape` with Go's `url.URL` struct builder (`url.UserPassword` handles encoding correctly). Also added port range validation (1–65535).
+
+### M2. `EmitLog` moved after `commit()` in `CreateApplication`
+**File:** `handlers/applications.go`
+**Fix:** `EmitLog` fired before `commit()`. If the commit failed, a phantom audit log entry was written for an application that was rolled back. Moved the call to after commit, matching the existing pattern in `DeleteApplication`.
+
+### M3. `UpdateConnection` reads existing row inside transaction
+**File:** `handlers/connections.go`
+**Fix:** The handler fetched the existing connection via `s.Queries` (outside the transaction) to read defaults for omitted fields, then wrote inside a `UserQueries` transaction — a TOCTOU gap. Moved `GetConnectionByUser` and the webhook token preservation logic inside the transaction.
+
+### M5. Notification dispatch goroutine has 30s timeout
+**File:** `agent/monitor.go`
+**Fix:** The fire-and-forget notification goroutine used `context.WithoutCancel` with no timeout. If the notification target hung indefinitely, the goroutine would leak permanently. Wrapped in a 30-second `context.WithTimeout` inside the goroutine.
+
+### M8. Nullable JSONB columns map to `json.RawMessage`
+**File:** `sqlc.yaml`
+**Fix:** Nullable JSONB columns (`agent_log.detail`, `investigations.findings`, `investigations.tool_trace`) mapped to `[]byte` in generated Go code. When marshaled to JSON for API responses, they produced base64-encoded strings instead of inline JSON objects. Added a nullable JSONB override to `sqlc.yaml` and regenerated.
+
+### M9. Duplicate unique index on `organizations.slug` dropped
+**File:** `migrations/031_assessment_fixes.up.sql`
+**Fix:** The column definition had `slug TEXT NOT NULL UNIQUE` (implicit index) and an explicit `CREATE UNIQUE INDEX idx_organizations_slug`. PostgreSQL maintained both — double storage, double write overhead. The explicit index is now dropped.
 
 ---
 
