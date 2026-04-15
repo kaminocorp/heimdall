@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.43.0 — RLS on System Tables](#0430--rls-on-system-tables-2026-04-15)
 - [0.42.21 — TypeScript Build Fixes](#04221--typescript-build-fixes-2026-04-15)
 - [0.42.20 — Post-Assessment Hardening](#04220--post-assessment-hardening-2026-04-15)
 - [0.42.19 — Final Production Hardening](#04219--final-production-hardening-2026-04-15)
@@ -110,6 +111,22 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.43.0 — RLS on System Tables (2026-04-15)
+
+Defence-in-depth: enabled Row Level Security on the two remaining tables that lacked it — `agent_config` and `schema_migrations`. Both are system-internal tables with no user-scoped data, so RLS is enabled with **no policies**, meaning non-owner roles (Supabase `anon`, `authenticated`, PostgREST) see zero rows while the backend's `postgres` owner role bypasses RLS as before.
+
+### 1. `agent_config` — global singleton locked down
+**Migration:** `030_rls_system_tables`
+**Why:** This table holds the fallback agent model, mode, and optional system prompt override. Without RLS, a leaked Supabase key or PostgREST access could read the configuration. Now returns zero rows to all non-owner roles.
+
+### 2. `schema_migrations` — migration metadata locked down
+**Migration:** `030_rls_system_tables`
+**Why:** The `golang-migrate` bookkeeping table exposes which migration version the database is at. Low-sensitivity data, but no reason to leave it accessible. Now invisible to non-owner roles.
+
+**Every table in the database now has RLS enabled.**
 
 ---
 
