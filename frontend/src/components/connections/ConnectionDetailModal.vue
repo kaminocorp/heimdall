@@ -42,7 +42,7 @@ const configDetails = computed(() => {
   const cfg = c.config as Record<string, unknown> | undefined
   if (!cfg) return []
 
-  const details: { label: string; value: string; masked?: boolean }[] = []
+  const details: { label: string; value: string; masked?: boolean; copiable?: boolean }[] = []
 
   switch (c.type) {
     case 'postgres':
@@ -64,7 +64,8 @@ const configDetails = computed(() => {
       break
 
     case 'webhook_logs':
-      if (cfg.webhook_token) details.push({ label: 'Bearer Token', value: String(cfg.webhook_token), masked: true })
+      details.push({ label: 'Webhook URL', value: `${window.location.origin}/api/webhooks/logs`, copiable: true })
+      if (cfg.webhook_token) details.push({ label: 'Bearer Token', value: String(cfg.webhook_token), masked: true, copiable: true })
       break
 
     case 'syslog':
@@ -77,7 +78,8 @@ const configDetails = computed(() => {
       break
 
     case 'otlp':
-      // OTLP shows endpoint info
+      details.push({ label: 'Endpoint', value: `${window.location.origin}/api/v1/logs`, copiable: true })
+      if (cfg.webhook_token) details.push({ label: 'Bearer Token', value: String(cfg.webhook_token), masked: true, copiable: true })
       break
   }
 
@@ -114,6 +116,29 @@ function maskedValue(value: string, label: string): string {
   return value.slice(0, 4) + '*'.repeat(Math.min(value.length - 4, 20))
 }
 
+/* ── Copy to clipboard ── */
+
+const copiedField = ref<string | null>(null)
+let copyTimer: ReturnType<typeof setTimeout> | null = null
+
+async function copyValue(value: string, label: string) {
+  try {
+    await navigator.clipboard.writeText(value)
+  } catch {
+    const textarea = document.createElement('textarea')
+    textarea.value = value
+    textarea.style.position = 'fixed'
+    textarea.style.opacity = '0'
+    document.body.appendChild(textarea)
+    textarea.select()
+    document.execCommand('copy')
+    document.body.removeChild(textarea)
+  }
+  copiedField.value = label
+  if (copyTimer) clearTimeout(copyTimer)
+  copyTimer = setTimeout(() => { copiedField.value = null }, 2000)
+}
+
 /* ── Delete confirmation ── */
 
 const confirmingDelete = ref(false)
@@ -144,6 +169,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   document.removeEventListener('keydown', onKeydown)
   if (deleteTimer) { clearTimeout(deleteTimer); deleteTimer = null }
+  if (copyTimer) { clearTimeout(copyTimer); copyTimer = null }
 })
 </script>
 
@@ -195,6 +221,16 @@ onBeforeUnmount(() => {
               class="font-mono text-[0.6rem] uppercase tracking-wider text-text-muted hover:text-accent transition-colors cursor-pointer shrink-0"
             >
               {{ revealedFields.has(detail.label) ? 'Hide' : 'Show' }}
+            </button>
+            <button
+              v-if="detail.copiable"
+              @click="copyValue(detail.value, detail.label)"
+              class="font-mono text-[0.6rem] uppercase tracking-wider transition-colors cursor-pointer shrink-0"
+              :class="copiedField === detail.label
+                ? 'text-status-ok'
+                : 'text-text-muted hover:text-accent'"
+            >
+              {{ copiedField === detail.label ? 'Copied' : 'Copy' }}
             </button>
           </div>
         </div>

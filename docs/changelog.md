@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.44.2 — Connection Detail: URLs & Copy Buttons](#0442--connection-detail-urls--copy-buttons-2026-04-16)
 - [0.44.1 — Webhook Token Display Fix](#0441--webhook-token-display-fix-2026-04-16)
 - [0.44.0 — Fly.io Log Integration](#0440--flyio-log-integration-2026-04-16)
 - [0.43.1 — Defense-in-Depth Hardening](#0431--defense-in-depth-hardening-2026-04-15)
@@ -114,6 +115,29 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.44.2 — Connection Detail: URLs & Copy Buttons (2026-04-16)
+
+The connection detail modal now shows everything a user needs to configure a log shipper — no more hunting for URLs or re-reading docs.
+
+**File:** `connections/ConnectionDetailModal.vue`
+
+### Webhook URL & OTLP Endpoint
+
+Webhook (`webhook_logs`) and OpenTelemetry (`otlp`) connections now display their full ingestion URL as a copiable row in the detail modal. The URL is derived from `window.location.origin` so it resolves correctly across environments (localhost in dev, `heimdallwatch.com` in production).
+
+| Connection type | New row |
+|-----------------|---------|
+| `webhook_logs` | **Webhook URL** — `{origin}/api/webhooks/logs` |
+| `otlp` | **Endpoint** — `{origin}/api/v1/logs` |
+
+OTLP connections also now surface their Bearer Token (was previously a no-op `// OTLP shows endpoint info` comment).
+
+### Inline Copy Buttons
+
+Added a `copiable` flag to detail items. Any field marked copiable gets a small **Copy** / **Copied** button inline, using the same clipboard-with-fallback pattern as `CopyableField.vue`. Applied to: Webhook URL, OTLP Endpoint, and both Bearer Tokens.
 
 ---
 
