@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.44.0 — Fly.io Log Integration](#0440--flyio-log-integration-2026-04-16)
 - [0.43.1 — Defense-in-Depth Hardening](#0431--defense-in-depth-hardening-2026-04-15)
 - [0.43.0 — RLS on System Tables](#0430--rls-on-system-tables-2026-04-15)
 - [0.42.21 — TypeScript Build Fixes](#04221--typescript-build-fixes-2026-04-15)
@@ -112,6 +113,120 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.44.0 — Fly.io Log Integration (2026-04-16)
+
+Full Fly.io log integration: a rewritten backend poller, a dual-mode connection wizard, and a webhook parser for the Fly Log Shipper. Users can connect Fly.io apps to Heimdall via two paths — **Log Drain** (near-real-time, recommended) or **API Polling** (zero-setup fallback) — from a single unified wizard flow.
+
+**Proposal:** `docs/executing/flyio-log-integration.md`
+**Completion notes:** `docs/completions/flyio-phase{1,2,3}-*.md`
+
+### 1. App-Level Poller Rewrite
+**File:** `connectors/logs/flyio.go`
+
+Replaced the N+1 per-machine polling approach with a single call to the Fly.io app-level NDJSON logs endpoint (`GET /v1/apps/{app}/logs`).
+
+**Before:** The poller listed all machines via `GET /v1/apps/{app}/machines`, filtered to `started`/`running` state, then fetched `GET /v1/apps/{app}/machines/{id}/logs?limit=200` for each one. A 10-machine app made 11 API calls every 30 seconds. Stopped and crashed machines — whose final log lines are arguably the most important — were silently skipped.
+
+**After:** A single API call returns NDJSON across all machines regardless of state. Parsed with `bufio.Scanner` for streaming memory efficiency. The `Connect()` / `Health()` validation now also hits the logs endpoint (proving both token validity and app existence) instead of the machines list.
+
+| Metric | Before | After |
+|--------|--------|-------|
+| API calls per poll (10 machines) | 11 | 1 |
+| Crash logs captured | No | Yes |
+| Endpoint stability | Undocumented per-machine | Semi-public app-level (`flyctl` depends on it) |
+| Per-machine 200-entry cap | Yes | No (streams all since cursor) |
+
+**Removed:** `pollMachineLogs()` — all per-machine logic was in this function; no longer needed.
+
+**Added:** `logsEndpoint()` helper (URL builder with proper escaping), `flyLogEntry` struct capturing the full NDJSON schema (`timestamp`, `message`, `level`, `instance`, `region`, `meta`). Stored payloads now include `instance` and `region` fields that weren't available in the per-machine approach.
+
+**Tests:** 15 new unit tests in `flyio_test.go` — constructor validation, Connect auth/not-found, Poll request formation, empty responses, rate limiting, server errors, malformed NDJSON, cursor filtering, URL escaping, `normalizeSev` mappings, lifecycle.
+
+### 2. Dual-Mode Connection Wizard
+**Files:** `wizard/flows.ts`, `wizard/ConnectionWizard.vue`, `wizard/steps/StepFlyioMode.vue`, `wizard/steps/StepFlyioAuth.vue`, `wizard/steps/StepFlyioDrainSetup.vue`
+
+The Fly.io entry in the platform grid is now available (`available: true`) with a dual-mode wizard flow:
+
+```
+Step 1: Name           → Connection name
+Step 2: Mode           → "Log Drain (recommended)" or "API Polling"
+
+Drain path:
+  Step 3: Drain Setup  → Webhook URL/token info + copy-paste Fly Log Shipper CLI commands
+                          → Creates a webhook_logs connection
+
+Polling path:
+  Step 3: Auth         → Fly app name + API token
+  Step 4: Test         → Validates credentials against Fly.io Logs API
+                          → Creates a flyio connection
+```
+
+**Dynamic `connectorType`** — this is the first wizard flow where the backend connector type changes based on user input mid-wizard. Two new computeds in `ConnectionWizard.vue`:
+
+- `effectiveSteps` — filters the step list based on `state.config.flyio_mode` (drain excludes Auth + Test; polling excludes Drain Setup). Falls through to the static `selectedFlow.steps` for all other flows.
+- `effectiveConnectorType` — returns `'webhook_logs'` for drain or `'flyio'` for polling. Falls through to `selectedFlow.connectorType` for all other flows.
+
+The `flyio_mode` key is stripped from `state.config` before the API call — it's wizard-internal routing state that the backend doesn't need.
+
+**New step components:**
+
+- `StepFlyioMode` — two large toggle buttons with descriptions and badges ("Recommended" / "Zero setup"). Drain pre-selected as default. Always valid.
+- `StepFlyioAuth` — app name + API token form fields. Follows the `StepSupabaseAuth` pattern. Valid when both non-empty.
+- `StepFlyioDrainSetup` — display-only step with 4 copyable CLI commands for deploying the Fly Log Shipper. Uses the existing `CopyableField` component. Auto-valid on mount.
+
+**Flow metadata updated:** description changed from "Ship logs from Fly.io apps via syslog drain" to "Ship logs from Fly.io apps via log drain or API polling"; subtitle from "via Syslog drain" to "Log Drain or API Polling"; `connectorType` from `'syslog'` to `'flyio'` (default, overridden dynamically).
+
+### 3. Vector/Fly Log Shipper Webhook Parser
+**File:** `handlers/webhook_parsers.go`
+
+Added auto-detection and parsing for the JSON format sent by the Fly Log Shipper (a Vector container that connects to Fly's internal NATS log stream and forwards to HTTP sinks).
+
+**Detection heuristic** (`isVectorFlyPayload`): checks for a `fly` nested JSON object (Fly Log Shipper's enriched format) or a `source_type` starting with `"fly"` (simpler Vector configurations). Handles both single objects and arrays (Vector batch mode). Sits in the detection chain after GCP Pub/Sub and before the Heimdall native fallback.
+
+**Input format:**
+```json
+{
+  "message": "request completed in 12ms",
+  "timestamp": "2026-04-15T12:00:00.123Z",
+  "host": "e784079c",
+  "source_type": "fly_io",
+  "fly": {
+    "app": { "name": "my-fly-app" },
+    "machine": { "id": "e784079c" },
+    "region": "lhr"
+  },
+  "log": { "level": "info" }
+}
+```
+
+**Field extraction:**
+
+| Output field | Source | Fallback |
+|-------------|--------|----------|
+| `SourceType` | `"flyio/" + fly.app.name` | `source_type` from Vector, then `"flyio"` |
+| `Severity` | `log.level` → `normalizeSeverity()` | `extractSeverityFromMap()` (checks `severity`, `level`, `log_level`, `error_severity`) |
+| `Payload` | Enriched JSON with `message`, `timestamp`, `host`, `app_name`, `machine_id`, `region` | — |
+
+**Tests:** 6 new tests — single entry, batch array, severity mapping, detection by source_type, fallback without fly metadata, negative detection (verifies native/other formats don't false-positive).
+
+### End-to-End Drain Path
+
+With all three phases in place, the drain path works as follows:
+
+```
+User selects "Fly.io → Log Drain" in wizard
+  → Wizard creates webhook_logs connection (server generates bearer token)
+  → User deploys Fly Log Shipper in their Fly org with webhook URL + token
+  → Log Shipper connects to Fly's internal NATS stream
+  → Log Shipper POSTs JSON to /api/webhooks/logs
+  → isVectorFlyPayload() detects Fly format
+  → parseVectorFlyEntry() extracts message, severity, Fly metadata
+  → InsertLogEntry() stores in log_buffer
+  → Monitoring loop classifies via Lumber → escalates to Claude
+```
 
 ---
 

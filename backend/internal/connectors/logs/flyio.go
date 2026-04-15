@@ -1,6 +1,7 @@
 package logs
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -21,7 +22,10 @@ const (
 	flyAPIBase         = "https://api.machines.dev"
 	flyDefaultInterval = 30
 	flyMinInterval     = 15
-	flyPollLimit       = 200
+	// flyMaxBodyBytes caps the total bytes read from the NDJSON response to
+	// prevent unbounded memory growth if the endpoint returns an unexpectedly
+	// large payload.
+	flyMaxBodyBytes = 10 << 20 // 10 MiB
 )
 
 // FlyioConfig represents the fields stored in a Fly.io connection's config JSONB.
@@ -31,7 +35,7 @@ type FlyioConfig struct {
 	PollIntervalSecs int    `json:"poll_interval_secs"`
 }
 
-// Flyio polls the Fly.io Machines API for application logs.
+// Flyio polls the Fly.io app-level logs endpoint for application logs.
 type Flyio struct {
 	config       FlyioConfig
 	connectionID uuid.UUID
@@ -73,9 +77,10 @@ func NewFlyio(configJSON json.RawMessage, connectionID, userID, appID uuid.UUID)
 
 func (f *Flyio) ParsedConfig() FlyioConfig { return f.config }
 
+// Connect validates the API token and app name by hitting the app-level logs
+// endpoint with a short time window.
 func (f *Flyio) Connect(ctx context.Context) error {
-	// Validate the token by listing machines for the app.
-	endpoint := fmt.Sprintf("%s/v1/apps/%s/machines", f.apiBase, url.PathEscape(f.config.AppName))
+	endpoint := f.logsEndpoint(time.Now().Add(-1 * time.Minute))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return fmt.Errorf("flyio: build request: %w", err)
@@ -108,13 +113,34 @@ func (f *Flyio) Close() error {
 	return nil
 }
 
-// Poll fetches recent logs from the Fly.io Machines API Nats-backed log endpoint.
+// logsEndpoint builds the app-level NDJSON logs URL with a start_time cursor.
+func (f *Flyio) logsEndpoint(since time.Time) string {
+	return fmt.Sprintf("%s/v1/apps/%s/logs?start_time=%s",
+		f.apiBase,
+		url.PathEscape(f.config.AppName),
+		url.QueryEscape(since.UTC().Format(time.RFC3339Nano)),
+	)
+}
+
+// flyLogEntry represents a single line from the NDJSON app-level logs response.
+type flyLogEntry struct {
+	Timestamp string `json:"timestamp"`
+	Message   string `json:"message"`
+	Level     string `json:"level"`
+	Instance  string `json:"instance"`
+	Region    string `json:"region"`
+	Meta      any    `json:"meta"`
+}
+
+// Poll fetches recent logs from the Fly.io app-level NDJSON endpoint.
+// This replaces the previous N+1 per-machine approach with a single API call
+// that returns logs across all machines (including stopped/crashed).
 func (f *Flyio) Poll(ctx context.Context, queries *db.Queries) error {
 	f.mu.Lock()
 	cursor := f.cursor
 	f.mu.Unlock()
 
-	endpoint := fmt.Sprintf("%s/v1/apps/%s/machines", f.apiBase, url.PathEscape(f.config.AppName))
+	endpoint := f.logsEndpoint(cursor)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return fmt.Errorf("flyio: build request: %w", err)
@@ -127,105 +153,41 @@ func (f *Flyio) Poll(ctx context.Context, queries *db.Queries) error {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
-	if err != nil {
-		return fmt.Errorf("flyio: read body: %w", err)
-	}
-
 	if resp.StatusCode == http.StatusTooManyRequests {
 		return fmt.Errorf("flyio: rate limited (429), will retry next interval")
 	}
 	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return fmt.Errorf("flyio: api error %d: %s", resp.StatusCode, string(body))
 	}
 
-	// Parse machine list to get IDs, then fetch logs per machine.
-	var machines []struct {
-		ID    string `json:"id"`
-		Name  string `json:"name"`
-		State string `json:"state"`
-	}
-	if err := json.Unmarshal(body, &machines); err != nil {
-		return fmt.Errorf("flyio: parse machines: %w", err)
-	}
+	// Parse NDJSON: one JSON object per line.
+	scanner := bufio.NewScanner(io.LimitReader(resp.Body, flyMaxBodyBytes))
+	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20) // up to 1 MiB per line
 
 	var maxTS time.Time
 	var insertCount int
 
-	for _, machine := range machines {
-		if machine.State != "started" && machine.State != "running" {
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
 			continue
 		}
-		count, ts, err := f.pollMachineLogs(ctx, queries, machine.ID, machine.Name, cursor)
-		if err != nil {
-			slog.Error("flyio: poll machine logs", "machine", machine.ID, "err", err)
+
+		var entry flyLogEntry
+		if err := json.Unmarshal(line, &entry); err != nil {
+			slog.Warn("flyio: skipping malformed NDJSON line",
+				"err", err, "connection_id", f.connectionID)
 			continue
 		}
-		insertCount += count
-		if ts.After(maxTS) {
-			maxTS = ts
-		}
-	}
 
-	if !maxTS.IsZero() {
-		f.mu.Lock()
-		f.cursor = maxTS
-		f.mu.Unlock()
-	}
-
-	if insertCount > 0 {
-		slog.Info("flyio poll complete", "app", f.config.AppName, "rows", insertCount, "connection_id", f.connectionID)
-	}
-	return nil
-}
-
-func (f *Flyio) pollMachineLogs(ctx context.Context, queries *db.Queries, machineID, machineName string, since time.Time) (int, time.Time, error) {
-	endpoint := fmt.Sprintf("%s/v1/apps/%s/machines/%s/logs?limit=%d",
-		f.apiBase, url.PathEscape(f.config.AppName), url.PathEscape(machineID), flyPollLimit)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return 0, time.Time{}, err
-	}
-	req.Header.Set("Authorization", "Bearer "+f.config.APIToken)
-
-	resp, err := f.httpClient.Do(req)
-	if err != nil {
-		return 0, time.Time{}, err
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 5<<20))
-	if err != nil {
-		return 0, time.Time{}, err
-	}
-
-	if resp.StatusCode == http.StatusTooManyRequests {
-		return 0, time.Time{}, fmt.Errorf("flyio: rate limited (429), back off")
-	}
-	if resp.StatusCode != http.StatusOK {
-		return 0, time.Time{}, fmt.Errorf("status %d", resp.StatusCode)
-	}
-
-	var logs []struct {
-		Timestamp string `json:"timestamp"`
-		Message   string `json:"message"`
-		Level     string `json:"level"`
-	}
-	if err := json.Unmarshal(body, &logs); err != nil {
-		return 0, time.Time{}, err
-	}
-
-	var count int
-	var maxTS time.Time
-
-	for _, entry := range logs {
 		ts, parseErr := time.Parse(time.RFC3339Nano, entry.Timestamp)
 		if parseErr != nil {
-			slog.Warn("flyio: unparseable timestamp, using now", "raw", entry.Timestamp, "err", parseErr, "connection_id", f.connectionID)
+			slog.Warn("flyio: unparseable timestamp, using now",
+				"raw", entry.Timestamp, "err", parseErr, "connection_id", f.connectionID)
 			ts = time.Now()
 		}
-		if !ts.After(since) {
+		if !ts.After(cursor) {
 			continue
 		}
 
@@ -233,7 +195,9 @@ func (f *Flyio) pollMachineLogs(ctx context.Context, queries *db.Queries, machin
 			"timestamp": entry.Timestamp,
 			"message":   entry.Message,
 			"level":     entry.Level,
-			"machine":   machineName,
+			"instance":  entry.Instance,
+			"region":    entry.Region,
+			"meta":      entry.Meta,
 		})
 		if err != nil {
 			slog.Error("flyio: marshal payload", "err", err, "connection_id", f.connectionID)
@@ -255,19 +219,29 @@ func (f *Flyio) pollMachineLogs(ctx context.Context, queries *db.Queries, machin
 			continue
 		}
 
-		count++
+		insertCount++
 		if ts.After(maxTS) {
 			maxTS = ts
 		}
 	}
 
+	if err := scanner.Err(); err != nil {
+		slog.Error("flyio: scanner error", "err", err, "connection_id", f.connectionID)
+	}
+
 	// Advance cursor past the last seen timestamp to avoid re-processing
 	// entries with an identical timestamp on the next poll.
 	if !maxTS.IsZero() {
-		maxTS = maxTS.Add(time.Nanosecond)
+		f.mu.Lock()
+		f.cursor = maxTS.Add(time.Nanosecond)
+		f.mu.Unlock()
 	}
 
-	return count, maxTS, nil
+	if insertCount > 0 {
+		slog.Info("flyio poll complete",
+			"app", f.config.AppName, "rows", insertCount, "connection_id", f.connectionID)
+	}
+	return nil
 }
 
 func normalizeSev(level string) pgtype.Text {

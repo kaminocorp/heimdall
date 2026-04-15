@@ -39,6 +39,11 @@ func parseWebhookPayload(raw []byte, contentType string) ([]webhookLogRequest, e
 		return parsePubSubPayload(raw)
 	}
 
+	// Detect Vector HTTP sink (Fly Log Shipper): check for fly metadata or Vector source_type.
+	if isVectorFlyPayload(raw) {
+		return parseVectorFlyPayload(raw)
+	}
+
 	// Default: Heimdall native format.
 	return parseNativePayload(raw)
 }
@@ -311,6 +316,139 @@ func parsePubSubPayload(raw []byte) ([]webhookLogRequest, error) {
 		Severity:   "info",
 		Payload:    payload,
 	}}, nil
+}
+
+// --- Vector HTTP sink (Fly Log Shipper) ---
+
+// isVectorFlyPayload detects payloads sent by Vector's HTTP sink, specifically
+// from the Fly Log Shipper. Detection works on both single objects and arrays.
+//
+// The Fly Log Shipper adds a nested "fly" object with app metadata. For generic
+// Vector payloads, we also match if source_type starts with "fly".
+func isVectorFlyPayload(raw []byte) bool {
+	trimmed := strings.TrimSpace(string(raw))
+
+	// For arrays, inspect the first element.
+	if strings.HasPrefix(trimmed, "[") {
+		var arr []json.RawMessage
+		if err := json.Unmarshal(raw, &arr); err != nil || len(arr) == 0 {
+			return false
+		}
+		return isVectorFlyObject(arr[0])
+	}
+
+	return isVectorFlyObject(raw)
+}
+
+func isVectorFlyObject(raw []byte) bool {
+	var probe struct {
+		Fly        *json.RawMessage `json:"fly"`
+		SourceType string           `json:"source_type"`
+	}
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return false
+	}
+	// Match if there's a "fly" nested object (Fly Log Shipper) or
+	// source_type indicates Fly.io origin.
+	return probe.Fly != nil || strings.HasPrefix(probe.SourceType, "fly")
+}
+
+// vectorFlyEntry represents a log line from the Fly Log Shipper (Vector HTTP sink).
+type vectorFlyEntry struct {
+	Message    string `json:"message"`
+	Timestamp  string `json:"timestamp"`
+	Host       string `json:"host"`
+	SourceType string `json:"source_type"`
+	Fly        *struct {
+		App struct {
+			Name string `json:"name"`
+		} `json:"app"`
+		Machine struct {
+			ID string `json:"id"`
+		} `json:"machine"`
+		Region string `json:"region"`
+	} `json:"fly"`
+	Log *struct {
+		Level string `json:"level"`
+	} `json:"log"`
+}
+
+func parseVectorFlyPayload(raw []byte) ([]webhookLogRequest, error) {
+	trimmed := strings.TrimSpace(string(raw))
+
+	// Handle array payloads (Vector batch mode).
+	if strings.HasPrefix(trimmed, "[") {
+		var entries []json.RawMessage
+		if err := json.Unmarshal(raw, &entries); err != nil {
+			return nil, err
+		}
+		var results []webhookLogRequest
+		for _, entryRaw := range entries {
+			parsed, err := parseVectorFlyEntry(entryRaw)
+			if err != nil {
+				continue // skip malformed entries
+			}
+			results = append(results, parsed)
+		}
+		return results, nil
+	}
+
+	// Single object.
+	parsed, err := parseVectorFlyEntry(raw)
+	if err != nil {
+		return nil, err
+	}
+	return []webhookLogRequest{parsed}, nil
+}
+
+func parseVectorFlyEntry(raw []byte) (webhookLogRequest, error) {
+	var entry vectorFlyEntry
+	if err := json.Unmarshal(raw, &entry); err != nil {
+		return webhookLogRequest{}, err
+	}
+
+	// Build source type from Fly metadata.
+	sourceType := "flyio"
+	if entry.Fly != nil && entry.Fly.App.Name != "" {
+		sourceType = "flyio/" + entry.Fly.App.Name
+	} else if entry.SourceType != "" {
+		sourceType = entry.SourceType
+	}
+
+	// Extract severity from log.level or fall back to generic extraction.
+	severity := "info"
+	if entry.Log != nil && entry.Log.Level != "" {
+		severity = normalizeSeverity(entry.Log.Level)
+	} else {
+		// Try generic extraction from the raw JSON.
+		var obj map[string]any
+		if err := json.Unmarshal(raw, &obj); err == nil {
+			severity = extractSeverityFromMap(obj)
+		}
+	}
+
+	// Build enriched payload preserving all original fields plus structured metadata.
+	payload := make(map[string]any)
+	payload["message"] = entry.Message
+	payload["timestamp"] = entry.Timestamp
+	payload["host"] = entry.Host
+
+	if entry.Fly != nil {
+		payload["app_name"] = entry.Fly.App.Name
+		payload["machine_id"] = entry.Fly.Machine.ID
+		payload["region"] = entry.Fly.Region
+	}
+
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return webhookLogRequest{}, err
+	}
+
+	return webhookLogRequest{
+		SourceType: sourceType,
+		Severity:   severity,
+		Payload:    payloadJSON,
+	}, nil
 }
 
 // --- Shared helpers ---

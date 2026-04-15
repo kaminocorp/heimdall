@@ -2,7 +2,7 @@
 import { ref, computed, reactive, onMounted, onBeforeUnmount } from 'vue'
 import { useConnectionsStore } from '@/stores/connections'
 import { useAppStore } from '@/stores/app'
-import { getFlowById, type PlatformFlow, type WizardState } from './flows'
+import { getFlowById, getFlyioSteps, getFlyioConnectorType, type PlatformFlow, type WizardState } from './flows'
 import PlatformGrid from './PlatformGrid.vue'
 import WizardStepIndicator from './WizardStepIndicator.vue'
 
@@ -70,10 +70,29 @@ function confirmDiscard() {
 }
 
 // — Derived —
-const currentStep = computed(() => selectedFlow.value?.steps[currentStepIndex.value] ?? null)
-const stepLabels = computed(() => selectedFlow.value?.steps.map(s => s.label) ?? [])
+// For Fly.io, steps and connector type vary based on mode selection.
+const effectiveSteps = computed(() => {
+  if (!selectedFlow.value) return []
+  if (selectedFlow.value.id === 'flyio') {
+    const mode = (state.config.flyio_mode as 'drain' | 'polling') ?? 'drain'
+    return getFlyioSteps(selectedFlow.value, mode)
+  }
+  return selectedFlow.value.steps
+})
+
+const effectiveConnectorType = computed(() => {
+  if (!selectedFlow.value) return ''
+  if (selectedFlow.value.id === 'flyio') {
+    const mode = (state.config.flyio_mode as 'drain' | 'polling') ?? 'drain'
+    return getFlyioConnectorType(mode)
+  }
+  return selectedFlow.value.connectorType
+})
+
+const currentStep = computed(() => effectiveSteps.value[currentStepIndex.value] ?? null)
+const stepLabels = computed(() => effectiveSteps.value.map(s => s.label))
 const isLastStep = computed(() =>
-  selectedFlow.value ? currentStepIndex.value === selectedFlow.value.steps.length - 1 : false
+  effectiveSteps.value.length > 0 ? currentStepIndex.value === effectiveSteps.value.length - 1 : false
 )
 
 // — Actions —
@@ -115,7 +134,7 @@ async function goNext() {
   if (!selectedFlow.value || creating.value) return
 
   // If we're about to enter the test step, create the connection first.
-  const nextStep = selectedFlow.value.steps[currentStepIndex.value + 1]
+  const nextStep = effectiveSteps.value[currentStepIndex.value + 1]
   if (nextStep?.id === 'test' && !createdConnectionId.value) {
     await createConnection()
     if (error.value) return
@@ -134,12 +153,14 @@ async function createConnection() {
   error.value = null
 
   try {
+    // Strip wizard-only keys (e.g. flyio_mode) before sending to backend.
+    const { flyio_mode: _, ...cleanConfig } = state.config
     const conn = await store.createConnection({
       app_id: targetAppId.value,
       name: state.name,
-      type: selectedFlow.value.connectorType,
+      type: effectiveConnectorType.value,
       direction: selectedFlow.value.direction,
-      config: state.config,
+      config: cleanConfig,
     })
     createdConnectionId.value = conn.id
   } catch (e: unknown) {

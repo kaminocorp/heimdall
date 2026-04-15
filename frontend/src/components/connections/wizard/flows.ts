@@ -64,6 +64,9 @@ const StepWebhookSetup = defineAsyncComponent(() => import('./steps/StepWebhookS
 const StepGitHubInstall = defineAsyncComponent(() => import('./steps/StepGitHubInstall.vue'))
 const StepSyslogConfig = defineAsyncComponent(() => import('./steps/StepSyslogConfig.vue'))
 const StepOTLPSetup = defineAsyncComponent(() => import('./steps/StepOTLPSetup.vue'))
+const StepFlyioMode = defineAsyncComponent(() => import('./steps/StepFlyioMode.vue'))
+const StepFlyioAuth = defineAsyncComponent(() => import('./steps/StepFlyioAuth.vue'))
+const StepFlyioDrainSetup = defineAsyncComponent(() => import('./steps/StepFlyioDrainSetup.vue'))
 
 export const flows: PlatformFlow[] = [
   // ── Platform log sources ─────────────────────────────
@@ -89,13 +92,19 @@ export const flows: PlatformFlow[] = [
     id: 'flyio',
     name: 'Fly.io',
     icon: 'FI',
-    description: 'Ship logs from Fly.io apps via syslog drain',
+    description: 'Ship logs from Fly.io apps via log drain or API polling',
     section: 'platform_log',
-    subtitle: 'via Syslog drain',
-    connectorType: 'syslog',
+    subtitle: 'Log Drain or API Polling',
+    connectorType: 'flyio',
     direction: 'one_way',
-    available: false,
-    steps: [],
+    available: true,
+    steps: [
+      { id: 'name', label: 'Name', component: StepName },
+      { id: 'flyio_mode', label: 'Mode', component: StepFlyioMode },
+      { id: 'flyio_auth', label: 'Auth', component: StepFlyioAuth },
+      { id: 'flyio_drain', label: 'Setup', component: StepFlyioDrainSetup },
+      { id: 'test', label: 'Test', component: StepTest },
+    ],
   },
   {
     id: 'vercel',
@@ -319,4 +328,25 @@ export const flows: PlatformFlow[] = [
 
 export function getFlowById(id: string): PlatformFlow | undefined {
   return flows.find(f => f.id === id)
+}
+
+/**
+ * Returns the visible steps for a Fly.io flow based on mode selection.
+ * - Drain mode:    Name → Mode → Drain Setup (webhook info)
+ * - Polling mode:  Name → Mode → Auth (credentials) → Test
+ */
+export function getFlyioSteps(flow: PlatformFlow, mode: 'drain' | 'polling'): FlowStep[] {
+  if (flow.id !== 'flyio') return flow.steps
+  return flow.steps.filter(s => {
+    if (mode === 'drain') return s.id !== 'flyio_auth' && s.id !== 'test'
+    return s.id !== 'flyio_drain'
+  })
+}
+
+/**
+ * Returns the effective connector type for a Fly.io flow based on mode.
+ * Drain creates a webhook_logs connection; polling creates a flyio connection.
+ */
+export function getFlyioConnectorType(mode: 'drain' | 'polling'): string {
+  return mode === 'drain' ? 'webhook_logs' : 'flyio'
 }
