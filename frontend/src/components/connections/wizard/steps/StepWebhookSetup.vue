@@ -11,9 +11,12 @@ const emit = defineEmits<{
 
 const payloadExample = `{
   "source": "my-app",
-  "severity": "error",
-  "message": "Connection refused",
-  "metadata": { ... }
+  "level": "error",
+  "message": "Connection refused to db-primary",
+  "attrs": {
+    "host": "web-1",
+    "request_id": "req-abc123"
+  }
 }`
 
 // Webhook connections are auto-configured — always valid.

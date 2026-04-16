@@ -141,6 +141,7 @@ func testSetup(t *testing.T) *testEnv {
 	router.Route("/api", func(r chi.Router) {
 		// Public routes
 		r.Post("/webhooks/logs", srv.IngestWebhookLogs)
+		r.Post("/webhooks/logs/{format}", srv.IngestWebhookLogsWithFormat)
 		r.Post("/v1/logs", srv.IngestOTLPLogs)
 		r.Get("/github/callback", srv.GitHubCallback)
 

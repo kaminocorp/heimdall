@@ -3,62 +3,165 @@ package handlers
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"strings"
 )
 
+// parseByFormat parses the payload using a specific parser, bypassing auto-detection.
+// Used by format-specific routes (POST /api/webhooks/logs/{format}) and the
+// X-Heimdall-Format header override.
+func parseByFormat(raw []byte, format string) ([]webhookLogRequest, string, error) {
+	switch format {
+	case "flyio":
+		entries, err := parseVectorFlyPayload(raw)
+		return entries, "flyio_vector", err
+	case "vercel":
+		entries, err := parseVercelNDJSON(raw)
+		return entries, "vercel_ndjson", err
+	case "firehose":
+		entries, err := parseFirehosePayload(raw)
+		return entries, "aws_firehose", err
+	case "pubsub":
+		entries, err := parsePubSubPayload(raw)
+		return entries, "gcp_pubsub", err
+	case "native":
+		entries, err := parseNativePayload(raw)
+		if err != nil {
+			return nil, "", err
+		}
+		return entries, nativeFormatString(raw, entries), nil
+	default:
+		return nil, "", fmt.Errorf("unknown format: %s", format)
+	}
+}
+
 // parseWebhookPayload detects the payload format and normalizes it to a slice
-// of webhookLogRequest entries. Supports:
+// of webhookLogRequest entries. The returned format string identifies which
+// parser handled the request (e.g. "native", "native_batch", "vercel_ndjson").
+//
+// Supports:
 //   - Heimdall native format (single object or array)
 //   - Vercel NDJSON (newline-delimited JSON from Log Drains)
 //   - AWS Kinesis Firehose HTTP delivery (base64-encoded records)
 //   - GCP Pub/Sub push subscription (base64-encoded message data)
-func parseWebhookPayload(raw []byte, contentType string) ([]webhookLogRequest, error) {
+//   - Fly.io Vector HTTP sink (Fly Log Shipper)
+func parseWebhookPayload(raw []byte, contentType string) ([]webhookLogRequest, string, error) {
 	trimmed := strings.TrimSpace(string(raw))
 	if trimmed == "" {
-		return nil, nil
+		return nil, "", nil
 	}
 
-	// Try Vercel NDJSON: Content-Type is application/x-ndjson, or multiple lines each starting with {.
-	if strings.Contains(contentType, "ndjson") || isNDJSON(trimmed) {
-		return parseVercelNDJSON(raw)
+	// Vercel NDJSON: require explicit Content-Type header. Structural detection
+	// (isNDJSON) was removed — it matched any multi-line JSON input, causing
+	// false positives with Fly.io and other batch formats. Callers without the
+	// ndjson content-type should use POST /api/webhooks/logs/vercel instead.
+	if strings.Contains(contentType, "ndjson") {
+		entries, err := parseVercelNDJSON(raw)
+		return entries, "vercel_ndjson", err
 	}
 
 	// Try to parse as JSON first.
 	var probe json.RawMessage
 	if err := json.Unmarshal(raw, &probe); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	// Detect AWS Firehose: structurally check for requestId + records fields.
 	if isFirehosePayload(raw) {
-		return parseFirehosePayload(raw)
+		entries, err := parseFirehosePayload(raw)
+		return entries, "aws_firehose", err
 	}
 
 	// Detect GCP Pub/Sub: structurally check for message.data + subscription fields.
 	if isPubSubPayload(raw) {
-		return parsePubSubPayload(raw)
+		entries, err := parsePubSubPayload(raw)
+		return entries, "gcp_pubsub", err
 	}
 
 	// Detect Vector HTTP sink (Fly Log Shipper): check for fly metadata or Vector source_type.
 	if isVectorFlyPayload(raw) {
-		return parseVectorFlyPayload(raw)
+		entries, err := parseVectorFlyPayload(raw)
+		return entries, "flyio_vector", err
 	}
 
-	// Default: Heimdall native format.
-	return parseNativePayload(raw)
+	// Default: Heimdall native format (v1 or v2).
+	entries, err := parseNativePayload(raw)
+	if err != nil {
+		return nil, "", err
+	}
+	format := nativeFormatString(raw, entries)
+	return entries, format, nil
 }
 
-// --- Heimdall native format ---
+// nativeFormatString determines the format string for a parsed native payload.
+// It probes the raw input to detect v2 and checks entry count for batch suffix.
+func nativeFormatString(raw []byte, entries []webhookLogRequest) string {
+	trimmed := strings.TrimSpace(string(raw))
+	// For batches, probe the first element; for singles, probe directly.
+	var probeTarget []byte
+	if len(trimmed) > 0 && trimmed[0] == '[' {
+		var items []json.RawMessage
+		if json.Unmarshal(raw, &items) == nil && len(items) > 0 {
+			probeTarget = items[0]
+		}
+	} else {
+		probeTarget = raw
+	}
 
+	v2 := isNativeV2(probeTarget)
+	batch := len(entries) > 1
+
+	switch {
+	case v2 && batch:
+		return "native_v2_batch"
+	case v2:
+		return "native_v2"
+	case batch:
+		return "native_batch"
+	default:
+		return "native"
+	}
+}
+
+// --- Heimdall native format (v1 + v2) ---
+
+// webhookLogRequestV2 is the v2 native format with clearer field names.
+// See the plan for rationale: source replaces source_type, level replaces
+// severity, message is first-class, attrs replaces payload.
+type webhookLogRequestV2 struct {
+	Source  string          `json:"source"`
+	Level   string          `json:"level"`
+	Message string          `json:"message"`
+	Attrs   json.RawMessage `json:"attrs"`
+}
+
+// nativeVersionProbe peeks at a single JSON object to determine whether it
+// uses v1 field names (source_type) or v2 field names (source).
+type nativeVersionProbe struct {
+	Source     string `json:"source"`
+	SourceType string `json:"source_type"`
+}
+
+// parseNativePayload accepts both v1 and v2 native formats. It probes the
+// first entry to determine the version, then parses the entire payload
+// accordingly. Mixed v1+v2 batches are rejected.
 func parseNativePayload(raw []byte) ([]webhookLogRequest, error) {
 	trimmed := strings.TrimSpace(string(raw))
 
 	if len(trimmed) > 0 && trimmed[0] == '[' {
-		var entries []webhookLogRequest
-		if err := json.Unmarshal(raw, &entries); err != nil {
+		return parseNativeBatch(raw)
+	}
+
+	return parseNativeSingle(raw)
+}
+
+func parseNativeSingle(raw []byte) ([]webhookLogRequest, error) {
+	if isNativeV2(raw) {
+		entry, err := parseNativeV2Entry(raw)
+		if err != nil {
 			return nil, err
 		}
-		return entries, nil
+		return []webhookLogRequest{entry}, nil
 	}
 
 	var single webhookLogRequest
@@ -66,6 +169,92 @@ func parseNativePayload(raw []byte) ([]webhookLogRequest, error) {
 		return nil, err
 	}
 	return []webhookLogRequest{single}, nil
+}
+
+func parseNativeBatch(raw []byte) ([]webhookLogRequest, error) {
+	var items []json.RawMessage
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return nil, err
+	}
+	if len(items) == 0 {
+		return nil, nil
+	}
+
+	// Probe the first entry to determine the batch version.
+	batchIsV2 := isNativeV2(items[0])
+
+	var entries []webhookLogRequest
+	for i, item := range items {
+		itemIsV2 := isNativeV2(item)
+		if itemIsV2 != batchIsV2 {
+			return nil, fmt.Errorf("entry %d: mixed v1/v2 formats in batch — all entries must use the same format", i)
+		}
+
+		if itemIsV2 {
+			entry, err := parseNativeV2Entry(item)
+			if err != nil {
+				return nil, fmt.Errorf("entry %d: %w", i, err)
+			}
+			entries = append(entries, entry)
+		} else {
+			var entry webhookLogRequest
+			if err := json.Unmarshal(item, &entry); err != nil {
+				return nil, fmt.Errorf("entry %d: %w", i, err)
+			}
+			entries = append(entries, entry)
+		}
+	}
+
+	return entries, nil
+}
+
+// isNativeV2 returns true if the JSON object uses v2 field names.
+// If both "source" and "source_type" are present, v2 takes precedence.
+func isNativeV2(raw []byte) bool {
+	var probe nativeVersionProbe
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return false
+	}
+	return probe.Source != ""
+}
+
+// parseNativeV2Entry normalises a v2 entry into the internal v1 representation.
+func parseNativeV2Entry(raw []byte) (webhookLogRequest, error) {
+	var v2 webhookLogRequestV2
+	if err := json.Unmarshal(raw, &v2); err != nil {
+		return webhookLogRequest{}, err
+	}
+
+	if v2.Source == "" {
+		return webhookLogRequest{}, fmt.Errorf("source is required")
+	}
+
+	// Build the stored payload by merging message into attrs.
+	attrs := make(map[string]interface{})
+	if len(v2.Attrs) > 0 && string(v2.Attrs) != "null" {
+		if err := json.Unmarshal(v2.Attrs, &attrs); err != nil {
+			return webhookLogRequest{}, fmt.Errorf("attrs must be a JSON object: %w", err)
+		}
+	}
+	if v2.Message != "" {
+		attrs["message"] = v2.Message
+	}
+
+	payload, err := json.Marshal(attrs)
+	if err != nil {
+		return webhookLogRequest{}, err
+	}
+
+	severity := "info"
+	if v2.Level != "" {
+		severity = normalizeSeverity(v2.Level)
+	}
+
+	return webhookLogRequest{
+		SourceType: v2.Source,
+		Severity:   severity,
+		Payload:    payload,
+	}, nil
 }
 
 // --- Vercel NDJSON ---
@@ -90,24 +279,6 @@ type vercelLogEntry struct {
 		Scheme    string `json:"scheme"`
 		StatusCode int   `json:"statusCode"`
 	} `json:"proxy"`
-}
-
-func isNDJSON(s string) bool {
-	lines := strings.SplitN(s, "\n", 3)
-	if len(lines) < 2 {
-		return false
-	}
-	// At least 2 lines, each starting with '{'.
-	for _, line := range lines[:2] {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		if !strings.HasPrefix(line, "{") {
-			return false
-		}
-	}
-	return true
 }
 
 func parseVercelNDJSON(raw []byte) ([]webhookLogRequest, error) {
@@ -179,13 +350,18 @@ type firehoseRecord struct {
 
 func isFirehosePayload(raw []byte) bool {
 	var probe struct {
-		RequestID string          `json:"requestId"`
-		Records   json.RawMessage `json:"records"`
+		RequestID string `json:"requestId"`
+		Records   []struct {
+			Data string `json:"data"`
+		} `json:"records"`
 	}
 	if err := json.Unmarshal(raw, &probe); err != nil {
 		return false
 	}
-	return probe.RequestID != "" && len(probe.Records) > 0
+	// Require requestId, at least one record, and the first record must have a
+	// non-empty data field. This eliminates false positives from app logs that
+	// happen to contain "requestId" + "records" fields.
+	return probe.RequestID != "" && len(probe.Records) > 0 && probe.Records[0].Data != ""
 }
 
 func parseFirehosePayload(raw []byte) ([]webhookLogRequest, error) {
@@ -340,6 +516,16 @@ func isVectorFlyPayload(raw []byte) bool {
 	return isVectorFlyObject(raw)
 }
 
+// knownFlySourceTypes is the set of source_type values that indicate a Fly.io
+// origin. Uses exact matching instead of prefix to avoid false positives from
+// unrelated source types like "flywheel" or "flutter".
+var knownFlySourceTypes = map[string]bool{
+	"fly_app":          true,
+	"fly_io":           true,
+	"fly_log_shipper":  true,
+	"fly_app_logs":     true,
+}
+
 func isVectorFlyObject(raw []byte) bool {
 	var probe struct {
 		Fly        *json.RawMessage `json:"fly"`
@@ -349,8 +535,8 @@ func isVectorFlyObject(raw []byte) bool {
 		return false
 	}
 	// Match if there's a "fly" nested object (Fly Log Shipper) or
-	// source_type indicates Fly.io origin.
-	return probe.Fly != nil || strings.HasPrefix(probe.SourceType, "fly")
+	// source_type is a known Fly.io value.
+	return probe.Fly != nil || knownFlySourceTypes[probe.SourceType]
 }
 
 // vectorFlyEntry represents a log line from the Fly Log Shipper (Vector HTTP sink).

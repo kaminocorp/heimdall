@@ -235,3 +235,11 @@ type User struct {
 	Email     string    `json:"email"`
 	CreatedAt time.Time `json:"created_at"`
 }
+
+type WebhookIdempotency struct {
+	ConnectionID   uuid.UUID       `json:"connection_id"`
+	IdempotencyKey string          `json:"idempotency_key"`
+	ResponseStatus int32           `json:"response_status"`
+	ResponseBody   json.RawMessage `json:"response_body"`
+	CreatedAt      time.Time       `json:"created_at"`
+}

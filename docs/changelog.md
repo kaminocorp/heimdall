@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.45.0 — Webhook Ingestion Overhaul](#0450--webhook-ingestion-overhaul-2026-04-16)
 - [0.44.3 — Fly.io Drain Wizard: Guided Setup](#0443--flyio-drain-wizard-guided-setup-2026-04-16)
 - [0.44.2 — Connection Detail: URLs & Copy Buttons](#0442--connection-detail-urls--copy-buttons-2026-04-16)
 - [0.44.1 — Webhook Token Display Fix](#0441--webhook-token-display-fix-2026-04-16)
@@ -116,6 +117,169 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.45.0 — Webhook Ingestion Overhaul (2026-04-16)
+
+Five-phase overhaul of the webhook ingestion pipeline addressing eight gaps identified in a production assessment: partial-failure batch corruption, opaque error responses, detection false positives, internal ID leakage, no idempotency mechanism, no explicit format selection, payload field naming confusion, and Fly.io wizard accuracy. Every phase is independently shippable with zero cross-phase regressions.
+
+**Assessment:** `docs/executing/webhook-ingestion-assessment.md`
+**Plan:** `docs/executing/webhook-ingestion-improvements-plan.md`
+**Completion notes:** `docs/completions/webhook-ingestion-phase{1..5}-*.md`
+
+### Phase 1 — Correctness & Safety
+
+**Files:** `handlers/webhooks.go`, `handlers/webhook_parsers.go`, `handlers/webhook_parsers_test.go`, `handlers/webhooks_test.go`
+
+#### Transactional batch inserts
+
+The handler previously inserted entries one at a time. If entry N failed validation, entries 1–(N-1) were already committed — silent duplicates on retry.
+
+**Fix:** Two-pass approach. All entries validated upfront for `source_type` and `payload` before any database work. If any entry fails, a 400 is returned immediately with nothing written. All inserts then run inside a single `pgxpool.Pool.Begin()` / `Commit()` transaction with `Queries.WithTx(tx)`. Deferred `tx.Rollback()` ensures atomicity on insert failure.
+
+#### Minimal response (no internal IDs)
+
+The 201 response previously returned full `LogBuffer` database rows including `user_id`, `app_id`, `connection_id` — internal UUIDs meaningless to external callers.
+
+**After:**
+```json
+{ "accepted": 5, "format": "native_batch" }
+```
+
+`parseWebhookPayload` now returns a 3-tuple `([]webhookLogRequest, string, error)` with a format identifier from each parser: `native`, `native_batch`, `vercel_ndjson`, `aws_firehose`, `gcp_pubsub`, `flyio_vector`.
+
+### Phase 2 — Structured Errors & Format Transparency
+
+**File:** `handlers/webhooks.go`
+
+#### Structured error responses
+
+New `webhookError` and `webhookFieldError` types replace bare error strings. Machine-readable error codes with per-entry field errors:
+
+| Code | Status | When |
+|------|--------|------|
+| `unauthorized` | 401 | Missing/invalid bearer token |
+| `invalid_json` | 400 | Body not valid JSON |
+| `parse_failed` | 400 | Format detected but parsing failed |
+| `empty_payload` | 400 | Parsing succeeded, zero entries |
+| `validation_failed` | 400 | One or more entries missing required fields |
+
+`validation_failed` collects **all** errors (not just the first), so automated callers fixing a batch of 50 entries don't need 50 retry cycles:
+
+```json
+{
+  "error": "validation_failed",
+  "message": "one or more entries failed validation",
+  "format_detected": "native_batch",
+  "details": [
+    { "index": 2, "field": "source_type", "error": "required" },
+    { "index": 4, "field": "payload", "error": "required" }
+  ]
+}
+```
+
+#### Server-side structured logging
+
+Three `slog` log points: `Info` on successful ingestion (with `connection_id`, `format`, `entries`, `duration_ms`), `Warn` on parse error, `Warn` on validation failure.
+
+### Phase 3 — Explicit Format Routes & Detection Hardening
+
+**Files:** `handlers/webhooks.go`, `handlers/webhook_parsers.go`, `router.go`, `handlers/testhelpers_test.go`
+
+#### Format-specific ingestion routes
+
+```
+POST /api/webhooks/logs              ← auto-detect (unchanged)
+POST /api/webhooks/logs/{format}     ← format-specific (new)
+```
+
+Where `{format}` is one of: `flyio`, `vercel`, `firehose`, `pubsub`, `native`. Single parameterised route with a validated set — adding new formats requires one line in `validFormats` plus one `case` in `parseByFormat`. Invalid slugs return 404 listing valid formats.
+
+**Refactored helpers:** `readWebhookRequest` (auth + body reading) and `ingestEntries` (validate + transact + respond) are shared by both handlers with zero duplication.
+
+#### X-Heimdall-Format header override
+
+The auto-detect handler checks `X-Heimdall-Format` before calling `parseWebhookPayload`. If present, auto-detection is skipped entirely. Gives callers who prefer the base URL a way to get deterministic parsing without endpoint reconfiguration.
+
+#### Detection hardening
+
+| Parser | Before | After | Why |
+|--------|--------|-------|-----|
+| NDJSON | Structural check (`isNDJSON` — any multi-line `{...}` input) | `Content-Type: application/x-ndjson` only | False-positived on Fly.io batches and native arrays |
+| Firehose | `requestId` + non-empty `records` array | Also requires `records[0].data != ""` | App logs with `requestId`/`records` fields misrouted |
+| Fly.io | `strings.HasPrefix(source_type, "fly")` | Exact match set: `fly_app`, `fly_io`, `fly_log_shipper`, `fly_app_logs` | `"flywheel"`, `"flutter"` no longer false-positive |
+
+Removed dead `isNDJSON` function after it was decoupled from auto-detection.
+
+### Phase 4 — Native Format v2
+
+**Files:** `handlers/webhook_parsers.go`, `wizard/steps/StepWebhookSetup.vue`, `wizard/steps/StepFlyioDrainSetup.vue`
+
+#### Dual-format native parsing
+
+New v2 format with clearer field names, parsed alongside v1 with transparent normalisation:
+
+| v2 field | v1 equivalent | Required | Rationale |
+|----------|--------------|----------|-----------|
+| `source` | `source_type` | Yes | Shorter, more natural |
+| `level` | `severity` | No (defaults to `"info"`) | Standard across logging frameworks |
+| `message` | (buried in `payload`) | No | First-class — the thing developers search for |
+| `attrs` | `payload` | No | No collision with "payload" as HTTP body concept |
+
+Version probing: `source` present → v2; `source_type` present without `source` → v1. If both present, v2 wins. Mixed v1+v2 batches rejected with clear error. Format strings: `native_v2`, `native_v2_batch`.
+
+#### Deprecation signals for v1
+
+When the request parses as v1 native format, the response includes RFC 8594 headers (`Sunset: 2026-10-01`, `Deprecation: true`, `Link` to successor docs) and a `"deprecated": true` field in the body. `slog.Warn` logged to track migration progress.
+
+#### UI example payload updates
+
+`StepWebhookSetup.vue` example updated from near-v2 to exact v2 spec. `StepFlyioDrainSetup.vue` Step 4 rewritten: VRL transform now outputs v2 format, clarified that enriched `fly` metadata auto-detection only applies to HTTP log drains (not NATS-based Log Shipper). Reference section split into **Native v2 (recommended)** and **Auto-detected (HTTP log drain only)** with muted secondary styling.
+
+### Phase 5 — Idempotency
+
+**Files:** `migrations/032_webhook_idempotency.up.sql`, `migrations/032_webhook_idempotency.down.sql`, `db/queries/webhook_idempotency.sql`, `db/webhook_idempotency.sql.go`, `db/models.go`, `handlers/webhooks.go`
+
+#### Idempotency cache table
+
+```sql
+CREATE TABLE webhook_idempotency (
+    connection_id   UUID  NOT NULL REFERENCES connections(id) ON DELETE CASCADE,
+    idempotency_key TEXT  NOT NULL,
+    response_status INT   NOT NULL,
+    response_body   JSONB NOT NULL,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (connection_id, idempotency_key)
+);
+```
+
+Composite PK — two different connections can reuse the same key. `ON DELETE CASCADE` from `connections` for automatic cleanup. Expiry index on `created_at` for efficient pruning.
+
+#### Handler logic
+
+Opt-in via `X-Idempotency-Key` header. Check happens in `ingestEntries` so it works for both auto-detect and format-specific routes:
+
+1. Read header → query `GetIdempotencyResult` (24-hour TTL in `WHERE`)
+2. **Cache hit:** return stored status + body, set `X-Idempotency-Replay: true` header
+3. **Cache miss:** normal flow (validate → transaction → insert → commit)
+4. After commit, cache the 201 response via `InsertIdempotencyResult` (`ON CONFLICT DO NOTHING`)
+
+Only success responses cached — errors return normally without caching so callers can fix and retry. Cache insert is fire-and-forget (error discarded) — log entries are already committed, worst case is a future retry inserts duplicates (same as without idempotency).
+
+`PruneExpiredIdempotencyKeys` query generated for periodic cleanup; not yet wired into a background job. The 24-hour TTL in `GetIdempotencyResult` means stale rows are never returned even unpruned.
+
+### Test coverage
+
+44 tests across all phases, all passing. `go vet` clean, `vue-tsc` clean.
+
+| Phase | New/modified tests | Notable coverage |
+|-------|-------------------|-----------------|
+| 1 | 17 parser tests updated for 3-return-value signature, integration test updated | Batch semantics, minimal response shape |
+| 2 | 7 new | Error serialization, format echo, `omitempty` behaviour |
+| 3 | 7 new | Explicit format dispatch, hardened detection negatives (`flywheel`, no-data Firehose) |
+| 4 | 9 new | v2 single/batch, no-attrs, no-level defaults, mixed batch rejection, both-fields precedence |
+| 5 | 2 new | Response caching round-trips, deprecated field persistence |
 
 ---
 

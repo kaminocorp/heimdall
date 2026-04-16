@@ -63,7 +63,8 @@ func TestIngestWebhookLogs(t *testing.T) {
 
 	var result map[string]interface{}
 	require.NoError(t, json.NewDecoder(recorder.Body).Decode(&result))
-	assert.NotEmpty(t, result["id"])
+	assert.Equal(t, float64(1), result["accepted"])
+	assert.Equal(t, "native", result["format"])
 }
 
 func TestIngestWebhookLogs_InvalidToken(t *testing.T) {

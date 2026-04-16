@@ -24,6 +24,7 @@ func NewRouter(cfg *config.Config, pool *pgxpool.Pool, ag *agent.Agent, jwks *mi
 		// Public ingestion routes — no JWT required, larger body limits.
 		// These are outside the global MaxBodySize so they can accept payloads up to their own limits.
 		r.Post("/webhooks/logs", s.IngestWebhookLogs)
+		r.Post("/webhooks/logs/{format}", s.IngestWebhookLogsWithFormat)
 		r.Post("/v1/logs", s.IngestOTLPLogs)
 		// GitHub callback is hit by browser redirect from GitHub — auth via state JWT, not session.
 		r.Get("/github/callback", s.GitHubCallback)

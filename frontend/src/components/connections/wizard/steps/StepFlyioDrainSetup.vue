@@ -91,32 +91,36 @@ onMounted(() => {
       </div>
     </div>
 
-    <!-- Step 4: Configure source_type -->
+    <!-- Step 4: Configure Vector -->
     <div class="border border-border rounded px-4 py-3 bg-bg-elevated/40 space-y-3">
       <div class="flex items-center gap-2">
         <span class="flex items-center justify-center w-5 h-5 rounded-full bg-accent/15 text-accent font-mono text-[10px] font-bold shrink-0">4</span>
         <p class="font-mono text-xs font-medium uppercase tracking-widest text-text-muted">Configure Vector</p>
       </div>
       <p class="font-mono text-[11px] text-text-tertiary">
-        The Log Shipper uses <span class="text-text-secondary">Vector</span> internally to forward logs.
-        Heimdall needs each log event to include a
-        <code class="text-text-secondary">source_type</code> field starting with
-        <code class="text-text-secondary">"fly"</code> so it can auto-detect Fly.io logs.
-      </p>
-      <p class="font-mono text-[11px] text-text-tertiary">
-        <span class="text-text-primary font-medium">If you're using the stock Log Shipper image</span>,
-        the <code class="text-text-secondary">fly</code> metadata object is included by default — no extra config needed.
-      </p>
-      <p class="font-mono text-[11px] text-text-tertiary">
-        <span class="text-text-primary font-medium">If you have a custom Vector config</span>,
-        add this transform before your HTTP sink to tag events:
+        The Log Shipper uses <span class="text-text-secondary">Vector</span> internally.
+        Its NATS source emits raw log lines that need reshaping for Heimdall.
+        Add this transform to your Vector config (or the stock image's config) to convert events into Heimdall's native format:
       </p>
       <div class="bg-bg-elevated/60 rounded px-3 py-2 border border-border">
-        <pre class="font-mono text-xs text-text-secondary leading-relaxed overflow-x-auto">[transforms.tag_for_heimdall]
+        <pre class="font-mono text-xs text-text-secondary leading-relaxed overflow-x-auto">[transforms.reshape_for_heimdall]
 type = "remap"
-inputs = ["your_source"]
-source = '.source_type = "fly_app"'</pre>
+inputs = ["fly_log_source"]
+source = '''
+  .source = "fly_app"
+  .level = downcase(.log.level) ?? "info"
+  .message = .message ?? ""
+  .attrs = {
+    "host": .host,
+    "timestamp": .timestamp
+  }
+'''</pre>
       </div>
+      <p class="font-mono text-[11px] text-text-muted">
+        This outputs Heimdall's v2 native format. If your Fly.io logs include enriched
+        <code class="text-text-secondary">fly</code> metadata (HTTP log drain only, not NATS),
+        Heimdall auto-detects them without a transform.
+      </p>
     </div>
 
     <!-- Step 5: Deploy -->
@@ -131,28 +135,39 @@ source = '.source_type = "fly_app"'</pre>
       <CopyableField value="fly deploy" />
     </div>
 
-    <!-- Reference: What Heimdall extracts -->
+    <!-- Reference: Payload formats -->
     <details class="border border-border rounded bg-bg-elevated/40">
       <summary class="px-4 py-3 font-mono text-xs font-medium uppercase tracking-widest text-text-muted cursor-pointer hover:text-text-secondary transition-colors select-none">
-        Reference — Expected Payload Format
+        Reference — Payload Formats
       </summary>
-      <div class="px-4 pb-3 space-y-2">
-        <p class="font-mono text-[11px] text-text-tertiary">
-          Heimdall auto-extracts these fields from each log event:
-        </p>
-        <div class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
-          <code class="font-mono text-[11px] text-text-secondary">fly.app.name</code>
-          <span class="font-mono text-[11px] text-text-tertiary">App name (used for source labelling)</span>
-          <code class="font-mono text-[11px] text-text-secondary">fly.machine.id</code>
-          <span class="font-mono text-[11px] text-text-tertiary">Machine ID</span>
-          <code class="font-mono text-[11px] text-text-secondary">fly.region</code>
-          <span class="font-mono text-[11px] text-text-tertiary">Deployment region</span>
-          <code class="font-mono text-[11px] text-text-secondary">log.level</code>
-          <span class="font-mono text-[11px] text-text-tertiary">Severity (info, warning, error, etc.)</span>
-          <code class="font-mono text-[11px] text-text-secondary">message</code>
-          <span class="font-mono text-[11px] text-text-tertiary">Log message body</span>
-          <code class="font-mono text-[11px] text-text-secondary">timestamp</code>
-          <span class="font-mono text-[11px] text-text-tertiary">Event timestamp</span>
+      <div class="px-4 pb-3 space-y-3">
+        <div class="space-y-1">
+          <p class="font-mono text-[11px] text-text-secondary font-medium">Native v2 (recommended, via Vector transform)</p>
+          <div class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+            <code class="font-mono text-[11px] text-text-secondary">source</code>
+            <span class="font-mono text-[11px] text-text-tertiary">Log source identifier (e.g. "fly_app")</span>
+            <code class="font-mono text-[11px] text-text-secondary">level</code>
+            <span class="font-mono text-[11px] text-text-tertiary">Severity (info, warning, error, etc.)</span>
+            <code class="font-mono text-[11px] text-text-secondary">message</code>
+            <span class="font-mono text-[11px] text-text-tertiary">Log message body</span>
+            <code class="font-mono text-[11px] text-text-secondary">attrs</code>
+            <span class="font-mono text-[11px] text-text-tertiary">Additional attributes (host, timestamp, etc.)</span>
+          </div>
+        </div>
+        <div class="space-y-1">
+          <p class="font-mono text-[11px] text-text-muted font-medium">Auto-detected format (HTTP log drain only)</p>
+          <div class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+            <code class="font-mono text-[11px] text-text-muted">fly.app.name</code>
+            <span class="font-mono text-[11px] text-text-muted">App name (used for source labelling)</span>
+            <code class="font-mono text-[11px] text-text-muted">fly.machine.id</code>
+            <span class="font-mono text-[11px] text-text-muted">Machine ID</span>
+            <code class="font-mono text-[11px] text-text-muted">fly.region</code>
+            <span class="font-mono text-[11px] text-text-muted">Deployment region</span>
+            <code class="font-mono text-[11px] text-text-muted">log.level</code>
+            <span class="font-mono text-[11px] text-text-muted">Severity</span>
+            <code class="font-mono text-[11px] text-text-muted">message</code>
+            <span class="font-mono text-[11px] text-text-muted">Log message body</span>
+          </div>
         </div>
       </div>
     </details>
