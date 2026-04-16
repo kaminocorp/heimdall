@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.44.3 — Fly.io Drain Wizard: Guided Setup](#0443--flyio-drain-wizard-guided-setup-2026-04-16)
 - [0.44.2 — Connection Detail: URLs & Copy Buttons](#0442--connection-detail-urls--copy-buttons-2026-04-16)
 - [0.44.1 — Webhook Token Display Fix](#0441--webhook-token-display-fix-2026-04-16)
 - [0.44.0 — Fly.io Log Integration](#0440--flyio-log-integration-2026-04-16)
@@ -115,6 +116,38 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.44.3 — Fly.io Drain Wizard: Guided Setup (2026-04-16)
+
+Rewrote the Fly.io Log Drain wizard step into a guided, step-by-step setup flow with pre-filled values — no more placeholder URLs or guesswork about payload format. Triggered by a real-world integration issue where a client's Fly Log Shipper was sending logs without the `source_type` field Heimdall requires, resulting in 400 errors with no clear guidance on what to fix.
+
+**Files:** `wizard/ConnectionWizard.vue`, `wizard/steps/StepFlyioDrainSetup.vue`, `wizard/flows.ts`
+
+### Early Connection Creation
+
+The wizard now creates the webhook connection *before* entering the drain setup step (same pattern already used for the test step). This means the setup step has access to the real webhook URL and bearer token — no more `<your-heimdall-webhook-url>` placeholders.
+
+**Change:** Added `flyio_drain` to the pre-creation check in `ConnectionWizard.vue`'s `goNext()`. Cleanup on wizard abandonment already handled by `handleClose()`.
+
+### Five Numbered Setup Steps
+
+The drain setup step is now a clear five-step walkthrough:
+
+| Step | Action | What it shows |
+|------|--------|---------------|
+| 1. Launch the Log Shipper | `fly launch` command | Image name, guidance on region and deploy prompt |
+| 2. Set Fly Access Token | `fly secrets set ACCESS_TOKEN=...` | Explains NATS log stream access |
+| 3. Point it at Heimdall | `fly secrets set HTTP_URL=... HTTP_TOKEN=...` | **Pre-filled** with the real webhook URL and token |
+| 4. Configure Vector | Conditional transform snippet | Stock image vs. custom config guidance |
+| 5. Deploy | `fly deploy` | Sets expectation for when logs appear |
+
+### Payload Format Documentation
+
+Step 4 now explicitly documents Heimdall's Fly.io auto-detection contract: each log event must include either a `source_type` field starting with `"fly"` or a nested `fly` metadata object. For custom Vector configs, a ready-to-paste `remap` transform is provided.
+
+A collapsible **Reference — Expected Payload Format** section lists every field Heimdall extracts: `fly.app.name`, `fly.machine.id`, `fly.region`, `log.level`, `message`, `timestamp`.
 
 ---
 

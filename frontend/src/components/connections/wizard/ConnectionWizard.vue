@@ -133,9 +133,9 @@ function goBack() {
 async function goNext() {
   if (!selectedFlow.value || creating.value) return
 
-  // If we're about to enter the test step, create the connection first.
+  // Create the connection before steps that need it (test, Fly.io drain setup).
   const nextStep = effectiveSteps.value[currentStepIndex.value + 1]
-  if (nextStep?.id === 'test' && !createdConnectionId.value) {
+  if ((nextStep?.id === 'test' || nextStep?.id === 'flyio_drain') && !createdConnectionId.value) {
     await createConnection()
     if (error.value) return
   }

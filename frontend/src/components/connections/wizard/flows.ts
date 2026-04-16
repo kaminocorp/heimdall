@@ -332,7 +332,7 @@ export function getFlowById(id: string): PlatformFlow | undefined {
 
 /**
  * Returns the visible steps for a Fly.io flow based on mode selection.
- * - Drain mode:    Name → Mode → Drain Setup (webhook info)
+ * - Drain mode:    Name → Mode → Drain Setup (connection created before this step)
  * - Polling mode:  Name → Mode → Auth (credentials) → Test
  */
 export function getFlyioSteps(flow: PlatformFlow, mode: 'drain' | 'polling'): FlowStep[] {
