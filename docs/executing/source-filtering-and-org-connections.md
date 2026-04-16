@@ -216,24 +216,30 @@ The `GET` endpoint merges `connection_sources` (discovery) with `app_source_filt
 ```
 ┌─ Sources ─────────────────────────────────────────────┐
 │                                                        │
-│  ● trajan              last seen 2 min ago    [ON ]   │
-│  ● my-api-staging      last seen 1 hr ago     [OFF]   │
-│  ○ payment-service     (manually added)        [ON ]   │
+│  🟢 trajan              2 min ago              [ON ]   │
+│  🟡 my-api-staging      3 hours ago            [OFF]   │
+│  🔴 old-service         3 days ago — stale     [ON ]   │
+│  ⚪ payment-service     (no traffic yet)        [ON ]   │
 │                                                        │
 │  ┌──────────────────────┐ [Add]                       │
 │  │ Add app name...      │                             │
 │  └──────────────────────┘                             │
 │                                                        │
-│  ● = auto-discovered   ○ = manually added             │
-│  Sources are disabled by default until you enable them │
+│  ⚠ 1 enabled source is stale (no traffic in 24h+).   │
+│    This may mean the app was removed or stopped.      │
+│                                                        │
+│  Showing 142 filtered entries/hr from disabled sources │
 └────────────────────────────────────────────────────────┘
 ```
 
-- Auto-discovered sources show `last_seen_at` timestamp
-- Manually added sources show "(manually added)" label
-- Toggle switches for enable/disable
+- **Staleness dots:** green (active, <1h), yellow (quiet, 1–24h), red (stale, >24h), grey (never seen)
+- **Warning banner** when any enabled source goes stale
+- **Filtered counter** shows volume of dropped traffic from disabled sources
+- Toggle switches for enable/disable (disabled by default)
 - Text input + "Add" button for manual source names
+- Auto-refreshes on open; polls every 10s while open for new discoveries
 - Accessible from connection detail modal → "Manage Sources" button
+- Connections page shows "N new sources detected" badge when unseen sources arrive
 
 **Connection scoping in wizard** — New step when creating multi-source connections:
 
@@ -486,12 +492,83 @@ Enable the "Manage Sources" button in the connection detail modal for all connec
 
 ---
 
-## Open Questions
+## Design Decisions
 
-1. **Should disabled entries be counted?** When a source is filtered out, should we still increment a "filtered" counter visible in the UI? This helps users know the drain is working even if sources aren't enabled yet.
+1. **Filtered entry counting — yes.** When a source is filtered out, increment a counter visible in the UI. This tells users the drain is working even when sources aren't enabled, and surfaces the volume of data being dropped so they can make informed decisions.
 
-2. **Batch size limits for org fan-out.** If an org has 20 apps and 15 have "trajan" enabled, one webhook batch produces 15x the inserts. Should we cap this, or is it fine at realistic scale?
+2. **Org fan-out writes are acceptable at scale.** When an org-scoped connection receives a batch, entries are duplicated into `log_buffer` once per app that has that source enabled. E.g. 30 log entries from `"trajan"` with 15 apps watching = 450 rows. This is a deliberate trade-off: fan-out on write keeps reads simple and fast (no join against filters on every activity feed query). At realistic Heimdall scale (single-digit to low-double-digit apps per org), this is well within PostgreSQL's comfort zone. No cap needed — monitor and revisit if usage patterns change.
 
-3. **Retention for `connection_sources`.** Should auto-discovered sources that haven't been seen in N days be pruned? Or kept indefinitely as a historical record?
+3. **Source retention — keep indefinitely, with staleness handling.** Auto-discovered sources are never pruned. Instead, the system tracks liveness and surfaces staleness in the UI. See "Source Lifecycle & Staleness" below.
 
-4. **Default scope for new connections.** Should the wizard default to "This app only" or "Entire organisation"? Recommendation: default to "This app only" — it matches current behaviour and is the safer default.
+4. **Default scope — "This app only."** Matches current behaviour and is the safer, more intuitive default. The choice is always explicit in the wizard — neither option is hidden or deprioritised.
+
+---
+
+## Source Lifecycle & Staleness
+
+Sources are living things — Fly apps get created, deleted, renamed, or go silent for extended periods. The system needs to surface this clearly so users aren't left wondering why logs stopped flowing.
+
+### Staleness Detection
+
+The `connection_sources.last_seen_at` field is updated on every ingestion batch. The UI uses this to compute staleness tiers:
+
+| Tier | Condition | UI Treatment |
+|------|-----------|--------------|
+| **Active** | Last seen < 1 hour ago | Green dot, relative timestamp ("2 min ago") |
+| **Quiet** | Last seen 1–24 hours ago | Yellow/amber dot, "last seen 3 hours ago" |
+| **Stale** | Last seen > 24 hours ago | Red dot, "last seen 3 days ago" — prominent warning |
+| **Never seen** | Manually added, no traffic yet | Grey dot, "(no traffic yet)" |
+
+### UI Indicators
+
+The source selector shows staleness inline:
+
+```
+┌─ Sources ─────────────────────────────────────────────┐
+│                                                        │
+│  🟢 trajan              2 min ago              [ON ]   │
+│  🟡 my-api-staging      3 hours ago            [OFF]   │
+│  🔴 old-service         3 days ago — stale     [ON ]   │
+│  ⚪ payment-service     (no traffic yet)        [ON ]   │
+│                                                        │
+│  ┌──────────────────────┐ [Add]                       │
+│  │ Add app name...      │                             │
+│  └──────────────────────┘                             │
+│                                                        │
+│  ⚠ 1 enabled source is stale (no traffic in 24h+).   │
+│    This may mean the app was removed or stopped.      │
+│                                                        │
+│  Showing 142 filtered entries/hr from disabled sources │
+└────────────────────────────────────────────────────────┘
+```
+
+Key elements:
+- **Staleness dots** next to each source — immediate visual signal
+- **Warning banner** when any enabled source goes stale — draws attention to potential issues (deleted Fly app, broken drain, etc.)
+- **Filtered counter** at the bottom — shows volume of traffic being dropped from disabled sources, confirming the drain is working
+
+### Refresh Behaviour
+
+- **Auto-refresh on open:** When the source selector opens, it fetches the latest `connection_sources` + `app_source_filters` state. New sources that arrived since the user last looked appear immediately.
+- **Polling while open:** While the selector is open, poll every 10 seconds for new sources. Useful during initial drain setup when the user is waiting for logs to appear.
+- **New source notification:** On the connections page, connections with newly discovered (unseen-by-user) sources show a badge: "2 new sources detected." Clicking opens the selector.
+
+### What Happens When a Fly App Is Deleted
+
+1. The Fly Log Shipper stops sending logs for that app → `last_seen_at` stops updating
+2. After 1 hour: source shows as "quiet" in the selector
+3. After 24 hours: source shows as "stale" with a warning banner
+4. The user sees the warning and can either:
+   - **Disable** the source (acknowledged, stops the warning)
+   - **Leave it** (in case the app is temporarily down and will come back)
+   - **Remove it** entirely from the filter list
+5. No automatic action is taken — the user decides
+
+### What Happens When a New Fly App Is Created
+
+1. User deploys a new app on Fly.io
+2. The existing Log Shipper automatically picks it up (it's org-wide)
+3. Logs arrive at Heimdall → new source auto-discovered in `connection_sources`
+4. Source appears in the selector as disabled (drop-by-default)
+5. Connections page shows "1 new source detected" badge
+6. User opens selector, sees the new source, enables it for the relevant Heimdall app(s)
