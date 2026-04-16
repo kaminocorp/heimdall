@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.45.1 — RLS on Idempotency Table](#0451--rls-on-idempotency-table-2026-04-16)
 - [0.45.0 — Webhook Ingestion Overhaul](#0450--webhook-ingestion-overhaul-2026-04-16)
 - [0.44.3 — Fly.io Drain Wizard: Guided Setup](#0443--flyio-drain-wizard-guided-setup-2026-04-16)
 - [0.44.2 — Connection Detail: URLs & Copy Buttons](#0442--connection-detail-urls--copy-buttons-2026-04-16)
@@ -117,6 +118,17 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.45.1 — RLS on Idempotency Table (2026-04-16)
+
+Enabled Row Level Security on the `webhook_idempotency` table created in 0.45.0. Migration 032 added the table but missed RLS — the only table in the schema without it.
+
+**Migration:** `033_rls_webhook_idempotency.up.sql`
+**Completion notes:** `docs/completions/rls-webhook-idempotency.md`
+
+Follows the system-table pattern from migration 030: RLS enabled with no policies. The table is only accessed by the webhook handler via the owner-role pool (`s.Queries`), which bypasses RLS. Non-owner roles (`anon`, `authenticated`) now see zero rows, closing the PostgREST exposure gap.
 
 ---
 

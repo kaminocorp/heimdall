@@ -1,0 +1,1 @@
+ALTER TABLE webhook_idempotency DISABLE ROW LEVEL SECURITY;
