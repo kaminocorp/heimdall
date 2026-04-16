@@ -347,27 +347,30 @@ func (s *Server) UpdateConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Restart poller/listener if config changed.
+	// Stop existing poller/listener unconditionally, then only restart
+	// if the connection is not paused.
 	s.Poller.Stop(connID)
 	s.Listener.Stop(connID)
 
-	if err := connectors.StartPoller(s.Poller, req.Type, config, conn.ID, userID, conn.AppID); err != nil {
-		slog.Error("poller init failed", "type", req.Type, "connection_id", conn.ID, "err", err)
-	}
+	if status != "paused" {
+		if err := connectors.StartPoller(s.Poller, req.Type, config, conn.ID, userID, conn.AppID); err != nil {
+			slog.Error("poller init failed", "type", req.Type, "connection_id", conn.ID, "err", err)
+		}
 
-	if req.Type == "syslog" {
-		sl, err := logs.NewSyslog(config, conn.ID, userID, conn.AppID, s.Queries)
-		if err != nil {
-			slog.Error("syslog listener init failed", "connection_id", conn.ID, "err", err)
-			conn.Status = "error"
-			if err := queries.UpdateConnectionStatus(r.Context(), db.UpdateConnectionStatusParams{ID: conn.ID, Status: "error"}); err != nil {
-				slog.Error("failed to persist listener error status", "connection_id", conn.ID, "err", err)
-			}
-		} else if err := s.Listener.Start(r.Context(), sl, conn.ID); err != nil {
-			slog.Error("syslog listener start failed", "connection_id", conn.ID, "err", err)
-			conn.Status = "error"
-			if err := queries.UpdateConnectionStatus(r.Context(), db.UpdateConnectionStatusParams{ID: conn.ID, Status: "error"}); err != nil {
-				slog.Error("failed to persist listener error status", "connection_id", conn.ID, "err", err)
+		if req.Type == "syslog" {
+			sl, err := logs.NewSyslog(config, conn.ID, userID, conn.AppID, s.Queries)
+			if err != nil {
+				slog.Error("syslog listener init failed", "connection_id", conn.ID, "err", err)
+				conn.Status = "error"
+				if err := queries.UpdateConnectionStatus(r.Context(), db.UpdateConnectionStatusParams{ID: conn.ID, Status: "error"}); err != nil {
+					slog.Error("failed to persist listener error status", "connection_id", conn.ID, "err", err)
+				}
+			} else if err := s.Listener.Start(r.Context(), sl, conn.ID); err != nil {
+				slog.Error("syslog listener start failed", "connection_id", conn.ID, "err", err)
+				conn.Status = "error"
+				if err := queries.UpdateConnectionStatus(r.Context(), db.UpdateConnectionStatusParams{ID: conn.ID, Status: "error"}); err != nil {
+					slog.Error("failed to persist listener error status", "connection_id", conn.ID, "err", err)
+				}
 			}
 		}
 	}

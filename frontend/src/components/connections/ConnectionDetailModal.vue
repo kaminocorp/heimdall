@@ -13,6 +13,8 @@ const emit = defineEmits<{
   edit: [connection: Connection]
   test: [id: string]
   delete: [id: string]
+  pause: [id: string]
+  resume: [id: string]
   'manage-repos': [id: string]
 }>()
 
@@ -186,7 +188,7 @@ onBeforeUnmount(() => {
             <ConnectorLogo
               :type="connection.type"
               :size="28"
-              :class="connection.status === 'active' ? 'text-accent' : 'text-text-muted'"
+              :class="connection.status === 'active' ? 'text-accent' : connection.status === 'paused' ? 'text-status-warn' : 'text-text-muted'"
             />
           </div>
           <div>
@@ -273,6 +275,16 @@ onBeforeUnmount(() => {
             class="px-3 py-1.5 font-mono text-xs uppercase tracking-wider text-text-secondary border border-border rounded hover:border-border-hover hover:text-text-primary transition-colors cursor-pointer"
           >
             Edit
+          </button>
+          <button
+            v-if="connection.status === 'active' || connection.status === 'paused'"
+            @click="connection.status === 'paused' ? emit('resume', connection.id) : emit('pause', connection.id); emit('close')"
+            class="px-3 py-1.5 font-mono text-xs uppercase tracking-wider border rounded transition-colors cursor-pointer"
+            :class="connection.status === 'paused'
+              ? 'text-status-ok border-status-ok/30 hover:bg-status-ok/10'
+              : 'text-status-warn border-status-warn/30 hover:bg-status-warn/10'"
+          >
+            {{ connection.status === 'paused' ? 'Resume' : 'Pause' }}
           </button>
         </div>
         <button

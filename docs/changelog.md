@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.45.2 — Connection Pause / Resume](#0452--connection-pause--resume-2026-04-16)
 - [0.45.1 — RLS on Idempotency Table](#0451--rls-on-idempotency-table-2026-04-16)
 - [0.45.0 — Webhook Ingestion Overhaul](#0450--webhook-ingestion-overhaul-2026-04-16)
 - [0.44.3 — Fly.io Drain Wizard: Guided Setup](#0443--flyio-drain-wizard-guided-setup-2026-04-16)
@@ -118,6 +119,67 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.45.2 — Connection Pause / Resume (2026-04-16)
+
+Connections can now be paused and resumed without deleting them. Useful for maintenance windows, cost control, debugging noisy sources, or keeping seasonal connections configured but dormant. No migration required — the existing `TEXT` status column accepts `paused` as a fourth value alongside `active`, `inactive`, and `error`, and the existing `WHERE status = 'active'` filters across ingestion, pollers, and listeners automatically exclude paused connections.
+
+**Plan & assessment:** `docs/completions/connection-pause.md`
+**Completion notes:** `docs/completions/connection-pause-phase{1..3}.md`
+
+### Phase 1 — Backend: Accept and Enforce `paused` Status
+
+**Files:** `handlers/connections_validate.go`, `handlers/connections.go`, `agent/tools_db.go`
+
+#### Validation
+
+`isValidConnectionStatus()` now accepts `"paused"` as a fourth valid value. This is the single gate that determines which status values the API accepts — without it, `PUT /api/connections/{id}` with `"status": "paused"` would return 400.
+
+#### Update handler: immediate poller/listener shutdown
+
+The `UpdateConnection` handler always stops the existing poller and listener for a connection before restarting them. The restart is now wrapped in a `if status != "paused"` guard. Without this, setting a connection to `paused` via the API would still restart its poller/listener in the same request — the pause would only take effect on the next server restart. On resume (`status = "active"`), the guard evaluates to true and the poller/listener starts up automatically.
+
+#### Agent tool gate: block `query_database` on paused connections
+
+After fetching the connection and before creating the database connector, `toolQueryDatabase` checks `conn.Status == "paused"` and returns a descriptive error. The error surfaces as an `isError: true` tool result to Claude (per the existing agent pattern), so the agent can inform the user rather than silently failing.
+
+### Phase 2 — Frontend: Visual Treatment & Pause/Resume Button
+
+**Files:** `types/connection.ts`, `ConnectionBubble.vue`, `ConnectionDetailModal.vue`, `stores/connections.ts`, `ConnectionsPage.vue`
+
+#### TypeScript types
+
+Added `'paused'` to `Connection.status` and `UpdateConnectionPayload.status` unions for compile-time exhaustiveness checking.
+
+#### ConnectionBubble visual treatment
+
+Four visual cues for paused connections: amber status dot with matching glow (distinct from green/red/grey), amber logo tint, dashed amber border communicating a "suspended" state, and 60% opacity (85% on hover) for dormancy. No pulse animation — paused is deliberately still.
+
+#### ConnectionDetailModal: pause/resume button
+
+A toggle button between Edit and Delete in the action bar. Only renders for `active` or `paused` connections — pausing an `inactive` or `error` connection has no practical effect. Active connections show an amber "Pause" button; paused connections show a green "Resume" button.
+
+#### Store actions
+
+`pauseConnection(id)` and `resumeConnection(id)` construct the full `UpdateConnectionPayload` from the existing connection, flipping only `status`. The existing `testConnection` action was updated to skip the local status update when a connection is paused — a successful ping no longer auto-resumes a paused connection.
+
+### Phase 3 — Polish & Edge Cases
+
+**Files:** `handlers/connections_test_handler.go`, `agent/loop.go`
+
+#### Backend test endpoint: preserve paused status on ping
+
+The `TestConnection` handler previously set the persisted status to `active` on success unconditionally. Now wrapped in `if conn.Status != "paused"` — paused connections still run the reachability test, but the persisted status is not touched. Defence-in-depth: the frontend guard (Phase 2) is a UX optimisation, this is the security boundary.
+
+#### Agent system prompt: connection context injection
+
+When the agent loop has an app context, it queries `ListConnectionsByApp` and appends a "Connected data sources" section to the system prompt listing each connection's name, type, direction, status, and ID. The closing instruction tells Claude that paused connections cannot be queried and to inform users they must resume first. This prevents blind tool calls and enables proactive user guidance.
+
+### Post-assessment fix: CSS animation fill override
+
+The `bubble-enter` animation filled forward at `opacity: 1`, silently overriding `.bubble-paused { opacity: 0.6 }`. Replaced with a dedicated `bubble-enter-paused` keyframe targeting `opacity: 0.6`, and added the paused state to the `prefers-reduced-motion` media query.
 
 ---
 

@@ -53,7 +53,7 @@ export const useConnectionsStore = defineStore('connections', () => {
     try {
       const result = await connectionsApi.testConnection(id)
       const idx = connections.value.findIndex((c) => c.id === id)
-      if (idx !== -1) {
+      if (idx !== -1 && connections.value[idx].status !== 'paused') {
         connections.value[idx].status = result.success ? 'active' : 'error'
       }
       return result
@@ -62,10 +62,34 @@ export const useConnectionsStore = defineStore('connections', () => {
     }
   }
 
+  async function pauseConnection(id: string) {
+    const conn = connections.value.find((c) => c.id === id)
+    if (!conn) return
+    return updateConnection(id, {
+      name: conn.name,
+      type: conn.type,
+      direction: conn.direction,
+      config: conn.config,
+      status: 'paused',
+    })
+  }
+
+  async function resumeConnection(id: string) {
+    const conn = connections.value.find((c) => c.id === id)
+    if (!conn) return
+    return updateConnection(id, {
+      name: conn.name,
+      type: conn.type,
+      direction: conn.direction,
+      config: conn.config,
+      status: 'active',
+    })
+  }
+
   async function deleteConnection(id: string) {
     await connectionsApi.deleteConnection(id)
     connections.value = connections.value.filter((c) => c.id !== id)
   }
 
-  return { connections, loading, error, testingId, fetchConnections, fetchConnectionsByApp, createConnection, updateConnection, testConnection, deleteConnection }
+  return { connections, loading, error, testingId, fetchConnections, fetchConnectionsByApp, createConnection, updateConnection, pauseConnection, resumeConnection, testConnection, deleteConnection }
 })

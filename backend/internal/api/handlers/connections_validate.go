@@ -26,7 +26,9 @@ var validConnectionTypes = map[string]bool{
 
 func isValidConnectionType(t string) bool  { return validConnectionTypes[t] }
 func isValidDirection(d string) bool        { return d == "one_way" || d == "two_way" }
-func isValidConnectionStatus(s string) bool { return s == "active" || s == "inactive" || s == "error" }
+func isValidConnectionStatus(s string) bool {
+	return s == "active" || s == "inactive" || s == "error" || s == "paused"
+}
 
 // validateConnectorConfig validates a connection config by instantiating the
 // appropriate connector (catching bad fields before the DB insert) and injects

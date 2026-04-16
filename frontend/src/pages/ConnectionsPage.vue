@@ -145,6 +145,24 @@ function closeTestModal() {
   fetchAppConnections()
 }
 
+async function handlePause(id: string) {
+  actionError.value = null
+  try {
+    await store.pauseConnection(id)
+  } catch (e: unknown) {
+    actionError.value = extractApiError(e, 'Failed to pause connection')
+  }
+}
+
+async function handleResume(id: string) {
+  actionError.value = null
+  try {
+    await store.resumeConnection(id)
+  } catch (e: unknown) {
+    actionError.value = extractApiError(e, 'Failed to resume connection')
+  }
+}
+
 async function handleDelete(id: string) {
   actionError.value = null
   try {
@@ -315,6 +333,8 @@ function closeRepoSelector() {
       @edit="(conn) => { selectedConnection = null; openEdit(conn) }"
       @test="(id) => { selectedConnection = null; handleTest(id) }"
       @delete="(id) => { selectedConnection = null; handleDelete(id) }"
+      @pause="(id) => { selectedConnection = null; handlePause(id) }"
+      @resume="(id) => { selectedConnection = null; handleResume(id) }"
       @manage-repos="(id) => { selectedConnection = null; openRepoSelector(id) }"
     />
 

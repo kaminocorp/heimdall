@@ -41,6 +41,11 @@ func (a *Agent) toolQueryDatabase(ctx context.Context, userID uuid.UUID, input m
 		return "", fmt.Errorf("query_database: connection not found or not owned by user")
 	}
 
+	// Block paused connections — surface a clear message to the agent.
+	if conn.Status == "paused" {
+		return "", fmt.Errorf("query_database: connection %q is paused — resume it before querying", conn.Name)
+	}
+
 	// Validate connection type.
 	if conn.Type != "postgres" {
 		return "", fmt.Errorf("query_database: connection type %q is not a database", conn.Type)

@@ -31,6 +31,7 @@ const statusColor = computed(() => {
   switch (props.connection.status) {
     case 'active': return 'bg-status-ok'
     case 'error': return 'bg-status-critical'
+    case 'paused': return 'bg-status-warn'
     default: return 'bg-text-muted'
   }
 })
@@ -39,6 +40,7 @@ const statusGlow = computed(() => {
   switch (props.connection.status) {
     case 'active': return 'box-shadow: 0 0 6px var(--status-ok-glow)'
     case 'error': return 'box-shadow: 0 0 6px var(--status-critical-glow)'
+    case 'paused': return 'box-shadow: 0 0 6px var(--status-warn-glow)'
     default: return ''
   }
 })
@@ -47,7 +49,7 @@ const statusGlow = computed(() => {
 <template>
   <button
     class="connection-bubble group"
-    :class="{ 'bubble-active': connection.status === 'active', 'bubble-testing': testing }"
+    :class="{ 'bubble-active': connection.status === 'active', 'bubble-paused': connection.status === 'paused', 'bubble-testing': testing }"
     :style="{ '--bubble-index': index ?? 0 }"
     @click="$emit('click', connection)"
   >
@@ -57,7 +59,7 @@ const statusGlow = computed(() => {
         :type="connection.type"
         :size="28"
         class="transition-colors duration-200"
-        :class="connection.status === 'active' ? 'text-accent' : 'text-text-muted'"
+        :class="connection.status === 'active' ? 'text-accent' : connection.status === 'paused' ? 'text-status-warn' : 'text-text-muted'"
       />
     </div>
 
@@ -70,7 +72,7 @@ const statusGlow = computed(() => {
     <!-- Status dot -->
     <span
       class="bubble-status"
-      :class="[statusColor, { 'animate-pulse': connection.status === 'active' || testing }]"
+      :class="[statusColor, { 'animate-pulse': (connection.status === 'active' || testing) && connection.status !== 'paused' }]"
       :style="statusGlow"
     />
 
@@ -120,6 +122,17 @@ const statusGlow = computed(() => {
 
 .bubble-active:hover {
   box-shadow: 0 0 18px var(--accent-glow), 0 4px 16px rgba(0, 0, 0, 0.3);
+}
+
+.bubble-paused {
+  border-color: var(--status-warn);
+  border-style: dashed;
+  animation: bubble-enter-paused 0.35s ease-out forwards;
+  animation-delay: calc(var(--bubble-index, 0) * 80ms);
+}
+
+.bubble-paused:hover {
+  opacity: 0.85;
 }
 
 .bubble-testing {
@@ -203,6 +216,13 @@ const statusGlow = computed(() => {
   }
 }
 
+@keyframes bubble-enter-paused {
+  to {
+    opacity: 0.6;
+    transform: translateY(0);
+  }
+}
+
 @keyframes bubble-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.5; }
@@ -213,6 +233,10 @@ const statusGlow = computed(() => {
     animation: none;
     opacity: 1;
     transform: none;
+  }
+  .bubble-paused {
+    animation: none;
+    opacity: 0.6;
   }
   .bubble-testing {
     animation: none;

@@ -37,11 +37,21 @@ Additionally, users should be able to choose whether a connection is **scoped to
 
 ## Vision
 
-A user connects an integration once, Heimdall discovers the available sources within that integration, and the user toggles which sources feed into which Heimdall Application. This works identically whether the integration is Fly.io, GitHub, Kubernetes, or anything else.
+Users choose how to wire up their integrations — Heimdall supports the full spectrum from tightly scoped to broadly shared, and any combination in between. The same source filtering infrastructure powers all approaches.
+
+**Three valid patterns:**
+
+| Pattern | Example | How it works |
+|---------|---------|--------------|
+| **App-scoped (1:1)** | One Fly.io drain per Heimdall app | Each app has its own connection and webhook token. Logs route directly — no filtering needed (though source filtering is still available). Works exactly as today. |
+| **Org-scoped (1:N)** | One Fly.io drain shared across all apps | Single connection at org level. Each app independently selects which sources (e.g. Fly app names) to include via source filters. |
+| **Hybrid** | Org drain for apps A and B, separate drain for app C | Mix and match freely. App C has its own app-scoped connection; A and B share an org-scoped one. No conflicts — each connection is independent. |
+
+Users should never be forced into one pattern. The wizard presents the choice clearly, but neither option is positioned as "recommended" — the right choice depends on the user's infrastructure and preferences.
 
 **Principles:**
 
-1. **Connect once, filter per app.** One Fly.io drain, one GitHub App install — no duplicate connections for the same integration.
+1. **User chooses the topology.** Org-wide, per-app, or a mix — all first-class. No pattern is "correct"; the system supports all equally.
 2. **Discover automatically, add manually.** Auto-detection of sources from incoming traffic is convenient but fragile (silent apps won't appear). Users can always manually add source names.
 3. **Drop by default.** No data is stored until the user explicitly enables a source. This prevents feed pollution and gives users full control.
 4. **Explicit, simple UX.** Org-level vs. app-level scoping must be crystal clear in the UI. No hidden behaviour, no implicit routing. The user always knows where their data goes.

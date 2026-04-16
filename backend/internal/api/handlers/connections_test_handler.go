@@ -174,15 +174,20 @@ func (s *Server) TestConnection(w http.ResponseWriter, r *http.Request) {
 		result = testResult{Success: true, Message: "Connection established"}
 	}
 
-	newStatus := "active"
-	if !result.Success {
-		newStatus = "error"
-	}
-	if err := queries.UpdateConnectionStatus(r.Context(), db.UpdateConnectionStatusParams{
-		ID:     connID,
-		Status: newStatus,
-	}); err != nil {
-		slog.Error("failed to update connection status", "connection_id", connID, "err", err)
+	// Only update persisted status if the connection is not paused.
+	// A user who explicitly paused a connection should not have it
+	// auto-resumed by a successful ping.
+	if conn.Status != "paused" {
+		newStatus := "active"
+		if !result.Success {
+			newStatus = "error"
+		}
+		if err := queries.UpdateConnectionStatus(r.Context(), db.UpdateConnectionStatusParams{
+			ID:     connID,
+			Status: newStatus,
+		}); err != nil {
+			slog.Error("failed to update connection status", "connection_id", connID, "err", err)
+		}
 	}
 
 	if err := commit(); err != nil {

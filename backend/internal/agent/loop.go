@@ -105,6 +105,21 @@ func (a *Agent) runConversationCore(ctx context.Context, userID uuid.UUID, appID
 
 	provider := a.providerFor(providerName)
 	sysPrompt := BuildSystemPrompt(systemOverride)
+
+	// Append connection context so the agent knows which data sources
+	// are available, paused, or errored — preventing blind tool calls
+	// against paused connections and enabling proactive user guidance.
+	if appID != uuid.Nil {
+		if conns, err := a.queries.ListConnectionsByApp(ctx, appID); err == nil && len(conns) > 0 {
+			sysPrompt += "\n\nConnected data sources for this application:\n"
+			for _, c := range conns {
+				sysPrompt += fmt.Sprintf("- %s (%s, %s) — status: %s, id: %s\n",
+					c.Name, c.Type, c.Direction, c.Status, c.ID)
+			}
+			sysPrompt += "\nPaused connections cannot be queried. If a user asks about a paused connection, let them know it must be resumed first."
+		}
+	}
+
 	tools := ToolRegistry()
 
 	// Build provider-agnostic messages from history + new input.

@@ -4,7 +4,7 @@ export interface Connection {
   type: string
   direction: 'one_way' | 'two_way'
   config: Record<string, unknown>
-  status: 'active' | 'inactive' | 'error'
+  status: 'active' | 'inactive' | 'error' | 'paused'
   last_seen: string | null
   created_at: string
   updated_at: string
@@ -25,5 +25,5 @@ export interface UpdateConnectionPayload {
   type: string
   direction: 'one_way' | 'two_way'
   config: Record<string, unknown>
-  status: 'active' | 'inactive' | 'error'
+  status: 'active' | 'inactive' | 'error' | 'paused'
 }
