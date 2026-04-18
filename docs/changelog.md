@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.46.4 — Schema-Drift Audit: Clean](#0464--schema-drift-audit-clean-2026-04-18)
 - [0.46.3 — Source Filtering Third-Pass Hardening](#0463--source-filtering-third-pass-hardening-2026-04-18)
 - [0.46.2 — Phase 6 Hardening](#0462--phase-6-hardening-2026-04-18)
 - [0.46.1 — Source Filtering Post-Assessment Hardening](#0461--source-filtering-post-assessment-hardening-2026-04-18)
@@ -123,6 +124,25 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.46.4 — Schema-Drift Audit: Clean (2026-04-18)
+
+Status check-in, not a code release. Closes the open question raised by `docs/executing/schema-drift.md`: four early migrations (`001`, `002`, `004`, `005`) were edited ~13 hours after initial scaffolding in commit `bf9c7bf` (2026-02-20 05:18 +0800), and golang-migrate doesn't checksum applied migrations — so any database provisioned from the pre-edit commit would have silently drifted forever. Git audit alone could only prove drift was *possible*; resolving it required querying an actual database.
+
+Ran a four-query probe against prod (checking `pg_indexes` for `idx_connections_status`, `information_schema.columns` + `pg_constraint` for `agent_config.id` being singleton `INTEGER`, and `pg_constraint.confdeltype` for the two FK `ON DELETE` actions on `conversations.investigation_id` and `log_buffer.connection_id`). All four checks returned `ok`. `schema_migrations` reported `version = 37, dirty = false` — fully up-to-date, no half-applied state.
+
+**Conclusion:** the database was provisioned from a commit at or after `bf9c7bf`, so the edits landed as the only state this DB ever saw. No reconciliation needed. This is the "no such pre-edit DB exists" scenario the audit doc flagged as the benign outcome.
+
+Milestone checkpoint: **at git commit `0acf558` (0.46.3), the production database schema is exactly what `backend/migrations/*.up.sql` would produce on a fresh Postgres.** Any future drift audit has a known-good baseline to diff against.
+
+No code changes, no migrations, no docs beyond this entry.
+
+### Follow-ups (not blocking)
+
+- The audit applied to **one environment only**. If a second long-lived DB exists (staging, a historical dev DB), it should run the same four-query probe before being considered clean.
+- The prevention items in `docs/executing/schema-drift.md` (append-only CI guard; optional switch to a checksumming migrator like dbmate/atlas/Flyway; periodic rebuild-and-diff in CI) remain open. The clean audit result reduces their urgency but not their value — the next edit-after-apply incident could happen in any future migration.
 
 ---
 
