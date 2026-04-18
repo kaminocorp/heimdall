@@ -196,8 +196,12 @@ type ListEnabledSourceNamesParams struct {
 
 // ListEnabledSourceNames is the ingestion-hot-path query. Called once per
 // webhook batch to load the set of enabled source names for a connection's
-// app. Backed by idx_app_source_filters_lookup (partial index on
-// enabled = true) so the planner never touches disabled rows.
+// app. Backed by idx_app_source_filters_app_lookup (migration 037: partial
+// index on (connection_id, app_id) WHERE enabled = true) so the planner
+// can index-only scan on both filter columns without a heap re-check.
+// The older idx_app_source_filters_lookup (connection_id, source_name)
+// partial index still exists — it serves ListAppsEnabledForSource's
+// org-fan-out access pattern. Both indexes are small and justified.
 func (q *Queries) ListEnabledSourceNames(ctx context.Context, arg ListEnabledSourceNamesParams) ([]string, error) {
 	rows, err := q.db.Query(ctx, listEnabledSourceNames, arg.ConnectionID, arg.AppID)
 	if err != nil {

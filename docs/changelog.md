@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.46.3 — Source Filtering Third-Pass Hardening](#0463--source-filtering-third-pass-hardening-2026-04-18)
 - [0.46.2 — Phase 6 Hardening](#0462--phase-6-hardening-2026-04-18)
 - [0.46.1 — Source Filtering Post-Assessment Hardening](#0461--source-filtering-post-assessment-hardening-2026-04-18)
 - [0.46.0 — Source Filtering & Org-Level Connections](#0460--source-filtering--org-level-connections-2026-04-18)
@@ -125,11 +126,135 @@
 
 ---
 
+## 0.46.3 — Source Filtering Third-Pass Hardening (2026-04-18)
+
+Third post-assessment pass on the source-filtering overhaul. A five-agent review (backend authz, migrations/schema, syslog runtime, frontend integration, docs/flipflop cross-check) scored 0.46.2 at a weighted 7.84/10 against the 8.5 deploy bar with **zero deploy-blockers and zero silent flipflops** — the outstanding items were a punch list of fast wins that, once landed, clear the bar without another feature pass. This release lands all eleven items: three backend authz/validation fixes, one generated-code reconciliation, one plan/code reconciliation, one runbook addendum, two frontend correctness fixes, one frontend accessibility fix, and four 0.46.2 changelog drift repairs. Purely additive — no phase-N decision was reversed, and the two pre-existing deliberate reversals (Phase 2→4 OTLP org-scope, Phase 5→6 syslog discovery ordering) remain documented in their reversing docs.
+
+No schema changes. No dependency changes. ~150 lines of code, ~60 lines of docs, all existing tests still pass (backend: full handler suite clean; frontend: 61/61).
+
+### Empty `PUT /sources` body returns 400 instead of 204
+
+`UpdateSourceFilters` silently accepted `{"sources":[]}` and returned 204. The 0.46.2 changelog had promised to surface client bugs as 400s rather than silently accept them ("The PUT also stopped silently skipping empty names; they now return 400 so client bugs surface instead of hiding") but the per-item check didn't catch the whole-array-empty case. A client that forgot to populate `sources` would get a successful no-op back and never know.
+
+Added a top-level `len(req.Sources) == 0` check before the 500-cap, returning `"sources is required"` as 400. The frontend `save()` now also early-returns on an empty working list so the error surfaces in the UI before a round-trip.
+
+### Unified 403 messages on `resolveSourceFilterApp`
+
+Two adjacent branches in `resolveSourceFilterApp` both returned 403 for what is functionally the same policy denial, but with different error bodies:
+
+- `"application not accessible"` when the user isn't a member of the app's org *or* the app doesn't exist — deliberately ambiguous so a probing caller can't distinguish the two.
+- `"application not in connection's org"` when the app exists and the user is a member, but its org differs from the connection's org — leaks that the app exists in some-other-org.
+
+A pen-tester probing this endpoint with a valid-but-different-org app_id gets a different message than one probing with a garbage UUID. Low-risk information disclosure, but the kind of thing a CVE-curious security researcher files. Both branches now return `"application not accessible"`.
+
+### `DiscoverSources` wired through `resolveSourceFilterApp`
+
+Today `DiscoverSources` only accepts `type = "github"` and GitHub connections are always app-scoped, so `GetConnectionByUser` already gates authz via org membership. But the handler writes to `connection_sources` without going through the app-scope resolver that the CRUD handlers use. When a future connector type adds its own discovery path and happens to be org-scoped, forgetting to wire in `resolveSourceFilterApp` becomes a cross-tenant write-path regression — exactly the class of bug Phase 5's `?app_id=` threading was meant to prevent.
+
+The call is added defensively now, with the returned `appID` deliberately unused. Discovery writes connection-wide rows (not per-app rows), so the resolver's job here is purely authz: it blocks org-scoped calls lacking `?app_id=` from landing in `connection_sources` under a connection they can read but whose app they can't. For GitHub today this is a no-op; the next discoverable connector inherits the protection for free.
+
+### `webhook_logs` config rejects malformed JSON at write time
+
+`validateConnectorConfig` relies on each connector type's `NewXyz(...)` constructor to reject malformed JSON. `webhook_logs` has no constructor (ingestion runs inside the HTTP handler), so a `POST /api/connections` with a config like `{not-json` would sail through `validateSourceNamePathConfig` (which correctly returns nil on unmarshal failure — that's not its job) and store the corrupt config. The caller would see a 201 and a stored connection whose config fails to parse on every subsequent ingest.
+
+Added a `json.Valid(config)` probe in the `webhook_logs` branch of `validateConnectorConfig` before the field-level validator runs. Matches the implicit JSON gate every other connector type gets from its constructor. Returns `"Invalid webhook_logs config: not valid JSON"` as 400 for malformed input. Doesn't touch the field-level validator, which stays correctly tolerant for callers that pass a non-webhook config through it.
+
+### `source_filters.sql.go` comment regenerated
+
+Phase 6 updated the comment above `ListEnabledSourceNames` in `source_filters.sql` to correctly name both the post-migration-037 `idx_app_source_filters_app_lookup` index and the pre-existing `idx_app_source_filters_lookup`, but `source_filters.sql.go` (the sqlc-generated Go) wasn't regenerated — it still claimed the query was backed by the old pre-037 index. A future reader grepping the generated code for index names would hit the stale comment first.
+
+Updated by hand (the sqlc regen would produce the same diff; by-hand avoided needing to run the sqlc binary). Same text as the `.sql` source file now.
+
+### `syslog.go` rollback-race fix reconciled with the Phase 6 plan
+
+The Phase 6 plan (`docs/completions/source-filtering-phase6-hardening.md` §2.2) prescribed two possible fixes for the `discoverHostname` rollback race: a `discoveredPending` in-flight marker, or holding `filterMu` across the upsert. The code that actually shipped in 0.46.2 took a third path — check `discovered` under the lock, release, run the upsert, then re-acquire the lock and add to `discovered` only on success. The `ON CONFLICT DO UPDATE` in `UpsertConnectionSource` makes the concurrent first-arrival case idempotent (bounded waste: one extra `last_seen_at` bump), so no pending marker is needed and the lock isn't held across the DB call.
+
+This is cheaper than both proposals (no second map; no long-held lock) while being equally correct — nothing is ever in a half-committed state that a concurrent reader could short-circuit against. The `syslog.go:538-582` comment block already documents the invariant; the Phase 6 plan doc now gains an "Implemented as (shipped in 0.46.2)" note pointing at the shipped approach so the two docs agree.
+
+### Deploy runbook: "Skip this runbook" branch gains a sanity check
+
+`docs/runbooks/v0.46.0-deploy.md` step 1 tells the operator to skip the runbook if `schema_migrations` version is already ≥ 35, which is correct for the runbook's stated purpose (the race window only exists *during* application of 035). But any environment that applied 035 via `make migrate-up` before this runbook existed — staging on commit `18153bd`, for example — never had writers stopped. A silent partial failure during that window would leave orphan `connections.org_id IS NULL` rows that went uncaught.
+
+The skip branch now tells the operator to run the post-migration sanity check anyway. A zero count confirms the landing was clean; a non-zero count means the race fired silently and manual repair is needed before proceeding.
+
+### Deploy runbook: writer-quiescence extended to indirect write paths
+
+Step 3's `fly scale count 0 --app heimdall` stops the primary API from inserting into `connections`, but the 0.46.0 feature-set specifically narrates that the *Fly.io Log Shipper* writes into Heimdall via webhook ingestion — and `UpsertConnectionSource` in the webhook path races migration 035 exactly the same way `INSERT INTO connections` does. If the Log Shipper stays up while 035 runs, the whole point of quiescence is missed.
+
+The runbook now calls out the Log Shipper, any org-scoped webhook forwarder (GitHub App webhook replay, custom shippers), and notes that syslog/OTLP listeners are already in-process and therefore covered by the primary `fly scale count 0`. Also adds a one-line `SELECT count(*) FROM connections;` step so the downtime window is sized before the scale-down, not measured after.
+
+### Frontend save-race: polling no longer clobbers pending user toggles
+
+`SourceSelector.vue`'s 10-second poll replaced `sources.value` wholesale on every tick. A user who toggled a row between two ticks lost their pending edit on the next reload — specifically in the UX pattern where a user toggles several sources and *then* clicks Save, a network-slow toggle during the tick window would silently revert. In dev this is almost invisible (fast local round-trips, no network jitter); in prod with 100ms+ RTTs and a slow typist, it produces phantom "I thought I enabled that" reports.
+
+Added a `baseline` snapshot of enabled state taken after every successful load and every successful save. A `hasPendingEdits` computed compares live state to the baseline — if any source's enabled bit differs from its baseline, or a row has been added that's not in the baseline, the poll tick skips the `load()` call entirely. Polling resumes on the next tick after a Save succeeds (the baseline refresh in `save()` clears the pending state).
+
+Also removed the `visibilitychange` listener that Phase 6 added — the immediate `load()` on tab-return could fire within the same 10-second window as the next natural interval tick, producing a double-fire. Relying on the natural tick is simpler: worst case the user sees a 10-second-old UI on tab return, which is indistinguishable from any other moment in the polling cycle. The interval callback still checks `visibilityState` before firing, so backgrounded tabs remain silent.
+
+### Frontend accessibility: row toggle is now a real `role="switch"` button
+
+The per-source row had the clickable area as a `<div @click>` containing a purely visual checkbox `<div>`. Keyboard users couldn't toggle sources at all (no Tab-stop, no Enter/Space handler), and screen readers had nothing to announce — both the source name and the enabled state were semantically invisible.
+
+Converted the row to a real `<button type="button" role="switch" :aria-checked="src.enabled">` with `aria-label="<source name> — enabled|disabled"`. Browsers handle Enter and Space on buttons natively, so no `@keydown` handlers are needed. The visual staleness dot and checkmark are `aria-hidden="true"` — they're redundant with the announced state. The outer panel gained `role="region"` and `aria-labelledby="source-selector-heading"` so the dialog is navigable as a landmark. The remove-button also gained `aria-label="Remove <source>"` and stays visible on keyboard focus (not just mouse hover).
+
+Stops short of a full focus trap or `aria-modal` treatment — the selector is embedded inline rather than modal, and `ConnectionWizard.vue`'s own Esc-to-close is out of scope here. Flagged for a follow-up a11y pass.
+
+### 0.46.2 changelog drift repairs
+
+Four clerical inaccuracies in the 0.46.2 entry, caught by the docs/flipflop cross-check agent:
+
+1. `docs/executing/source-filtering-phase6-hardening.md` → `docs/completions/source-filtering-phase6-hardening.md` (line 132 and the file-map at line 246). The doc moved from `executing/` to `completions/` when 0.46.2 shipped; the changelog wasn't updated.
+2. "22 unit tests cover the rule surface" → "20 unit tests". `TestValidateSourceNamePathConfig` actually has 20 table cases (11 accept + 9 reject); off-by-two.
+3. "surfaced twelve items across three severity tiers: two deploy-blockers, three operational-safety issues, six correctness polish, one docs-drift nitpick" → "eleven items ... two deploy-blockers, three operational-safety issues, six correctness polish". The "one docs-drift nitpick" (item 3.5, the stale `source_filters.sql` comment) was already inside the Tier 3 six; the nitpick was listed twice.
+4. Verification block: "14 + 22 + 2 = 38 new tests" → "14 + 20 + 2 + 3 = 39 new tests". The arithmetic was wrong two ways (22→20, and the three frontend `classifyStaleness` cases were omitted from the sum even though they're counted in the top-line "39" on line 130).
+
+None of these drift items would have misled a deployer into unsafe action — all clerical. Fixed for the record so the 0.46.2 entry is internally consistent.
+
+### Not changed
+
+- **Frontend `ConnectionWizard.vue` focus trap.** The selector now has button-level keyboard access and region-level semantics, but a full focus trap for the modal wizard is a bigger refactor and is not gated on this deploy. Tracked as a follow-up a11y pass.
+- **`DiscoverSources` rate limit / cooldown.** Still deferred from Phase 6's "Not changed" section; the 429 pass-through from Phase 5 gives the client an accurate back-off signal.
+- **Fan-out batch query for org-scoped routing.** `routeSources` still issues one `ListAppsEnabledForSource` per distinct source name. Acceptable at current scale.
+- **Migration 037 not converted to `CREATE INDEX CONCURRENTLY`.** `app_source_filters` is still small.
+- **Tier 4 items from the Phase 6 plan** (atomic.Pointer for syslog enabled cache, octet-counting framing, per-connection error metrics) — none hit motivating signal yet.
+
+### Verification
+
+- `go build ./...` — clean
+- `go vet ./...` — clean
+- `go test ./internal/api/handlers` — clean (full handler suite, not just source-filter subset)
+- `npx vue-tsc --noEmit` — clean
+- Frontend tests: **61/61 passing** (unchanged from 0.46.2)
+
+### File map
+
+```
+backend/
+  internal/api/handlers/source_filters.go            CHANGED — empty-PUT guard; unified 403 message
+  internal/api/handlers/source_filters_discover.go   CHANGED — resolveSourceFilterApp defensive call
+  internal/api/handlers/connections_validate.go      CHANGED — webhook_logs JSON validity probe
+  internal/db/source_filters.sql.go                  CHANGED — regenerated index comment
+
+frontend/
+  src/components/connections/SourceSelector.vue      CHANGED — save-race baseline + poll gate; role=switch rows; aria labelling
+
+docs/
+  changelog.md                                       CHANGED — 0.46.2 drift fixes; this entry
+  runbooks/v0.46.0-deploy.md                         CHANGED — skip-branch sanity check; indirect-writer quiescence; window sizing
+  completions/source-filtering-phase6-hardening.md   CHANGED — §2.2 "Implemented as" note reconciling plan with shipped code
+```
+
+### Status
+
+Source-filtering clears the 8.5/10 deploy bar. No silent flipflops across Phases 1–6 + three hardening passes. Ready to ship.
+
+---
+
 ## 0.46.2 — Phase 6 Hardening (2026-04-18)
 
-Second post-assessment pass on the source-filtering overhaul. Four new review agents (backend authz, migrations/schema, syslog runtime, frontend integration) scored 0.46.1 at ~7.5/10 against an 8.5 deploy bar and surfaced twelve items across three severity tiers: two deploy-blockers, three operational-safety issues, six correctness polish, one docs-drift nitpick. This release lands all twelve. ~350 lines of code, 0 schema changes (migrations are immutable once committed), one new deploy runbook, and 39 new unit tests.
+Second post-assessment pass on the source-filtering overhaul. Four new review agents (backend authz, migrations/schema, syslog runtime, frontend integration) scored 0.46.1 at ~7.5/10 against an 8.5 deploy bar and surfaced eleven items across three severity tiers: two deploy-blockers, three operational-safety issues, six correctness polish. This release lands all eleven. ~350 lines of code, 0 schema changes (migrations are immutable once committed), one new deploy runbook, and 39 new unit tests.
 
-**Plan:** `docs/executing/source-filtering-phase6-hardening.md`
+**Plan:** `docs/completions/source-filtering-phase6-hardening.md`
 **Runbook:** `docs/runbooks/v0.46.0-deploy.md` + `docs/runbooks/v0.46.0-preflight.sql`
 
 ### Migrations stay immutable; protection moves to a deploy runbook
@@ -171,7 +296,7 @@ Reordered: check `discovered` under lock, release, run the upsert (DB-side `ON C
 
 Phase 4's dotted-path extractor (`extractStringByPath`) was deliberately defensive — empty segments, leading/trailing dots, missing keys all return `""` and the ingestion path falls through to the parser default. Defensive is correct for the hot path; what was missing was a write-time check. A typo like `"meta..source"`, `" log_group"`, or `"log group"` configured the extractor to always resolve to `""`, silently disabling filtering with no operator signal beyond drop-by-default everywhere.
 
-Added `validateSourceNamePathConfig` to `connections_validate.go`, called from the `webhook_logs` branch of `validateConnectorConfig`. Rejects leading/trailing dots, consecutive dots, leading/trailing whitespace, and whitespace-inside-segments (would never match a real JSON key). Empty string after trim is treated as "unset" rather than invalid, so users can clear the field by submitting `""`. 22 unit tests cover the rule surface including malformed outer JSON (tolerated — parent helpers own that validation).
+Added `validateSourceNamePathConfig` to `connections_validate.go`, called from the `webhook_logs` branch of `validateConnectorConfig`. Rejects leading/trailing dots, consecutive dots, leading/trailing whitespace, and whitespace-inside-segments (would never match a real JSON key). Empty string after trim is treated as "unset" rather than invalid, so users can clear the field by submitting `""`. 20 unit tests cover the rule surface including malformed outer JSON (tolerated — parent helpers own that validation).
 
 ### OTLP gains a Scope wizard step
 
@@ -215,7 +340,7 @@ The 10-second polling interval in `SourceSelector.vue` fired regardless of tab v
 - `go build ./...` — clean
 - `go vet ./...` — clean
 - `npx vue-tsc --noEmit` — clean
-- Backend unit tests (Phase 6 scope): **all pass** (14 `TestValidateSourceName` + 22 `TestValidateSourceNamePathConfig` + 2 new `TestSyslogHealth` = 38 new tests, plus unchanged Phase 1–5 coverage)
+- Backend unit tests (Phase 6 scope): **all pass** (14 `TestValidateSourceName` + 20 `TestValidateSourceNamePathConfig` + 2 new `TestSyslogHealth` + 3 new frontend `classifyStaleness` cases = 39 new tests, plus unchanged Phase 1–5 coverage)
 - Frontend tests: **61/61 passing** (up from 58 — 3 new `classifyStaleness` cases for undefined, Date input, and unparseable strings)
 - 11 pre-existing unrelated handler-test failures continue to track separately
 
@@ -243,7 +368,7 @@ frontend/
 docs/
   runbooks/v0.46.0-deploy.md                           NEW — deploy procedure with pre-flight + stop-writers + post-migration checks + rollback
   runbooks/v0.46.0-preflight.sql                       NEW — standalone orphan-org_id check
-  executing/source-filtering-phase6-hardening.md       NEW — the Phase 6 plan with three-tier structure + Tier 4 backlog
+  completions/source-filtering-phase6-hardening.md     NEW — the Phase 6 plan with three-tier structure + Tier 4 backlog
 ```
 
 ### Status

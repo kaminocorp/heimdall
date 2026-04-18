@@ -145,6 +145,8 @@ Alternative (simpler but slower): hold `filterMu` across the upsert. Acceptable 
 
 **Test:** Exercise with a mock queries handle that returns an error on the first call and success on the second; assert the second call is made.
 
+**Implemented as (shipped in 0.46.2):** neither of the two proposals above. The committed code in `syslog.go:538-582` takes a third path: check `discovered` under the lock, release, run the upsert, then re-acquire the lock and add to `discovered` only on success. The `ON CONFLICT DO UPDATE` in `UpsertConnectionSource` makes concurrent first-arrival upserts idempotent (bounded waste: one extra `last_seen_at` bump), so no pending marker is needed — nothing is ever in a half-committed state that a concurrent reader could short-circuit against. This is cheaper than both proposals (no second map; no long-held lock) while being equally correct. The `syslog.go` comment block on those lines documents the invariant; the 0.46.3 changelog reconciles this plan doc with what shipped.
+
 ---
 
 ### 2.3 `SourceSelector.discoverSources` forwards `appId`

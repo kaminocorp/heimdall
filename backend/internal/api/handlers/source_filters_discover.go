@@ -77,6 +77,19 @@ func (s *Server) DiscoverSources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Defense-in-depth: resolve the app scope even though the current sole
+	// discovery caller (GitHub) is always app-scoped and GetConnectionByUser
+	// has already gated org membership. When a future non-GitHub connector
+	// gets an explicit discovery path, this pre-check ensures org-scoped
+	// connections can't write to `connection_sources` for a connection the
+	// caller can't also read via the app-scoped filter APIs. The returned
+	// appID is intentionally unused today — discovery writes connection-wide
+	// rows, not per-app rows.
+	if _, status, err := s.resolveSourceFilterApp(r.Context(), queries, conn, userID, r); err != nil {
+		jsonError(w, err.Error(), status)
+		return
+	}
+
 	switch conn.Type {
 	case "github":
 		n, err := s.discoverGitHubRepos(r.Context(), queries, conn)

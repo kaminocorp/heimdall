@@ -37,6 +37,25 @@ const loading = ref(true)
 const saving = ref(false)
 const error = ref<string | null>(null)
 
+// Baseline snapshot of enabled state, taken at the last successful load or
+// save. `hasPendingEdits` compares live state to this to decide whether the
+// 10s poll is safe to fire — if the user has toggles they haven't saved, we
+// skip the poll rather than wipe their edits on the next reload.
+const baseline = ref<Map<string, boolean>>(new Map())
+const hasPendingEdits = computed(() => {
+  for (const s of sources.value) {
+    const prev = baseline.value.get(s.source_name)
+    if (prev === undefined) return true
+    if (prev !== s.enabled) return true
+  }
+  return false
+})
+function refreshBaseline() {
+  const next = new Map<string, boolean>()
+  for (const s of sources.value) next.set(s.source_name, s.enabled)
+  baseline.value = next
+}
+
 // Manual-add input. Creates the filter row with enabled=true immediately
 // (separate request) so the user sees it appear without having to hit Save.
 const newSourceName = ref('')
@@ -75,6 +94,7 @@ async function load() {
       if (aSeen !== bSeen) return bSeen - aSeen
       return a.source_name.localeCompare(b.source_name)
     })
+    refreshBaseline()
   } catch (e: unknown) {
     error.value = extractApiError(e, 'Failed to load sources')
   } finally {
@@ -87,6 +107,10 @@ function toggle(src: SourceFilterItem) {
 }
 
 async function save() {
+  // The API rejects an empty `sources` array as of 0.46.3 (surfaces client
+  // bugs rather than silently succeeding). Match that guard on the frontend
+  // so the error comes from the UI rather than a round-trip.
+  if (sources.value.length === 0) return
   saving.value = true
   error.value = null
   try {
@@ -95,6 +119,7 @@ async function save() {
       sources.value.map(s => ({ source_name: s.source_name, enabled: s.enabled })),
       requestOpts.value,
     )
+    refreshBaseline()
     // Standalone usage: closing the panel is the "done" signal. Embedded
     // usage: stay put — the parent's own navigation controls when to move on.
     if (!props.embedded) emit('close')
@@ -187,17 +212,6 @@ function tierColor(tier: StalenessTier): string {
   }
 }
 
-// Visibility gate: the 10s poll has no value while the tab is backgrounded
-// — the user can't see the UI update — so we suspend polling in that state.
-// A one-shot `load()` on visibility return catches up immediately so the
-// user doesn't perceive a gap. Listener is added only in passive-discovery
-// mode (discoverable mode never polls in the first place).
-function handleVisibilityChange() {
-  if (document.visibilityState === 'visible') {
-    load()
-  }
-}
-
 onMounted(async () => {
   await load()
   // For discoverable connectors (GitHub): no passive traffic will ever
@@ -209,13 +223,20 @@ onMounted(async () => {
       await sync()
     }
   } else {
-    // Poll only while the tab is visible. `setInterval`'s callback checks
-    // visibilityState each tick rather than tearing the interval down on
-    // every visibilitychange — simpler and indistinguishable in practice.
+    // Poll only while the tab is visible AND the user has no pending
+    // unsaved edits. The visibility gate avoids wasted requests on a
+    // backgrounded tab; the pending-edits gate prevents the poll from
+    // clobbering in-flight user toggles — load() replaces sources.value
+    // wholesale, so without this guard a tick between a user's toggle
+    // and Save silently discards their change.
+    //
+    // No separate visibilitychange listener: the next natural tick
+    // (≤10s) catches up any changes the user missed while hidden.
     pollTimer = setInterval(() => {
-      if (document.visibilityState === 'visible') load()
+      if (document.visibilityState !== 'visible') return
+      if (hasPendingEdits.value) return
+      load()
     }, 10_000)
-    document.addEventListener('visibilitychange', handleVisibilityChange)
   }
   nowInterval = setInterval(() => { nowTick.value = Date.now() }, 60_000)
 })
@@ -223,15 +244,18 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   if (pollTimer) clearInterval(pollTimer)
   if (nowInterval) clearInterval(nowInterval)
-  document.removeEventListener('visibilitychange', handleVisibilityChange)
 })
 </script>
 
 <template>
-  <div class="border border-border rounded-lg p-6 bg-bg-surface space-y-4">
+  <div
+    class="border border-border rounded-lg p-6 bg-bg-surface space-y-4"
+    role="region"
+    aria-labelledby="source-selector-heading"
+  >
     <div class="flex items-center justify-between gap-3">
       <div class="min-w-0">
-        <h3 class="font-mono text-sm font-bold uppercase tracking-wider text-text-primary">Manage Sources</h3>
+        <h3 id="source-selector-heading" class="font-mono text-sm font-bold uppercase tracking-wider text-text-primary">Manage Sources</h3>
         <p class="font-mono text-[11px] text-text-muted mt-1">
           {{ discoverable
             ? 'Sync pulls the latest accessible list from upstream. Toggle what to include.'
@@ -281,28 +305,46 @@ onBeforeUnmount(() => {
         :key="src.source_name"
         class="group flex items-center justify-between px-3 py-2 rounded hover:bg-bg-elevated/50 transition-colors"
       >
-        <div class="flex items-center gap-3 min-w-0 cursor-pointer flex-1" @click="toggle(src)">
-          <!-- Staleness dot -->
+        <!-- Row toggle is a real button with role="switch" so keyboard users
+             (Enter / Space) can toggle. aria-checked mirrors src.enabled so
+             screen readers announce the state without relying on the visual
+             checkmark. aria-label carries the source name for the same reason
+             — the visible label becomes part of the button's accessible name. -->
+        <button
+          type="button"
+          role="switch"
+          :aria-checked="src.enabled"
+          :aria-label="`${src.source_name} — ${src.enabled ? 'enabled' : 'disabled'}`"
+          class="flex items-center gap-3 min-w-0 cursor-pointer flex-1 text-left focus:outline-none focus-visible:ring-1 focus-visible:ring-accent rounded"
+          @click="toggle(src)"
+        >
+          <!-- Staleness dot. aria-hidden because the tier is redundant
+               information for AT users once the source name and state are
+               announced; sighted users get the colour cue. -->
           <span
+            aria-hidden="true"
             :class="['w-2 h-2 rounded-full shrink-0', tierColor(src.tier)]"
             :title="'Status: ' + src.tier"
           />
-          <!-- Toggle checkbox -->
-          <div
+          <!-- Toggle checkbox visual — purely decorative, state is conveyed
+               via aria-checked on the parent button. -->
+          <span
+            aria-hidden="true"
             class="w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 transition-colors"
             :class="src.enabled ? 'bg-accent border-accent' : 'border-border'"
           >
             <svg v-if="src.enabled" class="w-3 h-3 text-bg-primary" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M2 6l3 3 5-5" />
             </svg>
-          </div>
+          </span>
           <span class="font-mono text-sm text-text-primary truncate">{{ src.source_name }}</span>
-        </div>
+        </button>
         <div class="flex items-center gap-3 shrink-0">
           <span class="font-mono text-[10px] text-text-muted">{{ relativeTime(src.last_seen_at) }}</span>
           <button
             @click="remove(src)"
-            class="font-mono text-[10px] uppercase tracking-wider text-text-muted opacity-0 group-hover:opacity-100 hover:text-status-critical transition-opacity cursor-pointer"
+            :aria-label="`Remove ${src.source_name}`"
+            class="font-mono text-[10px] uppercase tracking-wider text-text-muted opacity-0 group-hover:opacity-100 focus:opacity-100 hover:text-status-critical transition-opacity cursor-pointer"
           >Remove</button>
         </div>
       </div>

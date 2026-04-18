@@ -58,6 +58,14 @@ func (s *Server) validateConnectorConfig(connType string, config json.RawMessage
 			return nil, fmt.Errorf("Invalid MongoDB Atlas config: %v", err)
 		}
 	case "webhook_logs":
+		// Other connector types reject malformed JSON via their NewXyz(...)
+		// constructor. webhook_logs has no constructor (its ingestion runs
+		// inside the HTTP handler), so an outer json.Valid check stands in
+		// for the constructor-level JSON gate. Without this, a payload like
+		// `{not-json` would sail through and store corrupt config.
+		if len(config) > 0 && !json.Valid(config) {
+			return nil, fmt.Errorf("Invalid webhook_logs config: not valid JSON")
+		}
 		if err := validateSourceNamePathConfig(config); err != nil {
 			return nil, fmt.Errorf("Invalid webhook_logs config: %v", err)
 		}

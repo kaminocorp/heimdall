@@ -90,7 +90,11 @@ func (s *Server) resolveSourceFilterApp(
 		return uuid.Nil, http.StatusForbidden, errors.New("application not accessible")
 	}
 	if app.OrgID != conn.OrgID {
-		return uuid.Nil, http.StatusForbidden, errors.New("application not in connection's org")
+		// Same wording as the user-not-a-member branch above so the two
+		// 403 paths don't differentiate — a probing caller gets the same
+		// response whether they hit "app in different org" or "app doesn't
+		// exist / user isn't a member".
+		return uuid.Nil, http.StatusForbidden, errors.New("application not accessible")
 	}
 	return parsed, 0, nil
 }
@@ -232,6 +236,15 @@ func (s *Server) UpdateSourceFilters(w http.ResponseWriter, r *http.Request) {
 	var req updateSourceFiltersRequest
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
 		jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	// An empty `sources` array is almost always a client bug (the caller
+	// meant to pass something and forgot). The phase-6 changelog promised
+	// to surface client bugs as 400 rather than silently accept them;
+	// enforcing that here matches the "no silent skips" stance taken on
+	// per-item empty source_names.
+	if len(req.Sources) == 0 {
+		jsonError(w, "sources is required", http.StatusBadRequest)
 		return
 	}
 	// Hard cap keeps the per-request DB fan-out bounded. Matches the
