@@ -226,6 +226,13 @@ func (s *Server) GitHubCallback(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// resultConnID carries the id through to the redirect URL so the frontend
+	// can open the source selector for the *exact* connection that just
+	// finished installing, even when the user has multiple GitHub installs.
+	// Without this disambiguator the callback page falls back to first-match
+	// which guesses wrong under multi-install usage.
+	var resultConnID uuid.UUID
+
 	if existingConnID != nil {
 		// Update existing connection (re-install / modify permissions).
 		_, err = queries.UpdateConnection(r.Context(), db.UpdateConnectionParams{
@@ -241,8 +248,9 @@ func (s *Server) GitHubCallback(w http.ResponseWriter, r *http.Request) {
 			jsonServerError(w, "failed to update connection", err)
 			return
 		}
+		resultConnID = *existingConnID
 		slog.Info("github callback: updated existing connection",
-			"connection_id", existingConnID, "installation_id", installationID, "setup_action", setupAction)
+			"connection_id", resultConnID, "installation_id", installationID, "setup_action", setupAction)
 	} else {
 		// Create new connection. GitHub is always app-scoped — code search
 		// binds to one app at a time, so there's no meaningful org-wide mode
@@ -261,8 +269,9 @@ func (s *Server) GitHubCallback(w http.ResponseWriter, r *http.Request) {
 			jsonServerError(w, "failed to create connection", err)
 			return
 		}
+		resultConnID = conn.ID
 		slog.Info("github callback: created new connection",
-			"connection_id", conn.ID, "installation_id", installationID, "setup_action", setupAction)
+			"connection_id", resultConnID, "installation_id", installationID, "setup_action", setupAction)
 	}
 
 	if err := commit(); err != nil {
@@ -270,6 +279,10 @@ func (s *Server) GitHubCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Redirect browser back to the frontend connections page.
-	http.Redirect(w, r, s.Config.FrontendURL+"/connections?github=installed", http.StatusFound)
+	// Redirect browser back to the frontend connections page with the
+	// connection id so the post-install source selector opens for the
+	// correct install (multi-install disambiguation).
+	redirectURL := fmt.Sprintf("%s/connections?github=installed&connection_id=%s",
+		s.Config.FrontendURL, resultConnID)
+	http.Redirect(w, r, redirectURL, http.StatusFound)
 }

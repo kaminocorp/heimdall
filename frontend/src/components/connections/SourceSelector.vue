@@ -136,7 +136,7 @@ async function sync() {
   syncing.value = true
   error.value = null
   try {
-    const result = await discoverSources(props.connectionId)
+    const result = await discoverSources(props.connectionId, requestOpts.value)
     lastSyncDiscovered.value = result.discovered
     await load()
   } catch (e: unknown) {
@@ -187,6 +187,17 @@ function tierColor(tier: StalenessTier): string {
   }
 }
 
+// Visibility gate: the 10s poll has no value while the tab is backgrounded
+// — the user can't see the UI update — so we suspend polling in that state.
+// A one-shot `load()` on visibility return catches up immediately so the
+// user doesn't perceive a gap. Listener is added only in passive-discovery
+// mode (discoverable mode never polls in the first place).
+function handleVisibilityChange() {
+  if (document.visibilityState === 'visible') {
+    load()
+  }
+}
+
 onMounted(async () => {
   await load()
   // For discoverable connectors (GitHub): no passive traffic will ever
@@ -198,7 +209,13 @@ onMounted(async () => {
       await sync()
     }
   } else {
-    pollTimer = setInterval(() => { load() }, 10_000)
+    // Poll only while the tab is visible. `setInterval`'s callback checks
+    // visibilityState each tick rather than tearing the interval down on
+    // every visibilitychange — simpler and indistinguishable in practice.
+    pollTimer = setInterval(() => {
+      if (document.visibilityState === 'visible') load()
+    }, 10_000)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
   }
   nowInterval = setInterval(() => { nowTick.value = Date.now() }, 60_000)
 })
@@ -206,6 +223,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   if (pollTimer) clearInterval(pollTimer)
   if (nowInterval) clearInterval(nowInterval)
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
 })
 </script>
 

@@ -230,6 +230,11 @@ export const flows: PlatformFlow[] = [
     available: true,
     steps: [
       { id: 'name', label: 'Name', component: StepName },
+      // Scope step mirrors webhook_logs — backend supportsOrgScope() returns
+      // true for otlp, and Phase 4 added service.name extraction + org-scoped
+      // fan-out. Without this step, users couldn't create an org-scoped OTLP
+      // connection from the UI (only via the raw API).
+      { id: 'scope', label: 'Scope', component: StepConnectionScope },
       { id: 'setup', label: 'Setup', component: StepOTLPSetup },
     ],
   },

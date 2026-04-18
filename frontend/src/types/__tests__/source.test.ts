@@ -45,4 +45,24 @@ describe('classifyStaleness', () => {
     const oneDayAgo = new Date(NOW.getTime() - 24 * 60 * 60 * 1000).toISOString()
     expect(classifyStaleness(oneDayAgo)).toBe('stale')
   })
+
+  it('returns "never" for undefined (partial response / unset field)', () => {
+    // Regression guard for the Phase 6 Tier 3.3 widening. Without the
+    // undefined check, new Date(undefined).getTime() → NaN, and every
+    // comparison against NaN is false, so the function would silently
+    // classify every undefined input as 'stale' (red dot) instead of the
+    // correct 'never' (muted dot).
+    expect(classifyStaleness(undefined)).toBe('never')
+  })
+
+  it('accepts a Date instance in addition to an ISO string', () => {
+    const thirtyMinAgo = new Date(NOW.getTime() - 30 * 60 * 1000)
+    expect(classifyStaleness(thirtyMinAgo)).toBe('active')
+  })
+
+  it('returns "never" for an unparseable date string rather than classifying as stale', () => {
+    // Defensive: malformed server data (bad JSON, debugging payload) should
+    // land in the muted 'never' tier, not the misleading red 'stale' tier.
+    expect(classifyStaleness('definitely-not-a-date')).toBe('never')
+  })
 })

@@ -1,7 +1,10 @@
 package logs
 
 import (
+	"context"
+	"net"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -103,4 +106,79 @@ func TestMapSyslogSeverity(t *testing.T) {
 		assert.True(t, result.Valid)
 		assert.Equal(t, tt.expected, result.String, "severity %d", tt.sev)
 	}
+}
+
+// TestSyslogHealth_StalenessTransitions verifies that Health() reports the
+// three distinct states the connector can be in after start-up:
+//   1. listener present but allow-list never loaded → degraded (initialRefreshDone=false)
+//   2. allow-list loaded recently → healthy
+//   3. allow-list loaded but not refreshed within syslogStaleThreshold → degraded (stale)
+//
+// Together these exercise the Tier 2.1 hardening: a DB outage that begins
+// AFTER successful startup must eventually surface via Health(), not stay
+// masked behind an old initialRefreshDone=true.
+func TestSyslogHealth_StalenessTransitions(t *testing.T) {
+	// A dummy listener on an ephemeral port — we never accept from it, just
+	// need Health()'s "listener != nil" branch to pass.
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer lis.Close()
+
+	s := &Syslog{
+		connectionID: uuid.New(),
+		userID:       uuid.New(),
+		appID:        uuid.New(),
+		connSem:      make(chan struct{}, 1),
+		enabled:      map[string]struct{}{},
+		discovered:   map[string]struct{}{},
+		listener:     lis,
+	}
+
+	// Phase 1: never-refreshed — Health must fail with the "not loaded" message.
+	err = s.Health(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "has not loaded yet")
+
+	// Phase 2: simulate a successful refresh just now.
+	s.filterMu.Lock()
+	s.lastRefreshAt = time.Now()
+	s.filterMu.Unlock()
+	s.initialRefreshDone.Store(true)
+	require.NoError(t, s.Health(context.Background()), "fresh refresh should report healthy")
+
+	// Phase 3: age the last refresh past the stale threshold — Health must
+	// degrade even though initialRefreshDone is still true. This is the
+	// regression guard for the "silent staleness" bug that motivated Tier 2.1.
+	s.filterMu.Lock()
+	s.lastRefreshAt = time.Now().Add(-(syslogStaleThreshold + time.Second))
+	s.filterMu.Unlock()
+	err = s.Health(context.Background())
+	require.Error(t, err, "stale cache should report degraded")
+	assert.Contains(t, err.Error(), "stale")
+
+	// Phase 4: a new successful refresh brings it back — confirms the check
+	// is time-based, not a one-way latch.
+	s.filterMu.Lock()
+	s.lastRefreshAt = time.Now()
+	s.filterMu.Unlock()
+	require.NoError(t, s.Health(context.Background()))
+}
+
+// TestSyslogHealth_NoListener covers the simplest failure mode: Close()
+// sets listener to nil, Health() reports not-running regardless of the
+// allow-list state.
+func TestSyslogHealth_NoListener(t *testing.T) {
+	s := &Syslog{
+		connectionID: uuid.New(),
+		enabled:      map[string]struct{}{},
+		discovered:   map[string]struct{}{},
+	}
+	s.initialRefreshDone.Store(true)
+	s.filterMu.Lock()
+	s.lastRefreshAt = time.Now()
+	s.filterMu.Unlock()
+
+	err := s.Health(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not running")
 }

@@ -61,14 +61,23 @@ export async function deleteSource(
 // meaningful for connector types with an explicit list-what-we-see-from-here
 // API — webhook ingestion types discover sources passively.
 //
+// Accepts the same optional `{ appId }` as the CRUD functions. For GitHub
+// the backend ignores it today (discovery is per-connection, not per-app),
+// but future connector types that gain discovery (e.g. a Vercel projects
+// endpoint) may need it for authz resolution — forwarding it here keeps
+// the call-site shape consistent and future-proofs the selector.
+//
 // Returns the count of upstream entries encountered; the caller should
 // refresh its source list via `listSources` afterwards to pick up the
 // newly inserted rows.
 export async function discoverSources(
   connectionId: string,
+  opts?: SourceRequestOpts,
 ): Promise<{ discovered: number; connection_type: string }> {
   const { data } = await client.post<{ discovered: number; connection_type: string }>(
     `/connections/${connectionId}/sources/discover`,
+    undefined,
+    { params: params(opts) },
   )
   return data
 }

@@ -30,6 +30,7 @@ const (
 	syslogRefreshInterval = 60 * time.Second // how often to refresh the enabled-hostname cache
 	syslogMaxDiscovered   = 10000            // per-listener cap on the in-memory discovered-hostnames dedupe set
 	syslogInitialRetries  = 3                // initial allow-list load retries before surfacing via Health()
+	syslogStaleThreshold  = 3 * syslogRefreshInterval
 )
 
 // SyslogConfig represents the fields stored in a syslog connection's config JSONB.
@@ -62,12 +63,14 @@ type Syslog struct {
 	wg       sync.WaitGroup
 	connSem  chan struct{} // semaphore to cap concurrent connections
 
-	// filterMu guards enabled and discovered — both read on every message.
-	// A plain Mutex is fine at the per-message rate; RWMutex would save a
-	// few nanoseconds but complicate the refresh path.
-	filterMu   sync.Mutex
-	enabled    map[string]struct{} // hostnames with enabled=true in app_source_filters
-	discovered map[string]struct{} // hostnames already upserted in this listener's lifetime (per-process dedupe for connection_sources writes)
+	// filterMu guards enabled, discovered, and lastRefreshAt — all read on
+	// every message or health check. A plain Mutex is fine at the per-message
+	// rate; RWMutex would save a few nanoseconds but complicate the refresh
+	// path.
+	filterMu      sync.Mutex
+	enabled       map[string]struct{} // hostnames with enabled=true in app_source_filters
+	discovered    map[string]struct{} // hostnames already upserted in this listener's lifetime (per-process dedupe for connection_sources writes)
+	lastRefreshAt time.Time           // timestamp of the last successful refreshEnabledSet; zero value when never refreshed
 
 	// initialRefreshDone flips to true once the allow-list has been
 	// successfully loaded at least once. Until then, Health() reports the
@@ -157,11 +160,13 @@ func (s *Syslog) Connect(ctx context.Context) error {
 	return nil
 }
 
-// Health checks whether the listener is still open and has loaded its
-// hostname allow-list at least once. The second check catches the case
-// where the DB was unreachable throughout startup — the TCP listener is up,
-// but every incoming message is silently filtered out, which the UI should
-// surface as "error" rather than "healthy".
+// Health checks whether the listener is still open, has loaded its hostname
+// allow-list at least once, and has refreshed it within the staleness
+// threshold. Without the staleness check, a DB outage that begins *after*
+// startup would leave the cache frozen indefinitely while Health() still
+// reported OK — operators would discover the problem from silent data gaps
+// rather than a paging signal. Staleness threshold is 3× the refresh
+// interval, i.e. two missed ticks.
 func (s *Syslog) Health(ctx context.Context) error {
 	s.mu.Lock()
 	l := s.listener
@@ -171,6 +176,12 @@ func (s *Syslog) Health(ctx context.Context) error {
 	}
 	if !s.initialRefreshDone.Load() {
 		return fmt.Errorf("syslog: hostname allow-list has not loaded yet — incoming messages are being dropped")
+	}
+	s.filterMu.Lock()
+	age := time.Since(s.lastRefreshAt)
+	s.filterMu.Unlock()
+	if age > syslogStaleThreshold {
+		return fmt.Errorf("syslog: hostname allow-list is stale (last refresh %s ago); filters may not reflect recent changes", age.Round(time.Second))
 	}
 	return nil
 }
@@ -504,6 +515,7 @@ func (s *Syslog) refreshEnabledSet(ctx context.Context) error {
 
 	s.filterMu.Lock()
 	s.enabled = next
+	s.lastRefreshAt = time.Now()
 	s.filterMu.Unlock()
 	s.initialRefreshDone.Store(true)
 	return nil
@@ -519,22 +531,47 @@ func (s *Syslog) isEnabled(hostname string) bool {
 }
 
 // discoverHostname upserts a connection_sources row for a newly-seen
-// hostname. Deduped via the in-memory `discovered` map so a sustained
-// stream from one host doesn't translate into an upsert per packet — the
-// DB sees one write per hostname per listener lifetime, after which the
-// map guards the hot path.
+// hostname. Deduped via the in-memory `discovered` map — once a hostname
+// has been successfully recorded, subsequent packets from the same host
+// skip the DB hop.
+//
+// Ordering note (regression fix for the rollback race): the upsert runs
+// BEFORE marking `discovered`, so nothing is ever added to the map until
+// the DB write succeeds. If an earlier version had done "mark, upsert,
+// roll back on error", a concurrent second packet could have observed
+// the marker mid-flight, short-circuited, and — if the first upsert then
+// rolled back — left the host permanently absent from the selector.
+// Under this ordering, concurrent first-arrivals from the same host may
+// each execute the upsert (bounded waste: ON CONFLICT DO UPDATE just
+// bumps last_seen_at), but the DB state is always correct. In steady
+// state, only one message per host per listener lifetime hits the DB.
 func (s *Syslog) discoverHostname(ctx context.Context, hostname string) {
 	s.filterMu.Lock()
-	if _, seen := s.discovered[hostname]; seen {
-		s.filterMu.Unlock()
+	_, seen := s.discovered[hostname]
+	s.filterMu.Unlock()
+	if seen {
 		return
 	}
-	// Bounded cache: at the cap, wipe the whole map and let the new entry
-	// repopulate it. `UpsertConnectionSource` is idempotent (ON CONFLICT DO
-	// UPDATE bumps last_seen_at), so a re-upsert after clearing is cheap —
-	// one extra DB write per active host at each clear. Prefers bounded
-	// memory over perfect dedupe; an attacker spraying forged hostnames
-	// can't exhaust the listener's RAM.
+
+	if _, err := s.queries.UpsertConnectionSource(ctx, db.UpsertConnectionSourceParams{
+		ConnectionID: s.connectionID,
+		SourceName:   hostname,
+	}); err != nil {
+		// Don't mark discovered — leaves the door open for the next packet
+		// from this host to retry. Logged at warn so sustained failures
+		// surface in ops dashboards.
+		slog.Warn("syslog: discovery upsert failed",
+			"err", err, "hostname", hostname, "connection_id", s.connectionID)
+		return
+	}
+
+	// Upsert succeeded — promote to the dedupe map. Bounded cache: at the
+	// cap, wipe the whole map and let the new entry repopulate it. A
+	// re-upsert after clearing is cheap (ON CONFLICT DO UPDATE bumps
+	// last_seen_at), so the trade-off is bounded memory for slightly more
+	// DB writes under hostname sprawl — an attacker spraying forged
+	// hostnames can't exhaust the listener's RAM.
+	s.filterMu.Lock()
 	if len(s.discovered) >= syslogMaxDiscovered {
 		slog.Warn("syslog: discovered-hostname cache at cap, clearing",
 			"cap", syslogMaxDiscovered, "connection_id", s.connectionID)
@@ -542,18 +579,4 @@ func (s *Syslog) discoverHostname(ctx context.Context, hostname string) {
 	}
 	s.discovered[hostname] = struct{}{}
 	s.filterMu.Unlock()
-
-	if _, err := s.queries.UpsertConnectionSource(ctx, db.UpsertConnectionSourceParams{
-		ConnectionID: s.connectionID,
-		SourceName:   hostname,
-	}); err != nil {
-		// Roll back the dedupe entry so a later retry can try again — this
-		// mirrors how the webhook handler surfaces the error without
-		// swallowing it silently.
-		s.filterMu.Lock()
-		delete(s.discovered, hostname)
-		s.filterMu.Unlock()
-		slog.Warn("syslog: discovery upsert failed",
-			"err", err, "hostname", hostname, "connection_id", s.connectionID)
-	}
 }

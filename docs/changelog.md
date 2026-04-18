@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.46.2 — Phase 6 Hardening](#0462--phase-6-hardening-2026-04-18)
 - [0.46.1 — Source Filtering Post-Assessment Hardening](#0461--source-filtering-post-assessment-hardening-2026-04-18)
 - [0.46.0 — Source Filtering & Org-Level Connections](#0460--source-filtering--org-level-connections-2026-04-18)
 - [0.45.2 — Connection Pause / Resume](#0452--connection-pause--resume-2026-04-16)
@@ -121,6 +122,135 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.46.2 — Phase 6 Hardening (2026-04-18)
+
+Second post-assessment pass on the source-filtering overhaul. Four new review agents (backend authz, migrations/schema, syslog runtime, frontend integration) scored 0.46.1 at ~7.5/10 against an 8.5 deploy bar and surfaced twelve items across three severity tiers: two deploy-blockers, three operational-safety issues, six correctness polish, one docs-drift nitpick. This release lands all twelve. ~350 lines of code, 0 schema changes (migrations are immutable once committed), one new deploy runbook, and 39 new unit tests.
+
+**Plan:** `docs/executing/source-filtering-phase6-hardening.md`
+**Runbook:** `docs/runbooks/v0.46.0-deploy.md` + `docs/runbooks/v0.46.0-preflight.sql`
+
+### Migrations stay immutable; protection moves to a deploy runbook
+
+The assessment's top finding was that migration 035 (`connections.org_id NOT NULL` with backfill from `applications.org_id`) has a concurrent-writer race between the `UPDATE` step and the `ALTER COLUMN SET NOT NULL` step — any `INSERT` landing during that window produces a `column "org_id" contains null values` abort. The tempting fix was to edit `035_org_connections.up.sql` in place to add `LOCK TABLE connections IN EXCLUSIVE MODE;` and a pre-flight `DO $$` block. We rejected that: migrations are immutable once committed. Editing an already-applied migration in place causes schema drift between the source file and the `schema_migrations` recorded hash on any environment that ran the old version.
+
+Instead, protection ships as a deploy runbook:
+
+- **`docs/runbooks/v0.46.0-preflight.sql`** — a standalone `DO $$` block that queries `connections LEFT JOIN applications` and raises if any parent app has a NULL `org_id`. Runs idempotently with `psql -f`; exits 3 on failure.
+- **`docs/runbooks/v0.46.0-deploy.md`** — the procedure: check `schema_migrations` for the current version, run the pre-flight if < 35, stop writers (e.g. `fly scale count 0`), run `make migrate-up`, post-migration sanity checks for 035/036/037, restart writers. Also includes rollback guidance for each migration boundary.
+
+The runbook approach works because the race window only exists *during* application of 035. Environments where 035 already passed don't need the LOCK — their migration is already durable. Environments where 035 hasn't run get the protection without modifying any already-committed file.
+
+### Source-name validation: symmetrised across POST/PUT/DELETE
+
+Before this release, `AddSourceFilter` (POST) rejected `len(source_name) > 256`, but `UpdateSourceFilters` (PUT, bulk) and `DeleteSourceFilter` did not. A client could PUT arbitrary-length names straight into the partial index `idx_app_source_filters_app_lookup` and the syslog in-memory allow-list, and null bytes (`\x00`) survived into Postgres TEXT even though they break downstream C-string tooling.
+
+Extracted a `validateSourceName` helper in `source_filters.go` enforcing three rules: non-empty after trim, ≤ 256 characters, no embedded null byte. All three mutating endpoints call it — POST on the single payload, PUT per-item inside the bulk loop (with `sources[i]: ...` error messages so the client knows which entry failed), DELETE on the query param. The PUT also stopped silently skipping empty names; they now return 400 so client bugs surface instead of hiding.
+
+14 unit tests cover the acceptance/rejection surface including unicode names, exact 256-char boundary, null bytes in three positions, and whitespace-only rejection.
+
+### Syslog `Health()` degrades on sustained refresh failure
+
+Phase 5 added `initialRefreshDone atomic.Bool` so `Health()` reported degraded before the first successful allow-list load. But once flipped to `true`, it stayed `true` forever — a DB outage beginning *after* successful startup would leave the cache frozen while `Health()` kept reporting OK. Operators would only notice from silent data gaps.
+
+Added `lastRefreshAt time.Time` guarded by `filterMu`, updated on every successful refresh. `Health()` now fails if `time.Since(lastRefreshAt) > 3 * syslogRefreshInterval` (three minutes — two missed ticks). The background ticker keeps trying indefinitely; once it succeeds, `Health()` recovers on its own. New test `TestSyslogHealth_StalenessTransitions` walks the four states: never-loaded → healthy → stale → healthy-again, with a second `TestSyslogHealth_NoListener` covering the `Close()` → nil listener path.
+
+### Syslog `discoverHostname`: upsert before mark, not after
+
+The previous order was: grab `filterMu`, add hostname to `discovered`, release mutex, run `UpsertConnectionSource`, and on error re-grab the mutex to delete the entry. Concurrent messages arriving during the upsert window observed the entry in `discovered` and short-circuited. If the first upsert then rolled back, those short-circuited messages had already exited without retrying — and if no further message arrived from that host, the hostname was permanently absent from `connection_sources`, invisible to the source selector.
+
+Reordered: check `discovered` under lock, release, run the upsert (DB-side `ON CONFLICT DO UPDATE` makes it idempotent), then grab the lock *again* and add to `discovered` only on success. Nothing goes into the dedupe map until the DB write durably succeeded, so the rollback path is gone entirely. Trade-off: concurrent first-arrivals from the same host may both execute the upsert (ON CONFLICT makes this a cheap `last_seen_at` bump), but in steady state only one message per host per listener lifetime hits the DB.
+
+### `discoverSources` forwards `appId`
+
+`SourceSelector.vue`'s three CRUD helpers threaded `{ appId }` into `?app_id=` query params; `discoverSources` did not. Today this is a no-op for GitHub (discovery is per-connection, not per-app), but it's a latent 403 waiting for the first non-GitHub connector type that needs app-scope authz resolution in its discovery path. Fixed by parameterising `discoverSources` in `sources.ts` the same way as the CRUD helpers and passing `requestOpts.value` from the component.
+
+### `source_name_path`: validation at connection write time
+
+Phase 4's dotted-path extractor (`extractStringByPath`) was deliberately defensive — empty segments, leading/trailing dots, missing keys all return `""` and the ingestion path falls through to the parser default. Defensive is correct for the hot path; what was missing was a write-time check. A typo like `"meta..source"`, `" log_group"`, or `"log group"` configured the extractor to always resolve to `""`, silently disabling filtering with no operator signal beyond drop-by-default everywhere.
+
+Added `validateSourceNamePathConfig` to `connections_validate.go`, called from the `webhook_logs` branch of `validateConnectorConfig`. Rejects leading/trailing dots, consecutive dots, leading/trailing whitespace, and whitespace-inside-segments (would never match a real JSON key). Empty string after trim is treated as "unset" rather than invalid, so users can clear the field by submitting `""`. 22 unit tests cover the rule surface including malformed outer JSON (tolerated — parent helpers own that validation).
+
+### OTLP gains a Scope wizard step
+
+`supportsOrgScope(connType)` returned `true` for both `webhook_logs` and `otlp` as of Phase 4 — the backend fan-out worked end-to-end, and the Phase 2 "OTLP org-scoped rejected" defensive check was removed. But `flows.ts` only inserted the `StepConnectionScope` into the `webhook_logs` flow and the Fly.io drain sub-mode. Users wanting an org-scoped OTLP connection had to call the raw API (`POST /api/connections` with `app_id` omitted and the correct `X-Org-ID` header).
+
+Added the scope step to the OTLP flow in `flows.ts`, mirroring the webhook_logs wiring. The generated payload correctly omits `app_id` when the user picks `'org'`. Manual smoke-test confirms the connection lands with `app_id: null`, the `ORG` corner tag renders on the bubble, and it appears in every app's connection list.
+
+### GitHub install callback: connection_id disambiguation
+
+`ConnectionsPage.vue`'s `?github=installed` branch used `store.connections.find(c => c.type === 'github')` — first match wins. With multiple GitHub App installs per org (rare today, more likely as teams grow), the callback couldn't disambiguate which install just finished. The callback would open the source selector for whichever GitHub connection happened to be first in the list — usually wrong.
+
+Backend side: `GitHubCallback` now threads `resultConnID` through both the update-existing and create-new branches and appends `&connection_id=<uuid>` to the redirect URL.
+
+Frontend side: `ConnectionsPage.vue` prefers `route.query.connection_id` when looking up the target connection and falls back to first-match for backwards compatibility with any callback links in flight from pre-0.46.2 deploys.
+
+### `classifyStaleness` widens to `Date | undefined`
+
+`classifyStaleness` accepted `string | null`, returning `'never'` for null. But `new Date(undefined).getTime()` is `NaN`, and every comparison against `NaN` is `false`, so an `undefined` input (partial server response, test mock, future caller) would silently classify as `'stale'` — a red dot for what should have been a muted "never seen" dot. Widened the signature to `string | Date | null | undefined`, treat `null`/`undefined` identically, accept a raw `Date` instance for test ergonomics, and guard against unparseable date strings via `Number.isFinite()`. 3 new test cases bring the `source.test.ts` suite from 6 → 9 tests.
+
+### Stale index comment in `source_filters.sql`
+
+Docs-drift nitpick: the comment above `ListEnabledSourceNames` claimed the query is "backed by `idx_app_source_filters_lookup`". After migration 037 (Phase 5), that query uses `idx_app_source_filters_app_lookup` — the `(connection_id, app_id) WHERE enabled = true` partial index. The original `idx_app_source_filters_lookup` still exists and serves `ListAppsEnabledForSource`'s org-fan-out. Comment updated to name both indexes and their respective access patterns.
+
+### Page-visibility gate on `SourceSelector` polling
+
+The 10-second polling interval in `SourceSelector.vue` fired regardless of tab visibility. On backgrounded tabs the user can't see the UI, so the requests were pure waste. Added a `document.visibilityState === 'visible'` gate inside the `setInterval` callback (simpler than tearing the interval down on every `visibilitychange`) plus a `visibilitychange` listener that calls `load()` immediately on return so the user doesn't perceive a gap.
+
+### Not changed
+
+- **`InsertIdempotencyResult` outside the batch transaction.** Pre-existing from v0.45.0 (commit `bf5ab77`) — the idempotency cache row is written on the pool connection after `tx.Commit`, so a failed cache write after a successful commit leaves the batch persisted with no replay protection. Phase 6 explicitly leaves this for a dedicated follow-up; it's not introduced by Phases 1–5.
+- **`jsonServerError` hardcoded 500.** Used across dozens of handlers. Phase 5 worked around it for `DiscoverSources`; a broader error-code-hygiene refactor is out of scope here.
+- **Frontend component tests for `SourceSelector.vue`.** Still deferred — the happy-dom + Vitest harness doesn't yet have a pattern for async-polling components, and the biggest frontend regression class (stale refs) is statically caught by `vue-tsc`.
+- **Fan-out batch query for org-scoped routing.** `routeSources` still issues one `ListAppsEnabledForSource` per distinct source name. Acceptable at current scale; flagged in the Phase 2 risk table.
+- **`DiscoverSources` rate limit / cooldown.** The 429 pass-through from Phase 5 gives the client an accurate signal to back off, which is the most important half.
+- **Migration 037 not converted to `CREATE INDEX CONCURRENTLY`.** `app_source_filters` is small today. Flagged to revisit when row count approaches ~100k.
+- **Syslog `atomic.Pointer[map]` for the enabled cache.** Lock contention isn't the current bottleneck; the two-mutex read per message is fine at current QPS.
+- **Syslog octet-counting framing (RFC 6587 §3.4.1).** No user has asked for it.
+
+### Verification
+
+- `go build ./...` — clean
+- `go vet ./...` — clean
+- `npx vue-tsc --noEmit` — clean
+- Backend unit tests (Phase 6 scope): **all pass** (14 `TestValidateSourceName` + 22 `TestValidateSourceNamePathConfig` + 2 new `TestSyslogHealth` = 38 new tests, plus unchanged Phase 1–5 coverage)
+- Frontend tests: **61/61 passing** (up from 58 — 3 new `classifyStaleness` cases for undefined, Date input, and unparseable strings)
+- 11 pre-existing unrelated handler-test failures continue to track separately
+
+### File map
+
+```
+backend/
+  internal/api/handlers/source_filters.go              CHANGED — validateSourceName helper; all three mutating endpoints funnel through it
+  internal/api/handlers/connections_validate.go        CHANGED — validateSourceNamePathConfig for webhook_logs
+  internal/api/handlers/github_install.go              CHANGED — redirect carries &connection_id=<uuid>
+  internal/api/handlers/source_filter_validate_test.go NEW — 14 unit tests for validateSourceName
+  internal/api/handlers/connections_validate_test.go   NEW — 22 unit tests for validateSourceNamePathConfig
+  internal/connectors/logs/syslog.go                   CHANGED — lastRefreshAt + Health() staleness check; discoverHostname reorder (upsert before mark)
+  internal/connectors/logs/syslog_test.go              CHANGED — TestSyslogHealth_StalenessTransitions + TestSyslogHealth_NoListener
+  internal/db/queries/source_filters.sql               CHANGED — index comment corrected to name both partial indexes
+
+frontend/
+  src/api/sources.ts                                   CHANGED — discoverSources accepts SourceRequestOpts
+  src/components/connections/SourceSelector.vue        CHANGED — discoverSources receives appId; visibility-gated polling
+  src/components/connections/wizard/flows.ts           CHANGED — OTLP flow gains StepConnectionScope
+  src/pages/ConnectionsPage.vue                        CHANGED — callback reads connection_id param with first-match fallback
+  src/types/source.ts                                  CHANGED — classifyStaleness accepts Date | undefined; NaN-guard
+  src/types/__tests__/source.test.ts                   CHANGED — 3 new cases (undefined, Date instance, unparseable string)
+
+docs/
+  runbooks/v0.46.0-deploy.md                           NEW — deploy procedure with pre-flight + stop-writers + post-migration checks + rollback
+  runbooks/v0.46.0-preflight.sql                       NEW — standalone orphan-org_id check
+  executing/source-filtering-phase6-hardening.md       NEW — the Phase 6 plan with three-tier structure + Tier 4 backlog
+```
+
+### Status
+
+Source-filtering ships at the 8.5/10 bar. Phases 1–5 built the feature; 0.46.1 closed the first review's findings; 0.46.2 closes the second review's findings. Tier 4 backlog items (idempotency-outside-tx, jsonServerError refactor, fan-out batching, component tests, atomic.Pointer for syslog enabled, CONCURRENTLY for 037) are tracked in the Phase 6 plan's "Deferred tech debt" table and will land on motivating signal rather than speculative schedule.
+
+Ready to ship.
 
 ---
 

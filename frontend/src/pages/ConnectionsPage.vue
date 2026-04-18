@@ -84,14 +84,20 @@ onMounted(async () => {
   // Handle ?github=installed redirect from callback.
   if (route.query.github === 'installed') {
     githubInstalledMessage.value = 'GitHub App installed successfully. Select which repositories Heimdall can access.'
-    // Find the newly created GitHub connection and open the source selector
-    // in discoverable mode (same UX as clicking "Repos" from the detail modal).
-    const ghConn = store.connections.find(c => c.type === 'github')
+    // Prefer the explicit connection_id param (Phase 6 Tier 3.4) so we open
+    // the selector for the exact install that just finished, even when the
+    // user has multiple GitHub connections. Falls back to first-match for
+    // backwards compatibility with older callback links in flight.
+    const targetId =
+      typeof route.query.connection_id === 'string' ? route.query.connection_id : undefined
+    const ghConn = targetId
+      ? store.connections.find(c => c.id === targetId && c.type === 'github')
+      : store.connections.find(c => c.type === 'github')
     if (ghConn) {
       sourceSelectorDiscoverable.value = true
       sourceSelectorConnectionId.value = ghConn.id
     }
-    // Clean up query param.
+    // Clean up query params.
     router.replace({ query: {} })
   }
 })

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,6 +16,29 @@ import (
 	"github.com/hejijunhao/heimdall/backend/internal/api/middleware"
 	"github.com/hejijunhao/heimdall/backend/internal/db"
 )
+
+// validateSourceName enforces the shared constraints on user-supplied
+// source names across POST/PUT/DELETE paths: non-empty after trim, ≤ 256
+// chars, no embedded null byte. A null byte in source_name would survive
+// Postgres TEXT but break downstream tooling that treats strings as
+// C-strings, and would land in the partial index and the syslog in-memory
+// allow-list. Rejecting at the handler keeps those layers clean.
+//
+// Returns the trimmed name and nil on success, or an empty string and an
+// HTTP 400-suitable error describing the violation.
+func validateSourceName(raw string) (string, error) {
+	name := strings.TrimSpace(raw)
+	if name == "" {
+		return "", errors.New("source_name is required")
+	}
+	if len(name) > 256 {
+		return "", errors.New("source_name exceeds 256 characters")
+	}
+	if strings.ContainsRune(name, 0) {
+		return "", errors.New("source_name contains null byte")
+	}
+	return name, nil
+}
 
 // resolveSourceFilterApp returns the app_id that a source-filter request
 // should operate on, along with the HTTP status code to return on failure.
@@ -239,10 +263,11 @@ func (s *Server) UpdateSourceFilters(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	for _, item := range req.Sources {
-		name := strings.TrimSpace(item.SourceName)
-		if name == "" {
-			continue
+	for i, item := range req.Sources {
+		name, err := validateSourceName(item.SourceName)
+		if err != nil {
+			jsonError(w, "sources["+strconv.Itoa(i)+"]: "+err.Error(), http.StatusBadRequest)
+			return
 		}
 		if _, err := queries.UpsertAppSourceFilter(r.Context(), db.UpsertAppSourceFilterParams{
 			AppID:        appID,
@@ -295,13 +320,9 @@ func (s *Server) AddSourceFilter(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	name := strings.TrimSpace(req.SourceName)
-	if name == "" {
-		jsonError(w, "source_name is required", http.StatusBadRequest)
-		return
-	}
-	if len(name) > 256 {
-		jsonError(w, "source_name exceeds 256 characters", http.StatusBadRequest)
+	name, err := validateSourceName(req.SourceName)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -386,9 +407,9 @@ func (s *Server) DeleteSourceFilter(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	name := strings.TrimSpace(r.URL.Query().Get("name"))
-	if name == "" {
-		jsonError(w, "name query parameter is required", http.StatusBadRequest)
+	name, err := validateSourceName(r.URL.Query().Get("name"))
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
