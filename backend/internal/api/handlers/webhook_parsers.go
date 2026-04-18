@@ -593,10 +593,16 @@ func parseVectorFlyEntry(raw []byte) (webhookLogRequest, error) {
 		return webhookLogRequest{}, err
 	}
 
-	// Build source type from Fly metadata.
+	// Build source type from Fly metadata. The per-app source name (used as
+	// the filter key in app_source_filters) is the bare app name — "trajan"
+	// rather than "flyio/trajan" — so users see their Fly app names unchanged
+	// in the source selector. Falls back to source_type when fly metadata is
+	// absent (non-shipper Vector senders).
 	sourceType := "flyio"
+	sourceName := ""
 	if entry.Fly != nil && entry.Fly.App.Name != "" {
 		sourceType = "flyio/" + entry.Fly.App.Name
+		sourceName = entry.Fly.App.Name
 	} else if entry.SourceType != "" {
 		sourceType = entry.SourceType
 	}
@@ -634,6 +640,7 @@ func parseVectorFlyEntry(raw []byte) (webhookLogRequest, error) {
 		SourceType: sourceType,
 		Severity:   severity,
 		Payload:    payloadJSON,
+		SourceName: sourceName,
 	}, nil
 }
 

@@ -33,11 +33,6 @@ func (a *Agent) emitLog(ctx context.Context, userID uuid.UUID, appID *uuid.UUID,
 		}
 	}
 
-	var convID pgtype.UUID
-	if conversationID != nil {
-		convID = pgtype.UUID{Bytes: *conversationID, Valid: true}
-	}
-
 	var sev pgtype.Text
 	if severity != "" {
 		sev = pgtype.Text{String: severity, Valid: true}
@@ -54,7 +49,7 @@ func (a *Agent) emitLog(ctx context.Context, userID uuid.UUID, appID *uuid.UUID,
 		Summary:        summary,
 		Detail:         detailBytes,
 		Severity:       sev,
-		ConversationID: convID,
+		ConversationID: conversationID,
 		AppID:          appUUID,
 	})
 	if err != nil {

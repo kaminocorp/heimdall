@@ -71,7 +71,7 @@ func (s *Server) TestConnection(w http.ResponseWriter, r *http.Request) {
 			result = testResult{Success: true, Message: "Connection established"}
 		}
 	case "supabase":
-		sb, err := logs.NewSupabase(conn.Config, conn.ID, userID, conn.AppID)
+		sb, err := logs.NewSupabase(conn.Config, conn.ID, userID, appIDOrZero(conn.AppID))
 		if err != nil {
 			slog.Error("connection test failed", "connection_id", connID, "err", err)
 			result = testResult{Success: false, Message: "Invalid configuration. Check your settings."}
@@ -94,7 +94,7 @@ func (s *Server) TestConnection(w http.ResponseWriter, r *http.Request) {
 			result = testResult{Success: false, Message: "GitHub App not configured on server"}
 		}
 	case "flyio":
-		f, err := logs.NewFlyio(conn.Config, conn.ID, userID, conn.AppID)
+		f, err := logs.NewFlyio(conn.Config, conn.ID, userID, appIDOrZero(conn.AppID))
 		if err != nil {
 			slog.Error("connection test failed", "connection_id", connID, "err", err)
 			result = testResult{Success: false, Message: "Invalid configuration. Check your settings."}
@@ -110,7 +110,7 @@ func (s *Server) TestConnection(w http.ResponseWriter, r *http.Request) {
 			result = testResult{Success: true, Message: "Connected to Fly.io Machines API"}
 		}
 	case "vercel":
-		v, err := logs.NewVercel(conn.Config, conn.ID, userID, conn.AppID)
+		v, err := logs.NewVercel(conn.Config, conn.ID, userID, appIDOrZero(conn.AppID))
 		if err != nil {
 			slog.Error("connection test failed", "connection_id", connID, "err", err)
 			result = testResult{Success: false, Message: "Invalid configuration. Check your settings."}
@@ -126,7 +126,7 @@ func (s *Server) TestConnection(w http.ResponseWriter, r *http.Request) {
 			result = testResult{Success: true, Message: "Connected to Vercel API"}
 		}
 	case "railway":
-		rl, err := logs.NewRailway(conn.Config, conn.ID, userID, conn.AppID)
+		rl, err := logs.NewRailway(conn.Config, conn.ID, userID, appIDOrZero(conn.AppID))
 		if err != nil {
 			slog.Error("connection test failed", "connection_id", connID, "err", err)
 			result = testResult{Success: false, Message: "Invalid configuration. Check your settings."}
@@ -142,7 +142,7 @@ func (s *Server) TestConnection(w http.ResponseWriter, r *http.Request) {
 			result = testResult{Success: true, Message: "Connected to Railway GraphQL API"}
 		}
 	case "mongodb":
-		mg, err := logs.NewMongoDB(conn.Config, conn.ID, userID, conn.AppID)
+		mg, err := logs.NewMongoDB(conn.Config, conn.ID, userID, appIDOrZero(conn.AppID))
 		if err != nil {
 			slog.Error("connection test failed", "connection_id", connID, "err", err)
 			result = testResult{Success: false, Message: "Invalid configuration. Check your settings."}
@@ -158,7 +158,7 @@ func (s *Server) TestConnection(w http.ResponseWriter, r *http.Request) {
 			result = testResult{Success: true, Message: "Connected to MongoDB Atlas API"}
 		}
 	case "syslog":
-		sl, err := logs.NewSyslog(conn.Config, conn.ID, userID, conn.AppID, s.Queries)
+		sl, err := logs.NewSyslog(conn.Config, conn.ID, userID, appIDOrZero(conn.AppID), s.Queries)
 		if err != nil {
 			slog.Error("connection test failed", "connection_id", connID, "err", err)
 			result = testResult{Success: false, Message: "Invalid configuration. Check your settings."}

@@ -73,12 +73,28 @@ func (s *Server) GetConnection(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(conn)
 }
 
+// createConnectionRequest accepts either an app_id (app-scoped, the Phase 1
+// behaviour) or omits it to create an org-scoped connection that's visible to
+// every app in the caller's currently active org. The org itself is resolved
+// server-side via resolveOrgForUser (X-Org-ID header or user's primary org).
 type createConnectionRequest struct {
 	AppID     string          `json:"app_id"`
 	Name      string          `json:"name"`
 	Type      string          `json:"type"`
 	Direction string          `json:"direction"`
 	Config    json.RawMessage `json:"config"`
+}
+
+// appIDOrZero returns the AppID from a Connection, or uuid.Nil for org-scoped
+// connections. Used when passing the id into connector APIs that always
+// expect a concrete UUID — which in practice only run for pull-style connection
+// types (postgres, supabase, syslog, flyio polling, etc.) that are exclusively
+// app-scoped today.
+func appIDOrZero(p *uuid.UUID) uuid.UUID {
+	if p == nil {
+		return uuid.Nil
+	}
+	return *p
 }
 
 func (s *Server) CreateConnection(w http.ResponseWriter, r *http.Request) {
@@ -94,8 +110,8 @@ func (s *Server) CreateConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Name == "" || req.Type == "" || req.AppID == "" {
-		jsonError(w, "app_id, name and type are required", http.StatusBadRequest)
+	if req.Name == "" || req.Type == "" {
+		jsonError(w, "name and type are required", http.StatusBadRequest)
 		return
 	}
 	if !isValidConnectionType(req.Type) {
@@ -107,10 +123,39 @@ func (s *Server) CreateConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	appID, err := uuid.Parse(req.AppID)
-	if err != nil {
-		jsonError(w, "invalid app_id", http.StatusBadRequest)
-		return
+	// Resolve scope. Two valid modes:
+	//   - app_id provided → app-scoped connection (Phase 1 behaviour)
+	//   - app_id omitted  → org-scoped connection (Phase 2 addition),
+	//     shared across every app in the caller's active org
+	//
+	// Org is always resolved via X-Org-ID header (or primary org fallback)
+	// so the server doesn't trust client-supplied org_id. We derive org_id
+	// from the application itself when app-scoped, and from
+	// resolveOrgForUser when org-scoped.
+	var appID *uuid.UUID
+	var orgID uuid.UUID
+	if req.AppID != "" {
+		parsed, err := uuid.Parse(req.AppID)
+		if err != nil {
+			jsonError(w, "invalid app_id", http.StatusBadRequest)
+			return
+		}
+		appID = &parsed
+	} else {
+		// Org-scoping only makes sense for connection types that can receive
+		// logs from many sources — a single Postgres instance or GitHub org
+		// always binds to one Heimdall app. The wizard hides the option for
+		// non-eligible types; the backend enforces it defensively.
+		if !supportsOrgScope(req.Type) {
+			jsonError(w, "this connection type must be app-scoped — include app_id", http.StatusBadRequest)
+			return
+		}
+		org, _, err := s.resolveOrgForUser(r, userID)
+		if err != nil {
+			jsonError(w, "organization not found", http.StatusNotFound)
+			return
+		}
+		orgID = org.ID
 	}
 
 	direction := req.Direction
@@ -124,6 +169,7 @@ func (s *Server) CreateConnection(w http.ResponseWriter, r *http.Request) {
 
 	// Validate connector config eagerly — before DB insert — to prevent
 	// creating orphaned connections that can't start polling.
+	var err error
 	config, err = s.validateConnectorConfig(req.Type, config)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusBadRequest)
@@ -163,19 +209,23 @@ func (s *Server) CreateConnection(w http.ResponseWriter, r *http.Request) {
 	}
 	defer done()
 
-	// Verify the app belongs to the authenticated user's org inside the
-	// transaction to avoid a TOCTOU gap between the auth check and the write.
-	_, err = queries.GetApplicationByOrgUser(r.Context(), db.GetApplicationByOrgUserParams{
-		AppID:  appID,
-		UserID: userID,
-	})
-	if err != nil {
-		jsonError(w, "application not found", http.StatusNotFound)
-		return
+	// App-scoped: verify app belongs to the user's org inside the tx (no
+	// TOCTOU gap). The app's org becomes the connection's org.
+	if appID != nil {
+		app, err := queries.GetApplicationByOrgUser(r.Context(), db.GetApplicationByOrgUserParams{
+			AppID:  *appID,
+			UserID: userID,
+		})
+		if err != nil {
+			jsonError(w, "application not found", http.StatusNotFound)
+			return
+		}
+		orgID = app.OrgID
 	}
 
 	conn, err := queries.CreateConnection(r.Context(), db.CreateConnectionParams{
 		UserID:    userID,
+		OrgID:     orgID,
 		AppID:     appID,
 		Name:      req.Name,
 		Type:      req.Type,
@@ -188,14 +238,17 @@ func (s *Server) CreateConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Start polling goroutines for poll-based connectors.
-	if err := connectors.StartPoller(s.Poller, req.Type, config, conn.ID, userID, conn.AppID); err != nil {
+	// Start polling goroutines for poll-based connectors. Org-scoped
+	// connections (appID == nil) are webhook-only in practice — the pull
+	// connectors below require a concrete app context, so StartPoller / the
+	// syslog branch simply no-op for them via appIDOrZero == uuid.Nil.
+	if err := connectors.StartPoller(s.Poller, req.Type, config, conn.ID, userID, appIDOrZero(conn.AppID)); err != nil {
 		slog.Error("poller init failed", "type", req.Type, "connection_id", conn.ID, "err", err)
 	}
 
 	// Start listener for syslog connections.
 	if req.Type == "syslog" {
-		sl, err := logs.NewSyslog(config, conn.ID, userID, conn.AppID, s.Queries)
+		sl, err := logs.NewSyslog(config, conn.ID, userID, appIDOrZero(conn.AppID), s.Queries)
 		if err != nil {
 			slog.Error("syslog listener init failed", "connection_id", conn.ID, "err", err)
 			conn.Status = "error"
@@ -219,6 +272,20 @@ func (s *Server) CreateConnection(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(conn)
+}
+
+// supportsOrgScope returns true for connection types where it makes sense to
+// have one connection feed multiple apps — i.e. the stream carries logs from
+// more than one source that the user subsequently partitions per-app via
+// source filters. Tight-scoped agent tools (postgres, github, etc.) always
+// bind to a single app.
+func supportsOrgScope(connType string) bool {
+	switch connType {
+	case "webhook_logs", "otlp":
+		return true
+	default:
+		return false
+	}
 }
 
 type updateConnectionRequest struct {
@@ -353,12 +420,12 @@ func (s *Server) UpdateConnection(w http.ResponseWriter, r *http.Request) {
 	s.Listener.Stop(connID)
 
 	if status != "paused" {
-		if err := connectors.StartPoller(s.Poller, req.Type, config, conn.ID, userID, conn.AppID); err != nil {
+		if err := connectors.StartPoller(s.Poller, req.Type, config, conn.ID, userID, appIDOrZero(conn.AppID)); err != nil {
 			slog.Error("poller init failed", "type", req.Type, "connection_id", conn.ID, "err", err)
 		}
 
 		if req.Type == "syslog" {
-			sl, err := logs.NewSyslog(config, conn.ID, userID, conn.AppID, s.Queries)
+			sl, err := logs.NewSyslog(config, conn.ID, userID, appIDOrZero(conn.AppID), s.Queries)
 			if err != nil {
 				slog.Error("syslog listener init failed", "connection_id", conn.ID, "err", err)
 				conn.Status = "error"

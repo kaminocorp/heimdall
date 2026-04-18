@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -14,6 +15,36 @@ import (
 	"github.com/hejijunhao/heimdall/backend/internal/api/middleware"
 	"github.com/hejijunhao/heimdall/backend/internal/db"
 )
+
+// TestGitHubConnection tests a GitHub connection by checking that the stored
+// installation id is still valid (i.e. GitHub still grants us an installation
+// token). Returns a user-facing message rather than an error so the caller
+// can render it verbatim in the connection-test modal.
+//
+// Lives here rather than in a github_repos.go file because that file was
+// removed with the github_repos table in migration 036; github_install.go
+// already owns GitHub-specific handler code.
+func (s *Server) TestGitHubConnection(ctx context.Context, connConfig json.RawMessage) (bool, string) {
+	if s.GitHub == nil {
+		return false, "GitHub App not configured"
+	}
+
+	var cfg map[string]any
+	if err := json.Unmarshal(connConfig, &cfg); err != nil {
+		return false, "invalid connection config"
+	}
+
+	installationID, ok := cfg["installation_id"].(float64)
+	if !ok {
+		return false, "missing installation_id in config"
+	}
+
+	if _, err := s.GitHub.InstallationTokenFor(ctx, int64(installationID)); err != nil {
+		return false, fmt.Sprintf("GitHub auth failed: %v", err)
+	}
+
+	return true, "GitHub connection active"
+}
 
 // InstallGitHub returns a URL that redirects the user to install the GitHub App.
 func (s *Server) InstallGitHub(w http.ResponseWriter, r *http.Request) {
@@ -138,7 +169,7 @@ func (s *Server) GitHubCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	defer done()
 
-	_, err = queries.GetApplicationByOrgUser(r.Context(), db.GetApplicationByOrgUserParams{
+	app, err := queries.GetApplicationByOrgUser(r.Context(), db.GetApplicationByOrgUserParams{
 		AppID:  appID,
 		UserID: userID,
 	})
@@ -213,10 +244,13 @@ func (s *Server) GitHubCallback(w http.ResponseWriter, r *http.Request) {
 		slog.Info("github callback: updated existing connection",
 			"connection_id", existingConnID, "installation_id", installationID, "setup_action", setupAction)
 	} else {
-		// Create new connection.
+		// Create new connection. GitHub is always app-scoped — code search
+		// binds to one app at a time, so there's no meaningful org-wide mode
+		// to opt into here.
 		conn, err := queries.CreateConnection(r.Context(), db.CreateConnectionParams{
 			UserID:    userID,
-			AppID:     appID,
+			OrgID:     app.OrgID,
+			AppID:     &appID,
 			Name:      fmt.Sprintf("GitHub: %s", accountLogin),
 			Type:      "github",
 			Direction: "two_way",

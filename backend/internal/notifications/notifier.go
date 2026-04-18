@@ -95,7 +95,7 @@ func (d *Dispatcher) dispatchToChannel(ctx context.Context, ch db.NotificationCh
 	logEntry, err := d.queries.InsertNotificationLog(ctx, db.InsertNotificationLogParams{
 		AppID:      appID,
 		ChannelID:  ch.ID,
-		AgentLogID: pgtype.UUID{Bytes: agentLogID, Valid: true},
+		AgentLogID: &agentLogID,
 		Severity:   p.Severity,
 		Summary:    p.Summary,
 		Status:     "pending",

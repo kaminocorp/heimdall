@@ -9,7 +9,7 @@ import { typeToCategory, type ConnectionCategory } from '@/components/connection
 import ConnectionForm from '@/components/connections/ConnectionForm.vue'
 import ConnectionTestModal from '@/components/connections/ConnectionTestModal.vue'
 import ConnectionWizard from '@/components/connections/wizard/ConnectionWizard.vue'
-import GitHubRepoSelector from '@/components/connections/GitHubRepoSelector.vue'
+import SourceSelector from '@/components/connections/SourceSelector.vue'
 import AgentNebula from '@/components/connections/AgentNebula.vue'
 import ConnectionBubble from '@/components/connections/ConnectionBubble.vue'
 import ConnectionDetailModal from '@/components/connections/ConnectionDetailModal.vue'
@@ -24,7 +24,11 @@ const showForm = ref(false)
 const showWizard = ref(false)
 const editingConnection = ref<Connection | null>(null)
 const actionError = ref<string | null>(null)
-const repoSelectorConnectionId = ref<string | null>(null)
+const sourceSelectorConnectionId = ref<string | null>(null)
+// Whether the currently open SourceSelector should be in discoverable mode
+// (GitHub). Derived from the connection type at open time so we don't
+// reactively flip mid-use.
+const sourceSelectorDiscoverable = ref(false)
 const githubInstalledMessage = ref<string | null>(null)
 const testModalConnection = ref<Connection | null>(null)
 const selectedConnection = ref<Connection | null>(null)
@@ -80,10 +84,12 @@ onMounted(async () => {
   // Handle ?github=installed redirect from callback.
   if (route.query.github === 'installed') {
     githubInstalledMessage.value = 'GitHub App installed successfully. Select which repositories Heimdall can access.'
-    // Find the newly created GitHub connection and open repo selector.
+    // Find the newly created GitHub connection and open the source selector
+    // in discoverable mode (same UX as clicking "Repos" from the detail modal).
     const ghConn = store.connections.find(c => c.type === 'github')
     if (ghConn) {
-      repoSelectorConnectionId.value = ghConn.id
+      sourceSelectorDiscoverable.value = true
+      sourceSelectorConnectionId.value = ghConn.id
     }
     // Clean up query param.
     router.replace({ query: {} })
@@ -172,12 +178,21 @@ async function handleDelete(id: string) {
   }
 }
 
-function openRepoSelector(connectionId: string) {
-  repoSelectorConnectionId.value = connectionId
+function openSourceSelector(connectionId: string) {
+  // Discoverable mode is picked from the connection's type at open time —
+  // GitHub connections need the sync + no-manual-add UX; webhook/Fly.io
+  // drains don't.
+  const conn = store.connections.find(c => c.id === connectionId)
+  sourceSelectorDiscoverable.value = conn?.type === 'github'
+  sourceSelectorConnectionId.value = connectionId
 }
 
-function closeRepoSelector() {
-  repoSelectorConnectionId.value = null
+function closeSourceSelector() {
+  sourceSelectorConnectionId.value = null
+  sourceSelectorDiscoverable.value = false
+  // Clear the install banner if it was still visible from the GitHub
+  // callback redirect — we used to do this on closeRepoSelector; the
+  // source selector now owns the post-install flow too.
   githubInstalledMessage.value = null
   fetchAppConnections()
 }
@@ -209,12 +224,17 @@ function closeRepoSelector() {
       {{ actionError }}
     </div>
 
-    <!-- Repo selector -->
-    <GitHubRepoSelector
-      v-if="repoSelectorConnectionId"
-      :connection-id="repoSelectorConnectionId"
+    <!-- Source selector — unified across webhook and GitHub connections in
+         Phase 3. `discoverable` flips the UX for GitHub (manual sync + no
+         free-form add). For org-scoped connections `appId` ensures the
+         backend filters for the currently visible Heimdall app. -->
+    <SourceSelector
+      v-if="sourceSelectorConnectionId"
+      :connection-id="sourceSelectorConnectionId"
+      :app-id="appStore.currentAppId ?? undefined"
+      :discoverable="sourceSelectorDiscoverable"
       class="mb-6"
-      @close="closeRepoSelector"
+      @close="closeSourceSelector"
     />
 
     <ConnectionForm
@@ -335,7 +355,7 @@ function closeRepoSelector() {
       @delete="(id) => { selectedConnection = null; handleDelete(id) }"
       @pause="(id) => { selectedConnection = null; handlePause(id) }"
       @resume="(id) => { selectedConnection = null; handleResume(id) }"
-      @manage-repos="(id) => { selectedConnection = null; openRepoSelector(id) }"
+      @manage-sources="(id) => { selectedConnection = null; openSourceSelector(id) }"
     />
 
     <!-- Connection test modal -->
@@ -350,7 +370,7 @@ function closeRepoSelector() {
       v-if="showWizard"
       @close="closeWizard"
       @created="closeWizard"
-      @manage-repos="(id: string) => { closeWizard(); openRepoSelector(id) }"
+      @manage-sources="(id: string) => { closeWizard(); openSourceSelector(id) }"
     />
   </div>
 </template>

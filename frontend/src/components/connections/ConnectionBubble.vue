@@ -69,6 +69,15 @@ const statusGlow = computed(() => {
       <span class="bubble-type">{{ displayType }}</span>
     </div>
 
+    <!-- Org-wide indicator: small "ORG" tag in the top-left corner for
+         connections that span every app in the org. Kept subtle so it
+         doesn't fight for attention with the status dot. -->
+    <span
+      v-if="connection.app_id === null"
+      class="bubble-orgwide"
+      title="Org-wide connection — available to all apps"
+    >ORG</span>
+
     <!-- Status dot -->
     <span
       class="bubble-status"
@@ -194,6 +203,21 @@ const statusGlow = computed(() => {
   width: 6px;
   height: 6px;
   border-radius: 50%;
+}
+
+.bubble-orgwide {
+  position: absolute;
+  top: 0.4rem;
+  left: 0.4rem;
+  padding: 0.05rem 0.3rem;
+  font-family: var(--font-mono);
+  font-size: 0.55rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  border-radius: 0.2rem;
+  line-height: 1;
 }
 
 .bubble-testing-label {

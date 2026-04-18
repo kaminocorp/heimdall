@@ -21,7 +21,7 @@ RETURNING id, investigation_id, title, messages, created_at, updated_at, user_id
 
 type CreateConversationParams struct {
 	UserID          uuid.UUID       `json:"user_id"`
-	InvestigationID pgtype.UUID     `json:"investigation_id"`
+	InvestigationID *uuid.UUID      `json:"investigation_id"`
 	Title           pgtype.Text     `json:"title"`
 	Messages        json.RawMessage `json:"messages"`
 }

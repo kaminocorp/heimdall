@@ -67,6 +67,7 @@ const StepOTLPSetup = defineAsyncComponent(() => import('./steps/StepOTLPSetup.v
 const StepFlyioMode = defineAsyncComponent(() => import('./steps/StepFlyioMode.vue'))
 const StepFlyioAuth = defineAsyncComponent(() => import('./steps/StepFlyioAuth.vue'))
 const StepFlyioDrainSetup = defineAsyncComponent(() => import('./steps/StepFlyioDrainSetup.vue'))
+const StepConnectionScope = defineAsyncComponent(() => import('./steps/StepConnectionScope.vue'))
 
 export const flows: PlatformFlow[] = [
   // ── Platform log sources ─────────────────────────────
@@ -101,6 +102,10 @@ export const flows: PlatformFlow[] = [
     steps: [
       { id: 'name', label: 'Name', component: StepName },
       { id: 'flyio_mode', label: 'Mode', component: StepFlyioMode },
+      // Scope step is only shown in drain mode — polling is intrinsically
+      // app-scoped (one Fly app → one connection). Filtered out by
+      // getFlyioSteps when mode === 'polling'.
+      { id: 'scope', label: 'Scope', component: StepConnectionScope },
       { id: 'flyio_auth', label: 'Auth', component: StepFlyioAuth },
       { id: 'flyio_drain', label: 'Setup', component: StepFlyioDrainSetup },
       { id: 'test', label: 'Test', component: StepTest },
@@ -193,6 +198,7 @@ export const flows: PlatformFlow[] = [
     available: true,
     steps: [
       { id: 'name', label: 'Name', component: StepName },
+      { id: 'scope', label: 'Scope', component: StepConnectionScope },
       { id: 'setup', label: 'Setup', component: StepWebhookSetup },
     ],
   },
@@ -332,14 +338,17 @@ export function getFlowById(id: string): PlatformFlow | undefined {
 
 /**
  * Returns the visible steps for a Fly.io flow based on mode selection.
- * - Drain mode:    Name → Mode → Drain Setup (connection created before this step)
+ * - Drain mode:    Name → Mode → Scope → Drain Setup
+ *                  (connection created before Drain Setup)
  * - Polling mode:  Name → Mode → Auth (credentials) → Test
+ *                  (no Scope step — polling is intrinsically app-scoped)
  */
 export function getFlyioSteps(flow: PlatformFlow, mode: 'drain' | 'polling'): FlowStep[] {
   if (flow.id !== 'flyio') return flow.steps
   return flow.steps.filter(s => {
     if (mode === 'drain') return s.id !== 'flyio_auth' && s.id !== 'test'
-    return s.id !== 'flyio_drain'
+    // Polling mode: strip Scope + Drain Setup; it's a single-app API client.
+    return s.id !== 'flyio_drain' && s.id !== 'scope'
   })
 }
 

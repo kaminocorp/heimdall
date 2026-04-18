@@ -18,7 +18,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   close: []
   created: [connectionId: string]
-  'manage-repos': [connectionId: string]
+  'manage-sources': [connectionId: string]
 }>()
 
 const store = useConnectionsStore()
@@ -105,7 +105,7 @@ function selectPlatform(flowId: string) {
   if (flowId === 'github') {
     const existing = store.connections.find(c => c.type === 'github')
     if (existing) {
-      emit('manage-repos', existing.id)
+      emit('manage-sources', existing.id)
       emit('close')
       return
     }
@@ -153,10 +153,16 @@ async function createConnection() {
   error.value = null
 
   try {
-    // Strip wizard-only keys (e.g. flyio_mode) before sending to backend.
-    const { flyio_mode: _, ...cleanConfig } = state.config
+    // Strip wizard-only keys (flyio_mode, __scope) before sending to backend.
+    // __scope controls whether app_id is sent — the server treats the absence
+    // of app_id as "create an org-scoped connection" (see backend
+    // CreateConnection / supportsOrgScope).
+    const { flyio_mode: _mode, __scope, ...cleanConfig } = state.config
+    const scope = (__scope as 'app' | 'org' | undefined) ?? 'app'
     const conn = await store.createConnection({
-      app_id: targetAppId.value,
+      // Omit app_id entirely for org-scoped — sending "" or null would be a
+      // validation error on the backend.
+      ...(scope === 'org' ? {} : { app_id: targetAppId.value }),
       name: state.name,
       type: effectiveConnectorType.value,
       direction: selectedFlow.value.direction,

@@ -74,7 +74,7 @@ type AgentLog struct {
 	Summary        string          `json:"summary"`
 	Detail         json.RawMessage `json:"detail"`
 	Severity       pgtype.Text     `json:"severity"`
-	ConversationID pgtype.UUID     `json:"conversation_id"`
+	ConversationID *uuid.UUID      `json:"conversation_id"`
 	CreatedAt      time.Time       `json:"created_at"`
 	AppID          uuid.UUID       `json:"app_id"`
 }
@@ -88,6 +88,15 @@ type AppAgentConfig struct {
 	CreatedAt            time.Time   `json:"created_at"`
 	UpdatedAt            time.Time   `json:"updated_at"`
 	Provider             string      `json:"provider"`
+}
+
+type AppSourceFilter struct {
+	ID           uuid.UUID `json:"id"`
+	AppID        uuid.UUID `json:"app_id"`
+	ConnectionID uuid.UUID `json:"connection_id"`
+	SourceName   string    `json:"source_name"`
+	Enabled      bool      `json:"enabled"`
+	CreatedAt    time.Time `json:"created_at"`
 }
 
 type Application struct {
@@ -110,27 +119,26 @@ type Connection struct {
 	CreatedAt time.Time       `json:"created_at"`
 	UpdatedAt time.Time       `json:"updated_at"`
 	UserID    uuid.UUID       `json:"user_id"`
-	AppID     uuid.UUID       `json:"app_id"`
+	AppID     *uuid.UUID      `json:"app_id"`
+	OrgID     uuid.UUID       `json:"org_id"`
+}
+
+type ConnectionSource struct {
+	ID           uuid.UUID `json:"id"`
+	ConnectionID uuid.UUID `json:"connection_id"`
+	SourceName   string    `json:"source_name"`
+	FirstSeenAt  time.Time `json:"first_seen_at"`
+	LastSeenAt   time.Time `json:"last_seen_at"`
 }
 
 type Conversation struct {
 	ID              uuid.UUID       `json:"id"`
-	InvestigationID pgtype.UUID     `json:"investigation_id"`
+	InvestigationID *uuid.UUID      `json:"investigation_id"`
 	Title           pgtype.Text     `json:"title"`
 	Messages        json.RawMessage `json:"messages"`
 	CreatedAt       time.Time       `json:"created_at"`
 	UpdatedAt       time.Time       `json:"updated_at"`
 	UserID          uuid.UUID       `json:"user_id"`
-}
-
-type GithubRepo struct {
-	ID            uuid.UUID `json:"id"`
-	ConnectionID  uuid.UUID `json:"connection_id"`
-	RepoFullName  string    `json:"repo_full_name"`
-	RepoID        int64     `json:"repo_id"`
-	DefaultBranch string    `json:"default_branch"`
-	Enabled       bool      `json:"enabled"`
-	CreatedAt     time.Time `json:"created_at"`
 }
 
 type Investigation struct {
@@ -197,7 +205,7 @@ type NotificationLog struct {
 	ID           uuid.UUID   `json:"id"`
 	AppID        uuid.UUID   `json:"app_id"`
 	ChannelID    uuid.UUID   `json:"channel_id"`
-	AgentLogID   pgtype.UUID `json:"agent_log_id"`
+	AgentLogID   *uuid.UUID  `json:"agent_log_id"`
 	Severity     string      `json:"severity"`
 	Summary      string      `json:"summary"`
 	Status       string      `json:"status"`

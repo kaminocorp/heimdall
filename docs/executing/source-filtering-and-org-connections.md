@@ -1,6 +1,6 @@
 # Source Filtering & Org-Level Connections
 
-**Status:** Not started
+**Status:** Complete — all four phases shipped. See `docs/completions/source-filtering-phase{1,2,3,4}.md`.
 **Owner:** TBD
 **Prereqs:** None — phases are independently shippable
 
@@ -68,7 +68,7 @@ Three changes to the database:
 #### 1. Connection Scoping: `org_id` column + nullable `app_id`
 
 ```sql
--- Migration 033: Add org-level connection support
+-- Migration 035: Add org-level connection support
 ALTER TABLE connections ADD COLUMN org_id UUID REFERENCES organizations(id);
 ALTER TABLE connections ALTER COLUMN app_id DROP NOT NULL;
 
@@ -94,7 +94,7 @@ ALTER TABLE connections ADD CONSTRAINT chk_connection_scope
 #### 2. Source Discovery: `connection_sources` table
 
 ```sql
--- Migration 033: Source discovery ledger
+-- Migration 034: Source discovery ledger
 CREATE TABLE connection_sources (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     connection_id   UUID NOT NULL REFERENCES connections(id) ON DELETE CASCADE,
@@ -123,7 +123,7 @@ Not user-facing directly — it feeds the source selector UI.
 #### 3. Per-App Source Selection: `app_source_filters` table
 
 ```sql
--- Migration 033: Per-app source filtering
+-- Migration 034: Per-app source filtering
 CREATE TABLE app_source_filters (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     app_id          UUID NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
@@ -279,9 +279,11 @@ Each phase is independently shippable. Later phases build on earlier ones but ea
 
 #### Task 1.1 — Database migration
 
-**File:** `backend/migrations/033_source_filtering.up.sql` (and `.down.sql`)
+**File:** `backend/migrations/034_source_filtering.up.sql` (and `.down.sql`)
 
 Create both tables (`connection_sources` and `app_source_filters`) with RLS policies. The `org_id` column on `connections` is **not** added in this phase.
+
+> **Migration numbering:** `033_rls_webhook_idempotency` shipped in v0.45.1, so the next free slot is **034**. Phase 2's org-scoping migration consequently becomes **035**.
 
 #### Task 1.2 — sqlc queries for source filtering
 
@@ -375,7 +377,7 @@ After the drain setup step completes and logs start arriving, optionally show a 
 
 #### Task 2.1 — Database migration: org-scoped connections
 
-**File:** `backend/migrations/034_org_connections.up.sql`
+**File:** `backend/migrations/035_org_connections.up.sql`
 
 - Add `org_id` column to `connections` (NOT NULL, backfilled from `applications.org_id`)
 - Make `app_id` nullable

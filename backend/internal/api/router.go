@@ -95,8 +95,20 @@ func NewRouter(cfg *config.Config, pool *pgxpool.Pool, ag *agent.Agent, jwks *mi
 				r.Put("/{id}", s.UpdateConnection)
 				r.Delete("/{id}", s.DeleteConnection)
 				r.Post("/{id}/test", s.TestConnection)
-				r.Get("/{id}/github/repos", s.ListGitHubRepos)
-				r.Put("/{id}/github/repos", s.UpdateGitHubRepos)
+				// Source filtering. Generic across every multi-source
+				// connector type: webhook_logs with Fly.io detection (Phase 1),
+				// org-scoped webhooks (Phase 2), GitHub repos via the discover
+				// endpoint (Phase 3). The legacy /github/repos routes were
+				// retired when github_repos was migrated away in migration 036.
+				r.Get("/{id}/sources", s.ListSourceFilters)
+				r.Put("/{id}/sources", s.UpdateSourceFilters)
+				r.Post("/{id}/sources", s.AddSourceFilter)
+				// Source name passed as ?name=... — see DeleteSourceFilter for why.
+				r.Delete("/{id}/sources", s.DeleteSourceFilter)
+				// Connector-type-aware discovery — pulls the authoritative
+				// source list from upstream (GitHub API today) and upserts
+				// every result into connection_sources.
+				r.Post("/{id}/sources/discover", s.DiscoverSources)
 			})
 
 			r.Get("/logs", s.ListLogs)

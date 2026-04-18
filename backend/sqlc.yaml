@@ -13,6 +13,16 @@ sql:
         overrides:
           - db_type: "uuid"
             go_type: "github.com/google/uuid.UUID"
+          # Nullable UUIDs become *uuid.UUID so JSON serialises to either the
+          # UUID string or null — matching how nullable timestamptz is handled.
+          # Introduced in migration 035 (connections.app_id for org-scoped
+          # connections); future nullable UUID columns reuse the same shape.
+          - db_type: "uuid"
+            nullable: true
+            go_type:
+              type: "UUID"
+              import: "github.com/google/uuid"
+              pointer: true
           - db_type: "jsonb"
             go_type: "encoding/json.RawMessage"
           - db_type: "jsonb"

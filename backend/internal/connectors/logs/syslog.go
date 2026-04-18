@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -24,8 +25,11 @@ const (
 	syslogDefaultPort     = 6514
 	syslogMaxMessageSize  = 64 * 1024 // 64 KB per message
 	syslogShutdownTimeout = 5 * time.Second
-	syslogMaxConnections  = 500            // max concurrent TCP connections per listener
-	syslogReadTimeout     = 5 * time.Minute // idle read deadline per connection
+	syslogMaxConnections  = 500              // max concurrent TCP connections per listener
+	syslogReadTimeout     = 5 * time.Minute  // idle read deadline per connection
+	syslogRefreshInterval = 60 * time.Second // how often to refresh the enabled-hostname cache
+	syslogMaxDiscovered   = 10000            // per-listener cap on the in-memory discovered-hostnames dedupe set
+	syslogInitialRetries  = 3                // initial allow-list load retries before surfacing via Health()
 )
 
 // SyslogConfig represents the fields stored in a syslog connection's config JSONB.
@@ -38,6 +42,13 @@ type SyslogConfig struct {
 
 // Syslog implements a TCP/TLS syslog listener that accepts RFC 5424 and RFC 3164
 // messages and inserts them into log_buffer.
+//
+// Phase 4: each incoming message is filtered by hostname via the generic
+// source-filter system. The listener caches the set of enabled hostnames
+// in memory (refreshed every minute via a background goroutine), so the
+// hot path is an O(1) map lookup rather than a DB query per message.
+// Drop-by-default applies — hosts must be explicitly enabled in the source
+// selector before their messages are persisted.
 type Syslog struct {
 	config       SyslogConfig
 	connectionID uuid.UUID
@@ -50,6 +61,20 @@ type Syslog struct {
 	cancel   context.CancelFunc
 	wg       sync.WaitGroup
 	connSem  chan struct{} // semaphore to cap concurrent connections
+
+	// filterMu guards enabled and discovered — both read on every message.
+	// A plain Mutex is fine at the per-message rate; RWMutex would save a
+	// few nanoseconds but complicate the refresh path.
+	filterMu   sync.Mutex
+	enabled    map[string]struct{} // hostnames with enabled=true in app_source_filters
+	discovered map[string]struct{} // hostnames already upserted in this listener's lifetime (per-process dedupe for connection_sources writes)
+
+	// initialRefreshDone flips to true once the allow-list has been
+	// successfully loaded at least once. Until then, Health() reports the
+	// listener as degraded — the accept loop is running but every message
+	// is drop-by-default because the cache is empty, which is operationally
+	// indistinguishable from a broken connection.
+	initialRefreshDone atomic.Bool
 }
 
 // NewSyslog creates a Syslog connector from a connection's config JSONB.
@@ -80,6 +105,8 @@ func NewSyslog(configJSON json.RawMessage, connectionID, userID, appID uuid.UUID
 		appID:        appID,
 		queries:      queries,
 		connSem:      make(chan struct{}, syslogMaxConnections),
+		enabled:      make(map[string]struct{}),
+		discovered:   make(map[string]struct{}),
 	}, nil
 }
 
@@ -130,13 +157,20 @@ func (s *Syslog) Connect(ctx context.Context) error {
 	return nil
 }
 
-// Health checks whether the listener is still open.
+// Health checks whether the listener is still open and has loaded its
+// hostname allow-list at least once. The second check catches the case
+// where the DB was unreachable throughout startup — the TCP listener is up,
+// but every incoming message is silently filtered out, which the UI should
+// surface as "error" rather than "healthy".
 func (s *Syslog) Health(ctx context.Context) error {
 	s.mu.Lock()
 	l := s.listener
 	s.mu.Unlock()
 	if l == nil {
 		return fmt.Errorf("syslog: listener not running")
+	}
+	if !s.initialRefreshDone.Load() {
+		return fmt.Errorf("syslog: hostname allow-list has not loaded yet — incoming messages are being dropped")
 	}
 	return nil
 }
@@ -151,6 +185,44 @@ func (s *Syslog) Listen(ctx context.Context) error {
 	s.mu.Unlock()
 
 	defer cancel()
+
+	// Kick off the enabled-hostname refresh goroutine. A one-shot load
+	// happens synchronously here so the very first accepted connection
+	// sees the correct filter state; then the background loop keeps it
+	// fresh without blocking accepts.
+	//
+	// If the initial load fails transiently (DB hiccup during startup),
+	// retry a few times with backoff. If it still fails, we proceed anyway —
+	// Health() will report the degraded state, and the background ticker
+	// will keep trying. Better than crashing the listener during a database
+	// blip, but visible enough that oncall will notice.
+	for attempt := 1; attempt <= syslogInitialRetries; attempt++ {
+		if err := s.refreshEnabledSet(ctx); err == nil {
+			break
+		} else if attempt == syslogInitialRetries {
+			slog.Warn("syslog: initial allow-list load failed after retries; listener will drop messages until next refresh succeeds",
+				"err", err, "connection_id", s.connectionID, "attempts", attempt)
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(time.Duration(attempt) * time.Second):
+		}
+	}
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		ticker := time.NewTicker(syslogRefreshInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				_ = s.refreshEnabledSet(ctx)
+			}
+		}
+	}()
 
 	for {
 		conn, err := s.listener.Accept()
@@ -264,6 +336,26 @@ func (s *Syslog) handleConnection(ctx context.Context, conn net.Conn) {
 		}
 
 		msg := parseSyslogMessage(line)
+
+		// Hostname is the source_name for syslog, matching the generic
+		// filter system's vocabulary. Falls back to "unknown" so a message
+		// without a hostname still gets recorded under *some* source —
+		// users who want to ingest those opt in by enabling "unknown".
+		hostname := msg.Hostname
+		if hostname == "" {
+			hostname = "unknown"
+		}
+
+		// Discovery: record the hostname so the source selector can surface
+		// it. Deduped per-listener-lifetime — we don't hammer the DB for
+		// every packet from the same host.
+		s.discoverHostname(ctx, hostname)
+
+		// Filter: drop messages whose hostname isn't in the enabled set.
+		// Matches webhook ingestion's drop-by-default semantic.
+		if !s.isEnabled(hostname) {
+			continue
+		}
 
 		payload, err := json.Marshal(msg)
 		if err != nil {
@@ -386,4 +478,82 @@ func mapSyslogSeverity(sev int) pgtype.Text {
 		s = "debug"
 	}
 	return pgtype.Text{String: s, Valid: true}
+}
+
+// refreshEnabledSet reloads the hostname allow-list from app_source_filters.
+// Called on listener start and every syslogRefreshInterval thereafter, so
+// toggling a host in the selector takes effect within ~a minute without
+// needing a per-message DB query. Failures are logged and leave the existing
+// cache intact — preferable to suddenly flipping every host off because of
+// a transient DB hiccup.
+func (s *Syslog) refreshEnabledSet(ctx context.Context) error {
+	rows, err := s.queries.ListEnabledSourceNames(ctx, db.ListEnabledSourceNamesParams{
+		ConnectionID: s.connectionID,
+		AppID:        s.appID,
+	})
+	if err != nil {
+		slog.Warn("syslog: refresh enabled set failed, keeping previous cache",
+			"err", err, "connection_id", s.connectionID)
+		return err
+	}
+
+	next := make(map[string]struct{}, len(rows))
+	for _, h := range rows {
+		next[h] = struct{}{}
+	}
+
+	s.filterMu.Lock()
+	s.enabled = next
+	s.filterMu.Unlock()
+	s.initialRefreshDone.Store(true)
+	return nil
+}
+
+// isEnabled returns true if the given hostname is currently in the allow
+// list. Per-message hot path; keeps the lock scope tight.
+func (s *Syslog) isEnabled(hostname string) bool {
+	s.filterMu.Lock()
+	_, ok := s.enabled[hostname]
+	s.filterMu.Unlock()
+	return ok
+}
+
+// discoverHostname upserts a connection_sources row for a newly-seen
+// hostname. Deduped via the in-memory `discovered` map so a sustained
+// stream from one host doesn't translate into an upsert per packet — the
+// DB sees one write per hostname per listener lifetime, after which the
+// map guards the hot path.
+func (s *Syslog) discoverHostname(ctx context.Context, hostname string) {
+	s.filterMu.Lock()
+	if _, seen := s.discovered[hostname]; seen {
+		s.filterMu.Unlock()
+		return
+	}
+	// Bounded cache: at the cap, wipe the whole map and let the new entry
+	// repopulate it. `UpsertConnectionSource` is idempotent (ON CONFLICT DO
+	// UPDATE bumps last_seen_at), so a re-upsert after clearing is cheap —
+	// one extra DB write per active host at each clear. Prefers bounded
+	// memory over perfect dedupe; an attacker spraying forged hostnames
+	// can't exhaust the listener's RAM.
+	if len(s.discovered) >= syslogMaxDiscovered {
+		slog.Warn("syslog: discovered-hostname cache at cap, clearing",
+			"cap", syslogMaxDiscovered, "connection_id", s.connectionID)
+		s.discovered = make(map[string]struct{})
+	}
+	s.discovered[hostname] = struct{}{}
+	s.filterMu.Unlock()
+
+	if _, err := s.queries.UpsertConnectionSource(ctx, db.UpsertConnectionSourceParams{
+		ConnectionID: s.connectionID,
+		SourceName:   hostname,
+	}); err != nil {
+		// Roll back the dedupe entry so a later retry can try again — this
+		// mirrors how the webhook handler surfaces the error without
+		// swallowing it silently.
+		s.filterMu.Lock()
+		delete(s.discovered, hostname)
+		s.filterMu.Unlock()
+		slog.Warn("syslog: discovery upsert failed",
+			"err", err, "hostname", hostname, "connection_id", s.connectionID)
+	}
 }

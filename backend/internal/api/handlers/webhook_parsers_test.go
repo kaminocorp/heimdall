@@ -198,6 +198,9 @@ func TestParseVectorFly_Single(t *testing.T) {
 
 	assert.Equal(t, "flyio/my-fly-app", entries[0].SourceType)
 	assert.Equal(t, "info", entries[0].Severity)
+	// SourceName is the bare fly.app.name — used as the filter key in
+	// app_source_filters. Distinct from SourceType, which is prefixed.
+	assert.Equal(t, "my-fly-app", entries[0].SourceName)
 
 	var payload map[string]any
 	json.Unmarshal(entries[0].Payload, &payload)
@@ -205,6 +208,27 @@ func TestParseVectorFly_Single(t *testing.T) {
 	assert.Equal(t, "e784079c", payload["machine_id"])
 	assert.Equal(t, "lhr", payload["region"])
 	assert.Equal(t, "my-fly-app", payload["app_name"])
+}
+
+func TestParseVectorFly_SourceNameFallback(t *testing.T) {
+	// When there's no fly.app.name (non-shipper sender or malformed payload),
+	// SourceName is left empty and ingestion falls back to SourceType via
+	// sourceNameOf().
+	raw := `{
+		"message": "ok",
+		"timestamp": "2026-04-15T12:00:00Z",
+		"source_type": "fly_io",
+		"log": {"level": "info"}
+	}`
+
+	entries, _, err := parseWebhookPayload([]byte(raw), "application/json")
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+
+	assert.Equal(t, "fly_io", entries[0].SourceType)
+	assert.Equal(t, "", entries[0].SourceName)
+	// sourceNameOf falls back to SourceType when SourceName is empty.
+	assert.Equal(t, "fly_io", sourceNameOf(entries[0]))
 }
 
 func TestParseVectorFly_Batch(t *testing.T) {

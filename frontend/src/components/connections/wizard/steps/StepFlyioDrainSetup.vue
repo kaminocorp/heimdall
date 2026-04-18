@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted } from 'vue'
 import { useConnectionsStore } from '@/stores/connections'
+import { useAppStore } from '@/stores/app'
 import type { WizardState } from '../flows'
 import CopyableField from '@/components/common/CopyableField.vue'
+import SourceSelector from '@/components/connections/SourceSelector.vue'
 
 const props = defineProps<{ modelValue: WizardState; connectionId?: string | null }>()
 const emit = defineEmits<{
@@ -11,6 +13,12 @@ const emit = defineEmits<{
 }>()
 
 const store = useConnectionsStore()
+const appStore = useAppStore()
+
+// For org-scoped connections the selector needs an explicit target app —
+// pick the currently active one, which is what the user's wizard flow is
+// "for" anyway. App-scoped connections ignore this prop.
+const selectorAppId = computed(() => appStore.currentAppId ?? undefined)
 
 const connection = computed(() =>
   store.connections.find(c => c.id === props.connectionId) ?? undefined
@@ -177,5 +185,19 @@ source = '''
       The Log Shipper runs as a small Fly Machine (~$2/month).
       Sub-second latency with at-least-once delivery.
     </p>
+
+    <!-- Source selection (drop-by-default: logs are dropped until sources are enabled) -->
+    <div v-if="connectionId" class="space-y-2">
+      <div class="flex items-center gap-2">
+        <span class="flex items-center justify-center w-5 h-5 rounded-full bg-accent/15 text-accent font-mono text-[10px] font-bold shrink-0">6</span>
+        <p class="font-mono text-xs font-medium uppercase tracking-widest text-text-muted">Select Sources</p>
+      </div>
+      <p class="font-mono text-[11px] text-text-tertiary">
+        Fly's Log Shipper is org-wide — it ships logs from <em>all</em> your Fly apps.
+        By default Heimdall drops everything until you opt in. Sources appear below as logs arrive;
+        you can also pre-add app names manually.
+      </p>
+      <SourceSelector :connection-id="connectionId" :app-id="selectorAppId" embedded />
+    </div>
   </div>
 </template>

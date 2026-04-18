@@ -13,14 +13,24 @@ import (
 )
 
 const createConnection = `-- name: CreateConnection :one
-INSERT INTO connections (user_id, app_id, name, type, direction, config, status)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id, name, type, direction, config, status, last_seen, created_at, updated_at, user_id, app_id
+INSERT INTO connections (user_id, org_id, app_id, name, type, direction, config, status)
+VALUES (
+    $1::UUID,
+    $2::UUID,
+    $3,
+    $4::TEXT,
+    $5::TEXT,
+    $6::TEXT,
+    $7::JSONB,
+    $8::TEXT
+)
+RETURNING id, name, type, direction, config, status, last_seen, created_at, updated_at, user_id, app_id, org_id
 `
 
 type CreateConnectionParams struct {
 	UserID    uuid.UUID       `json:"user_id"`
-	AppID     uuid.UUID       `json:"app_id"`
+	OrgID     uuid.UUID       `json:"org_id"`
+	AppID     *uuid.UUID      `json:"app_id"`
 	Name      string          `json:"name"`
 	Type      string          `json:"type"`
 	Direction string          `json:"direction"`
@@ -28,9 +38,13 @@ type CreateConnectionParams struct {
 	Status    string          `json:"status"`
 }
 
+// org_id is always required; app_id is optional — pass NULL to create an
+// org-scoped connection shared across every app in the org. sqlc.narg yields
+// a *uuid.UUID thanks to the nullable-uuid override in sqlc.yaml.
 func (q *Queries) CreateConnection(ctx context.Context, arg CreateConnectionParams) (Connection, error) {
 	row := q.db.QueryRow(ctx, createConnection,
 		arg.UserID,
+		arg.OrgID,
 		arg.AppID,
 		arg.Name,
 		arg.Type,
@@ -51,12 +65,17 @@ func (q *Queries) CreateConnection(ctx context.Context, arg CreateConnectionPara
 		&i.UpdatedAt,
 		&i.UserID,
 		&i.AppID,
+		&i.OrgID,
 	)
 	return i, err
 }
 
 const deleteConnectionByUser = `-- name: DeleteConnectionByUser :exec
-DELETE FROM connections WHERE id = $1 AND user_id = $2
+DELETE FROM connections c
+WHERE c.id = $1
+  AND c.org_id IN (
+    SELECT om.org_id FROM org_members om WHERE om.user_id = $2
+  )
 `
 
 type DeleteConnectionByUserParams struct {
@@ -70,7 +89,10 @@ func (q *Queries) DeleteConnectionByUser(ctx context.Context, arg DeleteConnecti
 }
 
 const getConnectionByUser = `-- name: GetConnectionByUser :one
-SELECT id, name, type, direction, config, status, last_seen, created_at, updated_at, user_id, app_id FROM connections WHERE id = $1 AND user_id = $2
+SELECT c.id, c.name, c.type, c.direction, c.config, c.status, c.last_seen, c.created_at, c.updated_at, c.user_id, c.app_id, c.org_id
+FROM connections c
+JOIN org_members om ON om.org_id = c.org_id
+WHERE c.id = $1::UUID AND om.user_id = $2::UUID
 `
 
 type GetConnectionByUserParams struct {
@@ -78,6 +100,10 @@ type GetConnectionByUserParams struct {
 	UserID uuid.UUID `json:"user_id"`
 }
 
+// Access is granted via org membership rather than direct ownership. Name
+// preserved for back-compat with Phase 1 callers — the param list is
+// unchanged (id, user_id), only the predicate shifts to "user is a member
+// of connection's org".
 func (q *Queries) GetConnectionByUser(ctx context.Context, arg GetConnectionByUserParams) (Connection, error) {
 	row := q.db.QueryRow(ctx, getConnectionByUser, arg.ID, arg.UserID)
 	var i Connection
@@ -93,14 +119,18 @@ func (q *Queries) GetConnectionByUser(ctx context.Context, arg GetConnectionByUs
 		&i.UpdatedAt,
 		&i.UserID,
 		&i.AppID,
+		&i.OrgID,
 	)
 	return i, err
 }
 
 const listActiveConnectionsByType = `-- name: ListActiveConnectionsByType :many
-SELECT id, name, type, direction, config, status, last_seen, created_at, updated_at, user_id, app_id FROM connections WHERE type = $1 AND status = 'active'
+SELECT id, name, type, direction, config, status, last_seen, created_at, updated_at, user_id, app_id, org_id FROM connections WHERE type = $1 AND status = 'active'
 `
 
+// Startup rehydration for pollers/listeners. No access filter — the server
+// connects as the postgres (owner) role which bypasses RLS, and polling
+// connections are always app-scoped in practice.
 func (q *Queries) ListActiveConnectionsByType(ctx context.Context, type_ string) ([]Connection, error) {
 	rows, err := q.db.Query(ctx, listActiveConnectionsByType, type_)
 	if err != nil {
@@ -122,6 +152,7 @@ func (q *Queries) ListActiveConnectionsByType(ctx context.Context, type_ string)
 			&i.UpdatedAt,
 			&i.UserID,
 			&i.AppID,
+			&i.OrgID,
 		); err != nil {
 			return nil, err
 		}
@@ -133,10 +164,53 @@ func (q *Queries) ListActiveConnectionsByType(ctx context.Context, type_ string)
 	return items, nil
 }
 
-const listConnectionsByApp = `-- name: ListConnectionsByApp :many
-SELECT id, name, type, direction, config, status, last_seen, created_at, updated_at, user_id, app_id FROM connections WHERE app_id = $1 ORDER BY created_at DESC
+const listAppsEnabledForSource = `-- name: ListAppsEnabledForSource :many
+SELECT app_id FROM app_source_filters
+WHERE connection_id = $1 AND source_name = $2 AND enabled = true
 `
 
+type ListAppsEnabledForSourceParams struct {
+	ConnectionID uuid.UUID `json:"connection_id"`
+	SourceName   string    `json:"source_name"`
+}
+
+// Fan-out helper for org-scoped webhook ingestion. Returns every app that
+// has enabled=true for the given (connection, source_name). Backed by the
+// partial index idx_app_source_filters_lookup from migration 034.
+func (q *Queries) ListAppsEnabledForSource(ctx context.Context, arg ListAppsEnabledForSourceParams) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, listAppsEnabledForSource, arg.ConnectionID, arg.SourceName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []uuid.UUID{}
+	for rows.Next() {
+		var app_id uuid.UUID
+		if err := rows.Scan(&app_id); err != nil {
+			return nil, err
+		}
+		items = append(items, app_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listConnectionsByApp = `-- name: ListConnectionsByApp :many
+SELECT c.id, c.name, c.type, c.direction, c.config, c.status, c.last_seen, c.created_at, c.updated_at, c.user_id, c.app_id, c.org_id
+FROM connections c
+WHERE c.app_id = $1::UUID
+   OR (
+     c.app_id IS NULL
+     AND c.org_id = (SELECT org_id FROM applications WHERE id = $1::UUID)
+   )
+ORDER BY c.created_at DESC
+`
+
+// Returns app-scoped connections AND org-scoped connections that belong to
+// the same org as the requested app. The nested subquery resolves the app's
+// org once per call — cheaper than joining because we only need org_id.
 func (q *Queries) ListConnectionsByApp(ctx context.Context, appID uuid.UUID) ([]Connection, error) {
 	rows, err := q.db.Query(ctx, listConnectionsByApp, appID)
 	if err != nil {
@@ -158,6 +232,7 @@ func (q *Queries) ListConnectionsByApp(ctx context.Context, appID uuid.UUID) ([]
 			&i.UpdatedAt,
 			&i.UserID,
 			&i.AppID,
+			&i.OrgID,
 		); err != nil {
 			return nil, err
 		}
@@ -170,9 +245,17 @@ func (q *Queries) ListConnectionsByApp(ctx context.Context, appID uuid.UUID) ([]
 }
 
 const listConnectionsByUser = `-- name: ListConnectionsByUser :many
-SELECT id, name, type, direction, config, status, last_seen, created_at, updated_at, user_id, app_id FROM connections WHERE user_id = $1 ORDER BY created_at DESC
+SELECT c.id, c.name, c.type, c.direction, c.config, c.status, c.last_seen, c.created_at, c.updated_at, c.user_id, c.app_id, c.org_id
+FROM connections c
+JOIN org_members om ON om.org_id = c.org_id
+WHERE om.user_id = $1
+ORDER BY c.created_at DESC
 `
 
+// Every connection in any org the authenticated user is a member of.
+// The org-member join replaces the single-owner user_id check that existed
+// pre-035 — an org-scoped connection created by a colleague is now visible
+// to every member of the org.
 func (q *Queries) ListConnectionsByUser(ctx context.Context, userID uuid.UUID) ([]Connection, error) {
 	rows, err := q.db.Query(ctx, listConnectionsByUser, userID)
 	if err != nil {
@@ -194,6 +277,7 @@ func (q *Queries) ListConnectionsByUser(ctx context.Context, userID uuid.UUID) (
 			&i.UpdatedAt,
 			&i.UserID,
 			&i.AppID,
+			&i.OrgID,
 		); err != nil {
 			return nil, err
 		}
@@ -206,10 +290,13 @@ func (q *Queries) ListConnectionsByUser(ctx context.Context, userID uuid.UUID) (
 }
 
 const updateConnection = `-- name: UpdateConnection :one
-UPDATE connections
+UPDATE connections c
 SET name = $2, type = $3, direction = $4, config = $5, status = $6, updated_at = now()
-WHERE id = $1 AND user_id = $7
-RETURNING id, name, type, direction, config, status, last_seen, created_at, updated_at, user_id, app_id
+WHERE c.id = $1
+  AND c.org_id IN (
+    SELECT om.org_id FROM org_members om WHERE om.user_id = $7
+  )
+RETURNING id, name, type, direction, config, status, last_seen, created_at, updated_at, user_id, app_id, org_id
 `
 
 type UpdateConnectionParams struct {
@@ -222,6 +309,10 @@ type UpdateConnectionParams struct {
 	UserID    uuid.UUID       `json:"user_id"`
 }
 
+// Authorization is via org membership, matching the Get/Delete queries.
+// The transition away from user_id-based filtering is transparent to
+// callers — the user_id param is still the caller's user id, just
+// interpreted as "must be a member of connection's org".
 func (q *Queries) UpdateConnection(ctx context.Context, arg UpdateConnectionParams) (Connection, error) {
 	row := q.db.QueryRow(ctx, updateConnection,
 		arg.ID,
@@ -245,6 +336,7 @@ func (q *Queries) UpdateConnection(ctx context.Context, arg UpdateConnectionPara
 		&i.UpdatedAt,
 		&i.UserID,
 		&i.AppID,
+		&i.OrgID,
 	)
 	return i, err
 }

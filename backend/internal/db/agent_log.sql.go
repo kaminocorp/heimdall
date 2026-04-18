@@ -54,7 +54,7 @@ type InsertAgentLogParams struct {
 	Summary        string          `json:"summary"`
 	Detail         json.RawMessage `json:"detail"`
 	Severity       pgtype.Text     `json:"severity"`
-	ConversationID pgtype.UUID     `json:"conversation_id"`
+	ConversationID *uuid.UUID      `json:"conversation_id"`
 	AppID          uuid.UUID       `json:"app_id"`
 }
 

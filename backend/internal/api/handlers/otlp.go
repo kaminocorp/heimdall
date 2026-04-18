@@ -3,10 +3,11 @@ package handlers
 import (
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
-	"github.com/hejijunhao/heimdall/backend/internal/db"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -27,8 +28,8 @@ type otlpResource struct {
 }
 
 type otlpScopeLogs struct {
-	Scope      otlpScope        `json:"scope"`
-	LogRecords []otlpLogRecord  `json:"logRecords"`
+	Scope      otlpScope       `json:"scope"`
+	LogRecords []otlpLogRecord `json:"logRecords"`
 }
 
 type otlpScope struct {
@@ -62,8 +63,15 @@ const maxOTLPRequestBytes = 10 << 20 // 10 MB
 
 // IngestOTLPLogs handles POST /v1/logs — the OTLP HTTP JSON endpoint.
 // Auth uses the same bearer token mechanism as webhook ingestion.
+//
+// Phase 4: flattened OTLP records are converted into webhookLogRequest
+// entries and run through the shared routeSources / insertFiltered pipeline.
+// This unifies source filtering (service.name per record) and adds fan-out
+// support for org-scoped OTLP connections — the same plumbing webhook
+// ingestion uses.
 func (s *Server) IngestOTLPLogs(w http.ResponseWriter, r *http.Request) {
-	// Extract bearer token from Authorization header.
+	start := time.Now()
+
 	authHeader := r.Header.Get("Authorization")
 	if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
 		jsonError(w, "missing or invalid authorization header", http.StatusUnauthorized)
@@ -71,14 +79,12 @@ func (s *Server) IngestOTLPLogs(w http.ResponseWriter, r *http.Request) {
 	}
 	token := strings.TrimPrefix(authHeader, "Bearer ")
 
-	// Look up the connection by webhook token.
 	conn, err := s.Queries.GetConnectionByWebhookToken(r.Context(), token)
 	if err != nil {
 		jsonError(w, "invalid token", http.StatusUnauthorized)
 		return
 	}
 
-	// Read and parse the OTLP request body.
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxOTLPRequestBytes))
 	if err != nil {
 		jsonError(w, "failed to read request body", http.StatusBadRequest)
@@ -91,80 +97,122 @@ func (s *Server) IngestOTLPLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Flatten the nested OTLP structure into individual log entries.
-	var insertCount int
-	var insertErrors int
-	totalRecords := countLogRecords(req)
+	// Flatten the nested OTLP structure into webhookLogRequest entries. Each
+	// log record becomes one entry whose SourceName is the enclosing
+	// resource's service.name attribute — which is how OTLP identifies which
+	// emitting service produced the record. Records without a service.name
+	// fall back to the generic "otlp" source via sourceNameOf().
+	entries := flattenOTLPRecords(req)
+	totalRecords := len(entries)
 
+	if totalRecords == 0 {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]any{"accepted": 0})
+		return
+	}
+
+	tx, err := s.Pool.Begin(r.Context())
+	if err != nil {
+		jsonServerError(w, "failed to begin transaction", err)
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	qtx := s.Queries.WithTx(tx)
+
+	routes, seenSources, err := routeSources(r.Context(), qtx, conn.ID, conn.AppID, entries)
+	if err != nil {
+		jsonServerError(w, "source filter pipeline failed", err)
+		return
+	}
+	stats, err := insertFiltered(r.Context(), qtx, conn.ID, conn.UserID, entries, routes, seenSources)
+	if err != nil {
+		jsonServerError(w, "failed to insert log entry", err)
+		return
+	}
+
+	if err := tx.Commit(r.Context()); err != nil {
+		jsonServerError(w, "failed to commit transaction", err)
+		return
+	}
+
+	scope := "app"
+	if conn.AppID == nil {
+		scope = "org"
+	}
+	slog.Info("otlp ingestion",
+		"connection_id", conn.ID,
+		"scope", scope,
+		"entries", totalRecords,
+		"accepted", stats.Accepted,
+		"filtered", stats.Filtered,
+		"inserts", stats.Inserts,
+		"sources", stats.Sources,
+		"duration_ms", time.Since(start).Milliseconds(),
+	)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]any{
+		"accepted": stats.Accepted,
+		"filtered": stats.Filtered,
+	})
+}
+
+// flattenOTLPRecords turns a nested OTLP payload into a flat slice of
+// webhookLogRequest entries, one per log record. SourceName is populated
+// from the enclosing resource's service.name attribute.
+func flattenOTLPRecords(req otlpExportRequest) []webhookLogRequest {
+	var out []webhookLogRequest
 	for _, rl := range req.ResourceLogs {
 		serviceName := extractServiceName(rl.Resource.Attributes)
+		resourceAttrs := flattenAttributes(rl.Resource.Attributes)
+
+		// SourceType carries the human-readable "otlp/<service>" label used
+		// in the activity feed; SourceName is the bare service identifier
+		// used as the filter key.
+		sourceType := "otlp"
+		if serviceName != "" {
+			sourceType = "otlp/" + serviceName
+		}
 
 		for _, sl := range rl.ScopeLogs {
 			for _, lr := range sl.LogRecords {
-				sourceType := "otlp"
-				if serviceName != "" {
-					sourceType = "otlp/" + serviceName
-				}
-
-				severity := mapOTLPSeverity(lr.SeverityNumber, lr.SeverityText)
-
-				// Build a structured payload from the log record.
 				payload, err := json.Marshal(map[string]any{
 					"time_unix_nano":  lr.TimeUnixNano,
 					"severity_text":   lr.SeverityText,
 					"severity_number": lr.SeverityNumber,
 					"body":            resolveAnyValue(lr.Body),
 					"attributes":      flattenAttributes(lr.Attributes),
-					"resource":        flattenAttributes(rl.Resource.Attributes),
+					"resource":        resourceAttrs,
 					"scope":           sl.Scope.Name,
 					"trace_id":        lr.TraceID,
 					"span_id":         lr.SpanID,
 				})
 				if err != nil {
-					insertErrors++
 					continue
 				}
 
-				_, err = s.Queries.InsertLogEntry(r.Context(), db.InsertLogEntryParams{
-					ConnectionID: conn.ID,
-					SourceType:   sourceType,
-					Severity:     severity,
-					Payload:      payload,
-					UserID:       conn.UserID,
-					AppID:        conn.AppID,
-				})
-				if err != nil {
-					insertErrors++
-					continue
+				// mapOTLPSeverity returns pgtype.Text; webhookLogRequest
+				// wants a plain string that gets wrapped later by
+				// insertFiltered. Unwrap here.
+				sev := mapOTLPSeverity(lr.SeverityNumber, lr.SeverityText)
+				var severityStr string
+				if sev.Valid {
+					severityStr = sev.String
 				}
-				insertCount++
+
+				out = append(out, webhookLogRequest{
+					SourceType: sourceType,
+					Severity:   severityStr,
+					Payload:    payload,
+					SourceName: serviceName, // may be empty → sourceNameOf falls back to SourceType
+				})
 			}
 		}
 	}
-
-	w.Header().Set("Content-Type", "application/json")
-
-	// Return 500 if no records were inserted but some were sent — tells
-	// the client to retry the entire batch.
-	if insertCount == 0 && totalRecords > 0 {
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]any{"error": "failed to insert log entries"})
-		return
-	}
-
-	// Return 207 (Multi-Status) for partial failures so the client knows
-	// not all records were accepted.
-	if insertErrors > 0 {
-		w.WriteHeader(http.StatusMultiStatus)
-		json.NewEncoder(w).Encode(map[string]any{
-			"accepted": insertCount,
-			"rejected": insertErrors,
-		})
-		return
-	}
-
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]any{"accepted": insertCount})
+	return out
 }
 
 // extractServiceName finds the "service.name" attribute from OTel resource attributes.
@@ -243,7 +291,11 @@ func flattenAttributes(attrs []otlpKeyValue) map[string]string {
 	return m
 }
 
-// countLogRecords counts total log records in an OTLP request.
+// countLogRecords totals records across all scopes in an OTLP request.
+// Retained from the pre-Phase-4 handler because otlp_test.go's
+// TestCountLogRecords still exercises it — pure helper with no production
+// consumer now that the new pipeline derives counts from len(entries), but
+// cheap to keep.
 func countLogRecords(req otlpExportRequest) int {
 	var n int
 	for _, rl := range req.ResourceLogs {

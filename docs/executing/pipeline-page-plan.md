@@ -10,6 +10,9 @@ This plan follows and replaces the proposal in `pipeline-page.md`. Decisions mad
 - **Time Machine stubbed on the frontend** from day one, backend fully populated so no backfill gap exists when the UI lands.
 - **Naming**: "Pipeline", top-level nav item between Connections and Agent Config.
 - **Rendering**: SVG + Canvas2D for v1. WebGL/WebGPU deferred — see "Rendering tech trade-offs" below.
+- **Rule-hit telemetry**: hardcoded escalation rules gain stable rule IDs (Option A). Alternatives — DB-backed rules (Option B), expression engine (Option C) — documented in `pipeline-rule-options.md` for future reference.
+- **Hydration**: bundled `/bootstrap` endpoint (stats + last N events + cursor in one roundtrip) + SSE with `?since=<cursor>` replay + client ID-based dedupe. See Phase 1.6 and Phase 2.3.
+- **Source-filtering interaction**: the funnel shows *what Heimdall processes*, not *what was sent*. Ingestion events emit only for logs that pass source filtering and land in `log_buffer`. See "Interaction with source filtering" below.
 
 ---
 
@@ -71,13 +74,33 @@ Two data paths, one source of truth:
 
 ---
 
+## Interaction with source filtering
+
+The source-filtering plan (`source-filtering-and-org-connections.md`, Phase 1 shipped in migration 034) drops entries at webhook ingestion when no `app_source_filters` row with `enabled = true` matches the source name. **Filtered entries never land in `log_buffer`** — they have no `log_id`, so they cannot appear in `log_pipeline_events`.
+
+Decisions:
+
+1. **The funnel shows *what Heimdall processes*, not *what was sent*.** The Ingestion stage emits one event per log that *passes* the source filter and gets inserted into `log_buffer`. Filtered-out entries are out of scope for the per-log journey — they have no identity to replay.
+
+2. **Pre-ingestion drops surface as a separate counter, not a funnel stage.** The Ingestion node card shows a secondary muted stat: *"N filtered from disabled sources in the last hour"*. This mirrors the "Showing X filtered entries/hr from disabled sources" indicator already in the source-filtering UI, and is sourced from a lightweight in-memory counter incremented in the webhook handler at the same point where filtering happens. Adding a fifth funnel stage would (a) require recording filtered entries in a new table (no `log_id` to reuse), (b) blur the funnel's meaning. A sibling counter keeps the funnel crisp.
+
+3. **Org-scoped connections fan-out cleanly.** When Phase 2 of source-filtering ships, a single webhook batch can fan-out into N `log_buffer` rows (one per app with the source enabled). Each insert produces its own `log_id` and its own Ingestion event per app. The Pipeline page is app-scoped, so each app's funnel naturally shows only its share. No changes needed to the pipeline event schema.
+
+4. **New-user empty state.** With drop-by-default source filtering, a freshly onboarded user will see zero Ingestion events until they enable sources. The Pipeline page's empty state should explicitly say "No sources enabled yet — [Manage sources]" rather than a generic "waiting for logs" spinner, to avoid the mystery of "the drain is configured but nothing arrives."
+
+5. **Migration numbering.** Source-filtering Phase 1 shipped as migration 034. Phase 2 has reserved 035. The Pipeline's `log_pipeline_events` migration is therefore numbered **036**. See Phase 1.1.
+
+---
+
 ## Phase 1 — Backend: Persistence + Pub/Sub
 
 **Goal:** Every log flowing through the pipeline publishes live events AND persists its full stage history. Replay-capable from day one.
 
-### 1.1 Migration `034_log_pipeline_events`
+### 1.1 Migration `036_log_pipeline_events`
 
-**New file:** `backend/migrations/034_log_pipeline_events.up.sql`
+**New file:** `backend/migrations/036_log_pipeline_events.up.sql`
+
+> **Migration numbering:** 033 (`rls_webhook_idempotency`) shipped in v0.45.1. 034 (`source_filtering` Phase 1) shipped with `source-filtering-and-org-connections.md`. 035 is reserved by `source-filtering` Phase 2 (org-scoped connections). Pipeline therefore takes **036**. If the Pipeline lands before source-filtering Phase 2, renumber at merge time — migration numbers are cheap to bump.
 
 ```sql
 CREATE TABLE log_pipeline_events (
@@ -121,7 +144,8 @@ Queries:
 - `InsertPipelineEvent` — single insert
 - `InsertPipelineEventsBatch` — batch insert for assessment stage (one event per flagged log in the batch)
 - `GetPipelineEventsByLog` — all stage events for a single `log_id`, ordered by `occurred_at`
-- `GetRecentPipelineEventsByApp` — paginated recent events for an app (used by Time Machine list view)
+- `GetRecentPipelineEventsByApp` — paginated recent events for an app (used by Time Machine list view and by `/bootstrap` for ticker hydration). Accepts `@limit` and optional `@before` cursor.
+- `GetPipelineEventsSince` — events with `occurred_at > @since` for a given app, ordered ascending. Used by the SSE endpoint's catch-up replay to close the hydration-to-stream gap. Capped at e.g. 500 rows; if the result hits the cap the stream responds with a `resync` frame telling the client to refetch `/bootstrap`.
 - `PipelineStatsByApp` — time-windowed aggregates: counts per stage, % flagged, avg confidence. Accepts `@since` param.
 
 Run `make sqlc-generate`.
@@ -188,8 +212,19 @@ Four call sites add a `pipelineWriter.Write(evt)` call:
 
 **New handler file:** `backend/internal/api/handlers/pipeline.go`
 
-- `GET /api/apps/{appId}/pipeline/stats?since=1h` — snapshot aggregates for initial render. Calls `PipelineStatsByApp`.
-- `GET /api/apps/{appId}/pipeline/stream` — SSE. Subscribes to `PipelineBus`, writes `data: {...}\n\n` frames. Closes on client disconnect or context cancel. Auth: JWT via existing middleware. Also emits a periodic `event: heartbeat` every 15s so proxies don't idle-close.
+- `GET /api/apps/{appId}/pipeline/bootstrap?window=1h&tickerLimit=50` — **bundled first-paint response**. Returns `{ stats, recentEvents: [...], cursor }` in a single roundtrip:
+  - `stats` — aggregate snapshot from `PipelineStatsByApp(window)`.
+  - `recentEvents` — last N events from `GetRecentPipelineEventsByApp(tickerLimit)` (N capped server-side at 200). Ordered newest-first for ticker render; the frontend can reverse in-memory if chronological order is needed elsewhere.
+  - `cursor` — RFC3339 timestamp of the newest event in the payload, or "now" if `recentEvents` is empty.
+  - Response is ETaggable per app+window; short 5s server-side cache (Phase 3.3). Gzip in transit.
+  - This supersedes the originally planned `/stats`-only endpoint. One roundtrip, not two — the ticker can paint synchronously with the rest of the page instead of after a follow-up fetch.
+- `GET /api/apps/{appId}/pipeline/stream?since=<cursor>` — SSE live stream with catch-up replay:
+  1. On connect, if `since` is set, the server first drains `GetPipelineEventsSince(since)` and writes those frames (each tagged `event: replay`). This closes the window between `/bootstrap` read-time and SSE subscribe-time.
+  2. After replay completes (or immediately if `since` is absent), subscribes to `PipelineBus` and writes live frames (`event: live`).
+  3. Heartbeat frame every 15s so proxies don't idle-close.
+  4. If the replay result hits its cap (500 events — implies the client was disconnected too long), emits one `event: resync` frame instructing the client to drop its buffer and refetch `/bootstrap`, then continues with live events.
+  5. Auth: JWT via query-string token (SSE can't set headers), matching the existing WebSocket pattern.
+  6. Closes on client disconnect or context cancel; bus subscription cleaned up promptly.
 - `GET /api/apps/{appId}/pipeline/logs/{logId}/journey` — returns the ordered stage history for a single log (for Time Machine replay; frontend stub doesn't call it yet but the endpoint ships in Phase 1 so Phase 4 can light up instantly).
 - `GET /api/apps/{appId}/pipeline/logs?since=&until=&limit=&cursor=` — paginated log-journey list for Time Machine picker.
 
@@ -226,8 +261,18 @@ TypeScript mirrors of the backend event shape, stats shape, and journey shape. S
 
 ### 2.3 API + composable
 
-- `api/pipeline.ts` — `fetchPipelineStats(appId, since)`, `fetchLogJourney(appId, logId)`, `fetchPipelineLogs(appId, params)`.
-- `composables/usePipelineStream.ts` — wraps `EventSource` for `/api/apps/{appId}/pipeline/stream`. Exposes: reactive `events` ring buffer (cap 500), `stats` reactive snapshot, `connectionState`, `reconnect()`. Auto-reconnects with backoff on disconnect. Includes the JWT as a query-string token (SSE can't set headers), matching the existing WebSocket pattern.
+- `api/pipeline.ts` — `fetchPipelineBootstrap(appId, { window, tickerLimit })`, `fetchLogJourney(appId, logId)`, `fetchPipelineLogs(appId, params)`.
+- `composables/usePipelineStream.ts` — the hydration-to-stream glue. Sequence:
+  1. On mount, calls `fetchPipelineBootstrap` once. Seeds `stats` reactive snapshot and pushes `recentEvents` into the ring buffer (cap 500) **synchronously before first paint**. Captures `cursor`.
+  2. Opens `EventSource` against `/pipeline/stream?since=<cursor>&token=<jwt>`. Handles three frame types:
+     - `event: replay` — events missed between bootstrap and connect. Inserted via the same dedupe-by-id path as live events.
+     - `event: live` — steady-state stream.
+     - `event: resync` — drop the ring buffer, refetch `/bootstrap`, reconnect with the new cursor. Rare but load-bearing for long disconnects.
+  3. Every insert into the ring buffer de-duplicates by `log_pipeline_events.id` via a small `Set<string>` of ids currently in the buffer. Eviction removes from both buffer and set. De-dupe is what makes the overlap between `recentEvents` and `replay` safe.
+  4. `connectionState` reactive enum: `idle | bootstrapping | streaming | reconnecting | resyncing | error`.
+  5. Auto-reconnect on disconnect with exponential backoff (1s → 30s cap). On reconnect, reuses the current `cursor` so no events are missed even across network flaps.
+  6. Exposes: `events` (reactive ring buffer), `stats` (reactive snapshot), `connectionState`, `reconnect()`, `destroy()`.
+  7. Token refresh: if auth expires mid-stream, `EventSource` errors → `reconnect()` grabs a fresh token from the auth store before re-opening.
 
 ### 2.4 Store
 
@@ -235,9 +280,11 @@ TypeScript mirrors of the backend event shape, stats shape, and journey shape. S
 
 Pinia composition store holding:
 - Current app's stats snapshot.
-- Recent events ring buffer (for the live ticker).
-- Per-stage rolling rates (events-per-minute, recomputed on a 1s interval).
-- Derived `flaggedRatio` / `safeRatio` for Sankey width calculation.
+- Recent events ring buffer (for the live ticker). Backed by a fixed-capacity `Array<PipelineEvent>` + `Set<eventId>` for O(1) dedupe.
+- Per-stage rolling rates (events-per-minute, recomputed on a 1s interval via `setInterval` that is cleared on store teardown — no orphaned timers on SPA navigation).
+- Derived `flaggedRatio` / `safeRatio` for Sankey width calculation, memoised via Vue's `computed`.
+- Per-log journey cache (LRU, cap 100) so clicking the same log twice in the ticker doesn't re-fetch `/journey`.
+- Perf invariants documented inline: ring-buffer insert is O(1), dedupe check is O(1), stats update is snapshot-replace (no per-field diffing). No reactivity traps — events flow through a shallow ref to keep Vue from deep-watching hundreds of objects.
 
 ### 2.5 Components
 
@@ -335,7 +382,7 @@ Because `log_pipeline_events` inherits `log_buffer`'s 48h retention, the picker 
 ## File summary
 
 **New backend files:**
-- `backend/migrations/034_log_pipeline_events.up.sql` + `.down.sql`
+- `backend/migrations/036_log_pipeline_events.up.sql` + `.down.sql`
 - `backend/internal/db/queries/log_pipeline_events.sql`
 - `backend/internal/agent/pipeline_bus.go` + `_test.go`
 - `backend/internal/agent/pipeline_writer.go`
@@ -388,14 +435,20 @@ Phase 2 is larger than the original `pipeline-page.md` estimate (800 LOC) becaus
 
 ---
 
+## Resolved decisions
+
+1. **Escalation rule naming for `rule_hit`** — **resolved as Option A**. `ShouldEscalate` returns `(bool, ruleID string)` with stable IDs per branch (`error_type`, `request_server_error`, `system_resource_alert`, …). Full rule-ID table in `pipeline-rule-options.md`. Non-escalated events persist with `rule_hit = ""`. Alternatives (DB-backed rules, expression engine) are documented but not pursued.
+
+2. **Ingestion event granularity** — **one event per log**. 48h retention bounds the row count (ballpark: 1000 logs/min × 60 × 48 × 4 stages ≈ 11.5M rows, within comfort for indexed Postgres). Aggregate events would lose the per-log particle stream that is the feature's point.
+
+3. **Activity stage completeness** — **remain at 4 event stages**. Activity is a downstream *view* over assessments, not a new event. The Activity funnel node visually exists but is painted from `assessment`-stage events plus a link out to the existing Activity page. A fifth `notification_dispatch` event may be added later if notifications become first-class in the pipeline UI — the `stage` column is a TEXT and trivially extensible.
+
+4. **Time Machine retention tiers** — **deferred**. 48h is the v1 default, inherited from `log_buffer`. Longer retention (for paid tiers or compliance) becomes a separate scoped plan; it is cheap to introduce later by decoupling `log_pipeline_events` retention from `log_buffer` via a soft reference + independent pruner.
+
+5. **Ticker hydration** — **bundled `/bootstrap` endpoint + SSE `?since=` replay + client ID-based dedupe**. Architecture in Phase 1.6 and Phase 2.3. Guarantees: (a) first paint has populated stats + ticker in one roundtrip, (b) zero gap between hydration and live stream, (c) zero duplicates, (d) correct under reconnects and long disconnects (via `resync`).
+
 ## Remaining open questions
 
-1. **Escalation rule naming for `rule_hit`.** Phase 1 persists which Gate rule fired. The rules are currently hardcoded in `severity_gate.go` — do they have stable string identifiers today, or do we need to introduce a rule-ID constant table as part of this work? (Ninety-second grep through `severity_gate.go` will answer this; flagging so we don't discover it mid-implementation.)
+1. **`PipelineBus` channel capacity at burst.** The default buffered-channel cap (128) may be low for assessment-stage fan-out when Claude completes a large batch. If production telemetry (`pipeline_bus_dropped_events_total`, Phase 3.1) shows drops during normal bursts, raise the cap or introduce a per-stage channel. Track during Phase 3 rollout; not a Phase 1 blocker.
 
-2. **Ingestion event granularity under batch webhooks.** A single webhook request can contain hundreds of logs (e.g., Fly drain bursts). Do we emit one `ingestion` event per log (truest to the data model, but 100× the pipeline event writes) or one aggregated event per batch with a `count` field and spawn the per-log events only at the `classified` stage? Recommendation: one event per log — writes are cheap, and per-log ingestion events are the only way to draw an accurate Ingestion-stage particle stream. But worth a conscious decision.
-
-3. **Activity stage completeness.** The doc lists five stages but `log_pipeline_events.stage` only has four values (ingestion/classified/gate/assessment). The "Activity" visual node is really just the downstream view of assessments — no new event is emitted when something lands in `agent_log`; it's the same event as `assessment`. Confirming that's the right model, or do we want a fifth `activity` stage event for symmetry (e.g., to capture notification dispatch)?
-
-4. **Time Machine retention messaging.** The 48h window is currently hardcoded in SQL. Is that still the right default for replay, or does Heimdall want a longer retention tier for paid tiers specifically for pipeline audit history? If yes, it changes the schema slightly (separate retention policy for `log_pipeline_events`) — cheap to add now, expensive to retrofit.
-
-5. **Live ticker storage.** Phase 2 uses an in-memory ring buffer (cap 500) for the live ticker. On page reload, the ticker starts empty until new events arrive. Acceptable, or should the initial page load hydrate the ticker with e.g. the last 50 events from `log_pipeline_events`? (Recommendation: hydrate from DB on load — it's a one-query addition and avoids an empty-state feel.)
+2. **Bootstrap cache key granularity.** Phase 3.3 adds a 5s server-side cache on `/bootstrap`. Cache key must include `(appId, window, tickerLimit)` — a user with two tabs open at different windows (e.g. 1h vs 24h) must not cross-pollute. Noting for Phase 3 implementation.

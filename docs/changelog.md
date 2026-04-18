@@ -1,5 +1,7 @@
 # Changelog
 
+- [0.46.1 — Source Filtering Post-Assessment Hardening](#0461--source-filtering-post-assessment-hardening-2026-04-18)
+- [0.46.0 — Source Filtering & Org-Level Connections](#0460--source-filtering--org-level-connections-2026-04-18)
 - [0.45.2 — Connection Pause / Resume](#0452--connection-pause--resume-2026-04-16)
 - [0.45.1 — RLS on Idempotency Table](#0451--rls-on-idempotency-table-2026-04-16)
 - [0.45.0 — Webhook Ingestion Overhaul](#0450--webhook-ingestion-overhaul-2026-04-16)
@@ -119,6 +121,147 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.46.1 — Source Filtering Post-Assessment Hardening (2026-04-18)
+
+Seven issues surfaced by a four-agent production-readiness assessment of 0.46.0. One critical runtime regression, two operational-safety gaps, one security test gap, three API-hygiene fixes. No feature changes — hardening only. Approximately 200 lines of code + a 4-line migration; no schema changes.
+
+**Migration:** `037_source_filter_lookup_index.up.sql`
+**Completion notes:** `docs/completions/source-filtering-phase5.md`
+
+### Critical: GitHub install-callback crash
+
+`ConnectionsPage.vue` referenced an undefined ref (`repoSelectorConnectionId`) in the `?github=installed` redirect branch — a rename miss from Phase 3's `manage-repos → manage-sources` collapse. No test exercised the post-install redirect, so the regression was latent until a user completed a GitHub App install and the callback hit this code path. Fixed by renaming to the live symbol (`sourceSelectorConnectionId`) and setting `sourceSelectorDiscoverable = true` for parity with the in-UI `openSourceSelector()` entry point.
+
+### Syslog listener: startup retry + Health failure signal
+
+If the initial `refreshEnabledSet` call failed during `Listen()` (a DB hiccup during startup), the in-memory allow-list stayed empty and drop-by-default silently dropped every incoming message until the 60-second ticker eventually succeeded — the TCP listener looked healthy, the UI showed `active`, zero logs persisted. Three defensive layers now:
+
+1. **Initial retry with 1s/2s/3s backoff** before the accept loop starts.
+2. **`initialRefreshDone atomic.Bool`** flipped on the first successful load.
+3. **`Health()` fails** if the flag is still false — the connection shows as `error` in the UI and monitoring, so oncall sees the problem immediately.
+
+The background ticker keeps trying indefinitely; once it succeeds, `Health()` recovers on its own.
+
+### Syslog discovered-hostname map: bounded memory
+
+The per-listener `discovered` map (dedupes `connection_sources` upserts across the listener's lifetime) was unbounded. A long-running listener receiving traffic from many short-lived hostnames (container sprawl, or forged packets) could grow the map indefinitely. Added a 10,000-entry cap with clear-on-overflow. `UpsertConnectionSource` is `ON CONFLICT DO UPDATE`, so a re-upsert after clear is a cheap timestamp bump — worst-case extra DB load is bounded and trivial. A `slog.Warn` on clear surfaces sustained memory pressure in logs.
+
+### Partial-index coverage for `ListEnabledSourceNames`
+
+The existing partial index `(connection_id, source_name) WHERE enabled = true` serves `ListAppsEnabledForSource` (org fan-out path) perfectly, but `ListEnabledSourceNames` filters by `(connection_id, app_id)` and was doing a heap-filter on `app_id` after the index scan. Migration 037 adds a second partial index `(connection_id, app_id) WHERE enabled = true`. Both query shapes now use index-only filtering; both indexes are small (partial, enabled=true only).
+
+### Source-filter authz: 400 → 403
+
+`resolveSourceFilterApp` was returning every failure as `400 Bad Request`, conflating syntactic problems (malformed app_id) with policy denials (cross-org app, app/connection mismatch). Signature changed to return `(uuid.UUID, int, error)` where the int is the HTTP status — `400` only for syntactic problems, `403` for policy denials. All four call sites (`ListSourceFilters`, `UpdateSourceFilters`, `AddSourceFilter`, `DeleteSourceFilter`) updated together.
+
+### `DiscoverSources` error mapping: everything was 502
+
+Every failure in `discoverGitHubRepos` previously collapsed into `502 Bad Gateway`, hiding three distinct causes from clients and oncall. Introduced a typed `discoverError` with per-kind status mapping:
+
+- **503 Service Unavailable** — our deployment has no GitHub App configured (`s.GitHub == nil`). The installation is fine; we're misconfigured.
+- **500 Internal Server Error** — our stored connection config is corrupt (unparseable JSON, missing `installation_id`).
+- **429 Too Many Requests** — GitHub rate-limited us. Client should back off.
+- **502 Bad Gateway** — genuine upstream failure (network, non-2xx from a valid request).
+
+The handler dispatches via `errors.As`, emitting a `slog.Error` side-band for 5xx tags so oncall still sees the underlying cause. Test `TestDiscoverSources_GitHubAppNotConfigured` updated from `502` to `503` to match the corrected behaviour. Subtle implementation note: the initial version routed 5xx tags through `jsonServerError`, which hardcodes `500`; the final fix calls `jsonError` directly with the tagged status and emits the slog side-band separately.
+
+### Cross-org attack: direct test coverage
+
+The Phase 2 security boundary (`app.OrgID != conn.OrgID` check in `resolveSourceFilterApp`) had no direct test — `TestSourceFilters_OrgScopedRequireAppID` only exercised the "missing app_id" branch. Added two tests:
+
+- **`TestResolveSourceFilterApp_CrossOrgRejected`** — creates a second org with the test user as a member, then attempts GET/POST/PUT/DELETE on an orgA connection using orgB's `app_id`. All four must return 403. Final assertion queries `app_source_filters` to confirm no side-effect rows leaked into orgB's app.
+- **`TestResolveSourceFilterApp_AppScopedMismatchRejected`** — on an app-scoped connection, a different-but-valid `app_id` from the same org returns 403. Covers the other resolver branch.
+
+### Not changed
+
+- `jsonServerError` helper still hardcodes 500. Phase 5 worked around it for `DiscoverSources` only; a broader error-code-hygiene pass is a future scope.
+- No frontend component tests for `SourceSelector.vue`. The critical runtime regression is fixed; broader component-test coverage is a frontend-test-infra investment deferred to a later pass.
+- No fan-out batch query (org-scoped `ListAppsEnabledForSource` is still O(distinct sources) DB round-trips). Acceptable at current scale; flagged in 0.46.0 risk table.
+- No `DiscoverSources` server-side cooldown — the new `429` pass-through gives the client an accurate signal to back off, which is the most important part.
+
+---
+
+## 0.46.0 — Source Filtering & Org-Level Connections (2026-04-18)
+
+Four-phase overhaul introducing a generic source-filter pipeline across every connector type that carries multi-source traffic. Before 0.46.0, Fly.io's org-wide Log Shipper forced every Fly app's logs into whichever Heimdall Application happened to host the webhook; GitHub had its own bespoke table and selector; OTLP and syslog stored everything indiscriminately. After 0.46.0, one connection can be attached at the organisation level, each app independently picks which sources it wants via a unified "Manage Sources" selector, and ingestion drops everything else at the edge. The same pattern works for webhook logs, GitHub repos, OTLP services, and syslog hostnames.
+
+**Plan:** `docs/executing/source-filtering-and-org-connections.md`
+**Completion notes:** `docs/completions/source-filtering-phase{1..4}.md`
+
+**Drop-by-default is the key operational semantic.** Migrations 034–036 do not auto-enable any existing source. Existing webhook/OTLP/syslog integrations must explicitly enable their source names via the new selector or their traffic will be dropped. The wizard's new "Select Sources" step is the new-user mitigation path; existing users should check the selector for each affected connection after deploy.
+
+### Phase 1 — Filter infrastructure & webhook filtering
+
+**Migration:** `034_source_filtering.up.sql`
+**Files:** `db/queries/source_filters.sql`, `handlers/source_filters.go`, `handlers/webhook_parsers.go`, `handlers/webhooks.go`, `components/connections/SourceSelector.vue`, `types/source.ts`
+
+Two new tables with RLS. `connection_sources` is the auto-discovery ledger — one row per `(connection_id, source_name)`, populated by ingestion with `last_seen_at` bumped on every hit. `app_source_filters` is the per-app toggle list — one row per `(app_id, connection_id, source_name)` with an `enabled` boolean. A partial index `WHERE enabled = true` backs the ingestion hot-path lookup.
+
+Every webhook batch now runs a two-step filter inside its insert transaction. Discovery first (upsert each unique source name into `connection_sources` — new sources must appear in the selector before they can be opted in). Filter second (load `ListEnabledSourceNames` once per batch into a Go map; drop entries whose source isn't enabled). Both run in the same transaction as the inserts, so discovery + filtered inserts + idempotency cache write are atomic.
+
+The Fly.io webhook parser populates `SourceName` from `fly.app.name` (bare app name like `"trajan"`, distinct from the prefixed `SourceType = "flyio/trajan"`). Users filter by `"trajan"` in the UI; `SourceType` stays unchanged as the activity-feed label. The webhook response adds a `filtered` counter alongside `accepted` for operator debugging; idempotency replay returns the cached body so the `accepted`/`filtered` numbers survive even if filters change between request and replay.
+
+Four new endpoints under `/api/connections/{id}/sources` for list/bulk-update/manual-add/delete, plus a `SourceSelector.vue` component with 10-second polling, staleness-tiered dots (green < 1h, amber 1–24h, red > 24h, muted "never seen"), and an `embedded` prop for wizard integration. The Fly.io drain wizard embeds the selector as Step 6 so new users see drop-by-default in context and can pre-add app names before logs start arriving.
+
+### Phase 2 — Org-level connections
+
+**Migration:** `035_org_connections.up.sql`
+**Files:** `db/queries/connections.sql`, `sqlc.yaml`, `handlers/connections.go`, `handlers/webhooks.go`, `handlers/otlp.go`, `handlers/source_filters.go`, `cmd/heimdall/main.go`, `components/connections/wizard/steps/StepConnectionScope.vue`, `components/connections/ConnectionBubble.vue`, `components/connections/ConnectionDetailModal.vue`
+
+`connections.org_id` added (NOT NULL, backfilled from `applications.org_id` before the constraint is applied). `connections.app_id` relaxed to nullable — org-scoped connections leave it NULL. RLS rewritten from single-owner (`user_id = app_current_user_id()`) to org-member-via-subquery. `connection_sources` RLS follows. `connections.user_id` stays as the creator-audit field — the access gate is org membership, not creator identity.
+
+`sqlc.yaml` gained a nullable-UUID override producing `*uuid.UUID` instead of `pgtype.UUID`. Four columns switched: `agent_log.conversation_id`, `conversations.investigation_id`, `notification_log.agent_log_id`, `connections.app_id`. JSON now serialises as UUID-string-or-null — consistent with what the frontend already assumed. This is a public-API shape change for any external consumer reading these fields from raw model JSON.
+
+`CreateConnection` branches on whether the request carries `app_id`. Org-scoped creation is gated behind `supportsOrgScope(connType)`, which permits only `webhook_logs` and `otlp` (extended to all four connector types in Phase 4). The frontend wizard adds a "Connection Scope" radio step for eligible flows; connections render with an "Org-wide" pill in the detail modal and a corner `ORG` tag on the bubble.
+
+**Webhook ingestion now fans out per source.** Org-scoped connections resolve a per-source app list (`ListAppsEnabledForSource`) once per distinct source name in a batch and insert one `log_buffer` row per (entry, app) pair. Cheap reads (no filter join on the activity feed), expensive writes (one row per matching app). Transaction discipline is preserved — discovery, route lookup, fan-out inserts, and idempotency cache write are all atomic.
+
+**Source-filter endpoints** now require `?app_id=` for org-scoped connections. A new `resolveSourceFilterApp` helper enforces three checks: (a) the app exists, (b) the user is a member of the app's org, (c) the app's org matches the connection's org. The third check is the key security boundary — a user in orgs A and B could otherwise pass an app from B against a connection in A. Attack coverage landed in 0.46.1 after review flagged the test gap.
+
+OTLP ingestion explicitly rejected NULL-app-id connections in this phase pending Phase 4's `service.name` extraction — the rejection was removed in Phase 4 once routing was meaningful.
+
+### Phase 3 — GitHub repos migrated to the generic system
+
+**Migration:** `036_github_to_generic_sources.up.sql`
+**Files:** `db/queries/github_repos.sql` (deleted), `db/queries/source_filters.sql`, `handlers/github_repos.go` (deleted), `handlers/source_filters_discover.go`, `components/connections/GitHubRepoSelector.vue` (deleted), `components/connections/SourceSelector.vue`
+
+The bespoke `github_repos` table is gone. Migration 036 copies every row into `connection_sources` + `app_source_filters` with `repo_full_name → source_name`, then drops the old table. Idempotent (`ON CONFLICT DO NOTHING`). The down migration recreates the table and synthesises negative placeholder `repo_id`s — a real rollback would re-sync from GitHub for authentic IDs; the negatives are an honest marker.
+
+`ListEnabledGitHubReposByApp` moved into `source_filters.sql` as a 3-field projection over the new tables. The agent's `search_codebase` tool needs `ConnectionID`, `RepoFullName`, and `ConnectionConfig` only — the generated row struct shrank from 8 fields to 3, and `TestListEnabledGitHubReposByApp_QuerySignature` is a compile-time guard against silent regressions.
+
+`POST /api/connections/{id}/sources/discover` is the new user-initiated discovery endpoint. For GitHub connections it paginates `GET /installation/repositories` (50 pages × 100 = 5,000 repo ceiling, matching the pre-Phase-3 handler) and upserts each `owner/repo` into `connection_sources`. For webhook/OTLP/syslog types it returns 400 pointing callers at the passive discovery flow. Error mapping improved in 0.46.1 to distinguish 429 / 500 / 502 / 503.
+
+`GitHubRepoSelector.vue` is gone — `SourceSelector.vue` gained a `discoverable` prop. When true, the selector hides polling (discovery is user-initiated), hides the manual-add form (can't grant yourself GitHub access by typing a name), hides the staleness banner (repos don't "go quiet"), shows a Sync button that triggers `/sources/discover`, and auto-syncs on mount if the local list is empty. Everything else (toggle rows, bulk save, `appId` prop for org-scoped editing) works identically in both modes. The old `manage-repos` event was renamed `manage-sources` project-wide; no backwards-compat shim.
+
+### Phase 4 — OTLP / syslog / generic webhook extraction
+
+**Files:** `handlers/source_filter_pipeline.go` (new), `handlers/webhooks.go`, `handlers/otlp.go`, `connectors/logs/syslog.go`
+
+`source_filter_pipeline.go` extracts the Phase 1 filter pipeline into two reusable functions: `routeSources` (discovery + per-source app resolution) and `insertFiltered` (filtered insert loop with fan-out). Both accept a `*db.Queries` transaction handle so callers keep transactional discipline. `webhooks.ingestEntries` is ~60 lines shorter and OTLP now uses the same pipeline.
+
+**OTLP ingestion rewritten.** The handler flattens `resourceLogs × scopeLogs × logRecords` into a `[]webhookLogRequest` where each record's `SourceName = <resource.service.name>` (bare, the filter key) and `SourceType = "otlp/<service>"` (the activity-feed label). Then it runs the shared pipeline — inheriting drop-by-default, discovery upserts, and fan-out for org-scoped connections. Response shape changed from `207 Multi-Status` on partial failures to `200` with `{accepted, filtered}` (the 207 handling was a pre-existing hack, not an OTLP-spec behaviour). Phase 2's defensive org-scoped rejection is gone — routing is now meaningful.
+
+**Syslog gained a hostname allow-list cache.** A persistent TCP listener can't run a DB query per message without throttling the hot path, so the listener holds two maps behind a mutex: `enabled` (hostnames with `enabled = true`, refreshed every 60s by a background goroutine) and `discovered` (hostnames already upserted in this listener's lifetime, to dedupe `connection_sources` writes). The hot path is an O(1) map lookup — extract hostname from the RFC 5424 header → `discoverHostname` → check `isEnabled` → drop or insert. Refresh failures keep the previous cache rather than flipping every host off. Drop-by-default now applies to syslog — existing connections must enable their hosts after deploy. Startup-failure handling and discovered-map bounding hardened in 0.46.1.
+
+**Generic webhook payloads gained a `source_name_path` config knob.** For AWS Firehose / generic Pub/Sub / custom HTTP drains whose natural source identifier is buried in a nested field, the config can specify a dotted path (`meta.source`, `log_group`) that overrides the parser's `SourceName`. Syntax is intentionally minimal — dotted only, no arrays, no filters, no wildcards. `applySourceNamePathOverride` runs after parsing and before routing; missing keys or non-string leaves fall through to the parser value. `extractStringByPath` walks decoded JSON by key segments with no panics on malformed input.
+
+**Frontend:** `SOURCE_FILTERED_TYPES` expanded from `{webhook_logs, github}` to `{webhook_logs, github, otlp, syslog}`. The "Manage Sources" button now renders for all four types; the pipeline otherwise unchanged. `source_name_path` isn't a wizard field yet — users who need it set it via the connection Edit panel.
+
+### What did NOT change in 0.46.0
+
+- **Pollers untouched.** Postgres and Supabase pollers are out of scope for this arc; the filter spec generalises naturally to them but no consumer asked for it yet.
+- **No monitoring/agent changes.** Fan-out is an ingestion-time concept. An app's monitor still sees only logs in `log_buffer` with its `app_id`, which is exactly what fan-out guarantees.
+- **No scope-switching on existing connections.** Flipping an app-scoped connection to org-scoped (or back) would require migrating filter rows, invalidating activity feeds, and re-assessing monitoring state. Users can delete + recreate to achieve the effect — explicitly, since the two modes have different mental models.
+- **No filtered-traffic counter in the UI.** A per-connection counter would need a metrics pipeline or a counter table disproportionate to this scope. The `filtered` field is in the webhook response for operator debugging, and `slog.Info` logs it in the server log.
+
+### Known deferred work (tracked, not blocking)
+
+- **Fan-out read cost is O(distinct sources)** per batch — one `ListAppsEnabledForSource` query per unique source name. Fine at current scale; batching to one query per batch is the obvious fix if/when this becomes a hotspot.
+- **Syslog org-scoping off.** The in-memory allow-list cache is per-app today; fan-out would need a different cache shape. Kept out to avoid speculative design; the `supportsOrgScope` gate still rejects it server-side.
+- **60s syslog toggle latency** is the trade-off for the DB-free hot path. Acceptable; not configurable yet.
 
 ---
 

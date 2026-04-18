@@ -15,8 +15,15 @@ const emit = defineEmits<{
   delete: [id: string]
   pause: [id: string]
   resume: [id: string]
-  'manage-repos': [id: string]
+  'manage-sources': [id: string]
 }>()
+
+// Connection types with per-source filter UI. Phase 1 shipped webhook_logs;
+// Phase 3 folded GitHub in (the old "Repos" selector); Phase 4 extends to
+// OTLP (service.name) and syslog (hostname). Generic webhooks continue to
+// use the same webhook_logs entry — Phase 4 adds an optional
+// source_name_path config knob for them, but no type-gate change here.
+const SOURCE_FILTERED_TYPES = new Set(['webhook_logs', 'github', 'otlp', 'syslog'])
 
 /* ── Type labels ── */
 
@@ -76,7 +83,8 @@ const configDetails = computed(() => {
       break
 
     case 'github':
-      // GitHub connections show repos via manage-repos action
+      // GitHub connections show the Repos button in the action bar; no
+      // detail rows to render here (installation_id is internal).
       break
 
     case 'otlp':
@@ -192,9 +200,19 @@ onBeforeUnmount(() => {
             />
           </div>
           <div>
-            <h3 class="font-mono text-sm font-bold uppercase tracking-wider text-text-primary">
-              {{ connection.name }}
-            </h3>
+            <div class="flex items-center gap-2">
+              <h3 class="font-mono text-sm font-bold uppercase tracking-wider text-text-primary">
+                {{ connection.name }}
+              </h3>
+              <!-- Org-wide badge: distinguishes Phase 2 org-scoped connections
+                   from the default app-scoped ones. Rendered inline with the
+                   name so the scope is the first thing the user notices. -->
+              <span
+                v-if="connection.app_id === null"
+                class="px-2 py-0.5 font-mono text-[9px] uppercase tracking-widest border border-accent/40 text-accent rounded"
+                title="Visible to every app in the organisation"
+              >Org-wide</span>
+            </div>
             <p class="font-mono text-xs text-text-muted mt-0.5">
               {{ displayType }} &middot; {{ directionLabel }}
             </p>
@@ -258,11 +276,11 @@ onBeforeUnmount(() => {
       <div class="flex items-center justify-between px-6 py-4">
         <div class="flex items-center gap-2">
           <button
-            v-if="connection.type === 'github'"
-            @click="emit('manage-repos', connection.id); emit('close')"
+            v-if="SOURCE_FILTERED_TYPES.has(connection.type)"
+            @click="emit('manage-sources', connection.id); emit('close')"
             class="px-3 py-1.5 font-mono text-xs uppercase tracking-wider text-text-secondary border border-border rounded hover:border-border-hover hover:text-text-primary transition-colors cursor-pointer"
           >
-            Repos
+            {{ connection.type === 'github' ? 'Repos' : 'Sources' }}
           </button>
           <button
             @click="emit('test', connection.id); emit('close')"

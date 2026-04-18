@@ -95,7 +95,7 @@ func (q *Queries) CountLogsByUserAndSeverity(ctx context.Context, arg CountLogsB
 }
 
 const getConnectionByWebhookToken = `-- name: GetConnectionByWebhookToken :one
-SELECT id, name, type, direction, config, status, last_seen, created_at, updated_at, user_id, app_id FROM connections
+SELECT id, name, type, direction, config, status, last_seen, created_at, updated_at, user_id, app_id, org_id FROM connections
 WHERE config->>'webhook_token' = $1::text AND type IN ('webhook_logs', 'otlp') AND status = 'active'
 `
 
@@ -114,6 +114,7 @@ func (q *Queries) GetConnectionByWebhookToken(ctx context.Context, webhookToken 
 		&i.UpdatedAt,
 		&i.UserID,
 		&i.AppID,
+		&i.OrgID,
 	)
 	return i, err
 }

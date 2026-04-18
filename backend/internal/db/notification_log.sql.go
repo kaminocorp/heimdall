@@ -45,12 +45,12 @@ RETURNING id, app_id, channel_id, agent_log_id, severity, summary, status, error
 `
 
 type InsertNotificationLogParams struct {
-	AppID      uuid.UUID   `json:"app_id"`
-	ChannelID  uuid.UUID   `json:"channel_id"`
-	AgentLogID pgtype.UUID `json:"agent_log_id"`
-	Severity   string      `json:"severity"`
-	Summary    string      `json:"summary"`
-	Status     string      `json:"status"`
+	AppID      uuid.UUID  `json:"app_id"`
+	ChannelID  uuid.UUID  `json:"channel_id"`
+	AgentLogID *uuid.UUID `json:"agent_log_id"`
+	Severity   string     `json:"severity"`
+	Summary    string     `json:"summary"`
+	Status     string     `json:"status"`
 }
 
 func (q *Queries) InsertNotificationLog(ctx context.Context, arg InsertNotificationLogParams) (NotificationLog, error) {
@@ -97,7 +97,7 @@ type ListNotificationLogByAppRow struct {
 	ID           uuid.UUID   `json:"id"`
 	AppID        uuid.UUID   `json:"app_id"`
 	ChannelID    uuid.UUID   `json:"channel_id"`
-	AgentLogID   pgtype.UUID `json:"agent_log_id"`
+	AgentLogID   *uuid.UUID  `json:"agent_log_id"`
 	Severity     string      `json:"severity"`
 	Summary      string      `json:"summary"`
 	Status       string      `json:"status"`

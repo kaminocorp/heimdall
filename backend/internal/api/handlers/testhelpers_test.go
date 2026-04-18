@@ -74,7 +74,13 @@ func testSetup(t *testing.T) *testEnv {
 	)
 	require.NoError(t, err)
 
-	_, err = pool.Exec(ctx, "INSERT INTO users (id, email) VALUES ($1, $2)", userID, email)
+	// Supabase ships an `on_auth_user_created` trigger that auto-inserts
+	// into public.users when an auth.users row is created. Use ON CONFLICT
+	// so the test helper works whether the trigger is present (hosted
+	// Supabase) or absent (plain Postgres).
+	_, err = pool.Exec(ctx,
+		"INSERT INTO users (id, email) VALUES ($1, $2) ON CONFLICT (id) DO UPDATE SET email = EXCLUDED.email",
+		userID, email)
 	require.NoError(t, err)
 
 	// Create an organization and application for the test user.
@@ -123,6 +129,9 @@ func testSetup(t *testing.T) *testEnv {
 		Queries: queries,
 		Agent:   nil, // Agent not needed for handler tests
 		Poller:  connectors.NewPoller(queries),
+		// v0.45.2 pause/resume logic calls Listener.Stop unconditionally on
+		// every UpdateConnection — the nil default panics the handler test.
+		Listener: connectors.NewListenerManager(),
 	}
 
 	// Build a test router that mirrors the production routes from router.go
@@ -205,8 +214,11 @@ func testSetup(t *testing.T) *testEnv {
 			r.Put("/{id}", srv.UpdateConnection)
 			r.Delete("/{id}", srv.DeleteConnection)
 			r.Post("/{id}/test", srv.TestConnection)
-			r.Get("/{id}/github/repos", srv.ListGitHubRepos)
-			r.Put("/{id}/github/repos", srv.UpdateGitHubRepos)
+			r.Get("/{id}/sources", srv.ListSourceFilters)
+			r.Put("/{id}/sources", srv.UpdateSourceFilters)
+			r.Post("/{id}/sources", srv.AddSourceFilter)
+			r.Delete("/{id}/sources", srv.DeleteSourceFilter)
+			r.Post("/{id}/sources/discover", srv.DiscoverSources)
 		})
 
 		r.Get("/logs", srv.ListLogs)

@@ -183,7 +183,14 @@ func resumeSyslogListeners(ctx context.Context, queries *db.Queries, lm *connect
 			}
 		}
 
-		sl, err := logs.NewSyslog(configJSON, conn.ID, conn.UserID, conn.AppID, queries)
+		if conn.AppID == nil {
+			// Defensive skip — syslog is app-scoped by design. If somehow a
+			// syslog connection landed with NULL app_id, bailing here is safer
+			// than passing uuid.Nil into NewSyslog.
+			slog.Warn("skipping syslog listener resume: org-scoped not supported", "connection_id", conn.ID)
+			continue
+		}
+		sl, err := logs.NewSyslog(configJSON, conn.ID, conn.UserID, *conn.AppID, queries)
 		if err != nil {
 			slog.Error("failed to create syslog listener for resume", "connection_id", conn.ID, "err", err)
 			continue
@@ -208,7 +215,14 @@ func resumePollers(ctx context.Context, queries *db.Queries, poller *connectors.
 			continue
 		}
 		for _, conn := range conns {
-			if err := connectors.StartPoller(poller, typeName, conn.Config, conn.ID, conn.UserID, conn.AppID); err != nil {
+			if conn.AppID == nil {
+				// Pollers operate on a specific app — skip org-scoped
+				// connections (which are webhook_logs / otlp only anyway).
+				slog.Warn("skipping poller resume: org-scoped not supported for this type",
+					"type", typeName, "connection_id", conn.ID)
+				continue
+			}
+			if err := connectors.StartPoller(poller, typeName, conn.Config, conn.ID, conn.UserID, *conn.AppID); err != nil {
 				slog.Error("resume: poller init failed", "type", typeName, "connection_id", conn.ID, "err", err)
 			}
 		}
