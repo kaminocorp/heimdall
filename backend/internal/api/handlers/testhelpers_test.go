@@ -186,6 +186,11 @@ func testSetup(t *testing.T) *testEnv {
 			r.Get("/monitoring/status", srv.GetMonitoringStatus)
 			r.Get("/stats", srv.GetAppDashboardStats)
 
+			// Pipeline page (migration 038)
+			r.Get("/pipeline/bootstrap", srv.PipelineBootstrap)
+			r.Get("/pipeline/logs", srv.PipelineLogs)
+			r.Get("/pipeline/logs/{logId}/journey", srv.PipelineJourney)
+
 			// Notification management
 			r.Get("/notifications/preferences", srv.GetNotificationPreferences)
 			r.Put("/notifications/preferences", srv.UpdateNotificationPreferences)

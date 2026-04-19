@@ -24,6 +24,7 @@ const sections = [
     label: 'Infrastructure',
     items: [
       { name: 'Connections', to: '/connections', routeName: 'connections' },
+      { name: 'Pipeline', to: '/pipeline', routeName: 'pipeline' },
     ],
   },
   {

@@ -70,6 +70,20 @@ const router = createRouter({
       name: 'connections',
       component: () => import('@/pages/ConnectionsPage.vue'),
     },
+    {
+      path: '/pipeline',
+      name: 'pipeline',
+      component: () => import('@/pages/PipelinePage.vue'),
+    },
+    // Deep-link target for a specific log's replay. Mounts the same
+    // PipelinePage; the :logId param is watched inside the page to auto-open
+    // the replay modal. Useful from Activity links, Slack notifications, and
+    // any future "open replay" buttons elsewhere in the app.
+    {
+      path: '/pipeline/logs/:logId',
+      name: 'pipeline-log',
+      component: () => import('@/pages/PipelinePage.vue'),
+    },
     // Legacy paths — redirect to unified Connections page
     { path: '/enrichment', redirect: '/connections' },
     { path: '/outbound', redirect: '/connections' },

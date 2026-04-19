@@ -90,7 +90,14 @@ func main() {
 
 	queries := db.New(pool)
 	notifier := notifications.NewDispatcher(queries, cfg)
-	ag := agent.New(queries, cfg, classifier, notifier, ghClient)
+	// Pipeline-page plumbing: one bus per process, one writer wrapping
+	// (queries, bus). The writer is handed to the Agent so monitor.go
+	// can emit classified/gate/assessment events; it's also reachable
+	// from the HTTP ingestion handlers via s.Agent.Pipeline() so the
+	// webhook path can emit the ingestion-stage event post-commit.
+	pipelineBus := agent.NewPipelineBus()
+	pipelineWriter := agent.NewPipelineWriter(queries, pipelineBus)
+	ag := agent.New(queries, cfg, classifier, notifier, ghClient, pipelineWriter, pipelineBus)
 	ag.Start(context.Background())
 
 	poller := connectors.NewPoller(queries)

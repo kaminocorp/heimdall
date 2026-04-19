@@ -29,13 +29,15 @@ type Agent struct {
 	classifier   Classifier
 	notifier     *notifications.Dispatcher
 	githubClient *github.Client
+	pipeline     *PipelineWriter
+	pipelineBus  *PipelineBus
 	limiter      *rate.Limiter
 	mu           sync.Mutex // protects cancel and wg
 	cancel       context.CancelFunc
 	wg           sync.WaitGroup
 }
 
-func New(queries *db.Queries, cfg *config.Config, classifier Classifier, notifier *notifications.Dispatcher, gh *github.Client) *Agent {
+func New(queries *db.Queries, cfg *config.Config, classifier Classifier, notifier *notifications.Dispatcher, gh *github.Client, pipeline *PipelineWriter, bus *PipelineBus) *Agent {
 	providers := map[string]Provider{
 		// Anthropic is always available — ANTHROPIC_API_KEY is required at config load.
 		defaultProviderName: NewAnthropicProvider(cfg.AnthropicKey),
@@ -55,8 +57,31 @@ func New(queries *db.Queries, cfg *config.Config, classifier Classifier, notifie
 		classifier:   classifier,
 		notifier:     notifier,
 		githubClient: gh,
+		pipeline:     pipeline,
+		pipelineBus:  bus,
 		limiter:      rate.NewLimiter(monitorLLMRate, 5),
 	}
+}
+
+// Pipeline returns the writer used for log-pipeline events. Exposed so the
+// webhook ingestion handler (which lives in the handlers package) can emit
+// StageIngestion events alongside monitor.go's StageClassified / Gate /
+// Assessment emits. Nil-safe: if the agent was constructed without a
+// pipeline writer, callers' fire-and-forget Write* methods are no-ops.
+func (a *Agent) Pipeline() *PipelineWriter {
+	if a == nil {
+		return nil
+	}
+	return a.pipeline
+}
+
+// PipelineBus returns the in-memory pub/sub hub for live pipeline events.
+// Used by the Pipeline SSE handler to subscribe per-app. Nil-safe.
+func (a *Agent) PipelineBus() *PipelineBus {
+	if a == nil {
+		return nil
+	}
+	return a.pipelineBus
 }
 
 // providerFor resolves a provider by name, falling back to the default
@@ -97,7 +122,7 @@ func (a *Agent) Start(ctx context.Context) {
 	}
 	ctx, a.cancel = context.WithCancel(ctx)
 
-	a.wg.Add(3)
+	a.wg.Add(4)
 	a.mu.Unlock()
 
 	go func() {
@@ -115,7 +140,12 @@ func (a *Agent) Start(ctx context.Context) {
 		a.InvestigationScheduler(ctx)
 	}()
 
-	slog.Info("agent started, monitoring + pruner + scheduler goroutines spawned")
+	go func() {
+		defer a.wg.Done()
+		a.runPipelineSweeper(ctx)
+	}()
+
+	slog.Info("agent started, monitoring + pruner + scheduler + pipeline-sweeper goroutines spawned")
 }
 
 // Stop cancels the monitoring goroutine and waits for it to finish.

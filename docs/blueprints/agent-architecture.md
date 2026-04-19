@@ -483,7 +483,7 @@ If you only remember one diagram, make it this one:
 
 ## 12. Where to go next
 
-- **To understand the *data* side** (where logs come from, how they reach `log_buffer`): `docs/blueprints/connections.md` and `docs/blueprints/database-connection-architecture.md`.
+- **To understand the *data* side** (where logs come from, how they reach `log_buffer`): `docs/blueprints/connections.md` and `docs/blueprints/database-connection-blueprint.md`.
 - **To understand the Lumber model specifically**: `docs/blueprints/lumber-integration.md`.
 - **To understand HTTP routing and middleware**: `docs/blueprints/backend-blueprint.md`.
 - **To read the product-level "why"**: `docs/vision.md`. The three agent modes map 1:1 to the three sections of the "The Agent" part of the vision doc.

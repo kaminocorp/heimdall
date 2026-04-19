@@ -84,11 +84,11 @@ Decisions:
 
 2. **Pre-ingestion drops surface as a separate counter, not a funnel stage.** The Ingestion node card shows a secondary muted stat: *"N filtered from disabled sources in the last hour"*. This mirrors the "Showing X filtered entries/hr from disabled sources" indicator already in the source-filtering UI, and is sourced from a lightweight in-memory counter incremented in the webhook handler at the same point where filtering happens. Adding a fifth funnel stage would (a) require recording filtered entries in a new table (no `log_id` to reuse), (b) blur the funnel's meaning. A sibling counter keeps the funnel crisp.
 
-3. **Org-scoped connections fan-out cleanly.** When Phase 2 of source-filtering ships, a single webhook batch can fan-out into N `log_buffer` rows (one per app with the source enabled). Each insert produces its own `log_id` and its own Ingestion event per app. The Pipeline page is app-scoped, so each app's funnel naturally shows only its share. No changes needed to the pipeline event schema.
+3. **Org-scoped connections fan-out cleanly.** Source-filtering Phase 2 shipped in 0.46.0, so this is already production reality: a single webhook batch fans out into N `log_buffer` rows (one per app with the source enabled), each with its own `log_id`. That means each app emits its own Ingestion event per log, and the Pipeline page — being app-scoped — naturally shows only its share. No changes needed to the pipeline event schema; the fan-out assumption that drives the "one event per log per app" model is already live in prod.
 
 4. **New-user empty state.** With drop-by-default source filtering, a freshly onboarded user will see zero Ingestion events until they enable sources. The Pipeline page's empty state should explicitly say "No sources enabled yet — [Manage sources]" rather than a generic "waiting for logs" spinner, to avoid the mystery of "the drain is configured but nothing arrives."
 
-5. **Migration numbering.** Source-filtering Phase 1 shipped as migration 034. Phase 2 has reserved 035. The Pipeline's `log_pipeline_events` migration is therefore numbered **036**. See Phase 1.1.
+5. **Migration numbering.** Source-filtering has now landed 034 (Phase 1), 035 (Phase 2 — org-scoped connections, shipped 0.46.0), 036 (Phase 3 — github→generic sources), and 037 (Phase 6 hardening — source-filter lookup index). The Pipeline's `log_pipeline_events` migration is therefore numbered **038**. See Phase 1.1.
 
 ---
 
@@ -96,11 +96,11 @@ Decisions:
 
 **Goal:** Every log flowing through the pipeline publishes live events AND persists its full stage history. Replay-capable from day one.
 
-### 1.1 Migration `036_log_pipeline_events`
+### 1.1 Migration `038_log_pipeline_events`
 
-**New file:** `backend/migrations/036_log_pipeline_events.up.sql`
+**New file:** `backend/migrations/038_log_pipeline_events.up.sql`
 
-> **Migration numbering:** 033 (`rls_webhook_idempotency`) shipped in v0.45.1. 034 (`source_filtering` Phase 1) shipped with `source-filtering-and-org-connections.md`. 035 is reserved by `source-filtering` Phase 2 (org-scoped connections). Pipeline therefore takes **036**. If the Pipeline lands before source-filtering Phase 2, renumber at merge time — migration numbers are cheap to bump.
+> **Migration numbering:** 033 (`rls_webhook_idempotency`) shipped in v0.45.1. 034 (`source_filtering` Phase 1), 035 (`org_connections`, Phase 2, shipped 0.46.0), 036 (`github_to_generic_sources`, Phase 3), and 037 (`source_filter_lookup_index`, Phase 6 hardening) all landed in the 0.46.x source-filtering overhaul. Pipeline therefore takes **038**. The 0.46.4 schema-drift audit confirmed prod matches `backend/migrations/*.up.sql` exactly through 037, so 038 lands on a known-clean parent.
 
 ```sql
 CREATE TABLE log_pipeline_events (
@@ -127,8 +127,10 @@ CREATE INDEX idx_lpe_log_id ON log_pipeline_events (log_id, occurred_at);
 CREATE INDEX idx_lpe_app_occurred ON log_pipeline_events (app_id, occurred_at DESC);
 CREATE INDEX idx_lpe_stage ON log_pipeline_events (app_id, stage, occurred_at DESC);
 
--- RLS: follow the system-table pattern (migration 030). Enabled, no policies.
--- Only the owner-role pool (via s.Queries) writes/reads this table.
+-- RLS: follow the system-table pattern (migrations 030, 033). Enabled, no
+-- policies — non-owner roles (anon, authenticated) see zero rows; the backend
+-- connects as the postgres owner role which bypasses RLS. Only the owner-role
+-- pool (via s.Queries) writes/reads this table.
 ALTER TABLE log_pipeline_events ENABLE ROW LEVEL SECURITY;
 ```
 
@@ -350,7 +352,7 @@ If an SSE connection closes, the bus must drop the subscriber channel promptly. 
 
 ### 3.5 RLS verification
 
-Run the standard RLS test pass against `log_pipeline_events`. Follows the system-table pattern from migration 030 — owner-role pool only.
+Run the standard RLS test pass against `log_pipeline_events`. Follows the system-table pattern from migrations 030 and 033 — RLS enabled with no policies, owner-role pool only. Verify non-owner roles (anon, authenticated) return zero rows via a direct Postgres query, matching the verification done after 0.43.0/0.43.1/0.45.1 RLS rollouts.
 
 ---
 
@@ -382,7 +384,7 @@ Because `log_pipeline_events` inherits `log_buffer`'s 48h retention, the picker 
 ## File summary
 
 **New backend files:**
-- `backend/migrations/036_log_pipeline_events.up.sql` + `.down.sql`
+- `backend/migrations/038_log_pipeline_events.up.sql` + `.down.sql`
 - `backend/internal/db/queries/log_pipeline_events.sql`
 - `backend/internal/agent/pipeline_bus.go` + `_test.go`
 - `backend/internal/agent/pipeline_writer.go`

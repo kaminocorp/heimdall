@@ -61,7 +61,9 @@ func TestShouldEscalate(t *testing.T) {
 
 	for _, tt := range escalated {
 		t.Run("escalate/"+tt.name, func(t *testing.T) {
-			assert.True(t, ShouldEscalate(event(tt.typ, tt.category)))
+			ok, rule := ShouldEscalate(event(tt.typ, tt.category))
+			assert.True(t, ok)
+			assert.NotEmpty(t, rule, "escalating branches must return a rule id")
 		})
 	}
 
@@ -88,7 +90,9 @@ func TestShouldEscalate(t *testing.T) {
 
 	for _, tt := range safe {
 		t.Run("safe/"+tt.name, func(t *testing.T) {
-			assert.False(t, ShouldEscalate(event(tt.typ, tt.category)))
+			ok, rule := ShouldEscalate(event(tt.typ, tt.category))
+			assert.False(t, ok)
+			assert.Equal(t, RuleNone, rule, "safe branches must return RuleNone")
 		})
 	}
 }

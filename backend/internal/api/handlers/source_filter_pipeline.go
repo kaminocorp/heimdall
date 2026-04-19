@@ -28,6 +28,17 @@ type sourceFilterStats struct {
 	Sources int
 }
 
+// insertedRow captures the minimal fields the Pipeline-page ingestion-stage
+// emit needs. Collected during fan-out and emitted by the caller after
+// commit — an FK-bound pipeline event can only be inserted once its
+// referenced log_buffer row has committed.
+type insertedRow struct {
+	LogID      uuid.UUID
+	AppID      uuid.UUID
+	SourceType string
+	Severity   string
+}
+
 // routeSources implements the discover-then-filter step shared by every
 // source-filtered ingestion path (webhook, OTLP, syslog). It:
 //
@@ -108,6 +119,12 @@ func routeSources(
 // name has at least one target app. Entries without a route fall through to
 // `filtered++`. Fan-out inserts happen inside the iteration so that a
 // failure halfway rolls back the whole batch via the caller's transaction.
+//
+// Returns the post-commit emit list (one entry per inserted log_buffer row)
+// so the caller can fire Pipeline-page ingestion events after tx.Commit.
+// Emitting inside the transaction would race with the FK-bound
+// log_pipeline_events insert — the log_buffer row isn't visible to a
+// separate connection until commit.
 func insertFiltered(
 	ctx context.Context,
 	qtx *db.Queries,
@@ -116,8 +133,9 @@ func insertFiltered(
 	entries []webhookLogRequest,
 	routes map[string][]uuid.UUID,
 	seenSources map[string]struct{},
-) (sourceFilterStats, error) {
+) (sourceFilterStats, []insertedRow, error) {
 	stats := sourceFilterStats{Sources: len(seenSources)}
+	var inserted []insertedRow
 	for _, e := range entries {
 		name := sourceNameOf(e)
 		targets := routes[name]
@@ -132,19 +150,26 @@ func insertFiltered(
 		}
 
 		for _, appID := range targets {
-			if _, err := qtx.InsertLogEntry(ctx, db.InsertLogEntryParams{
+			row, err := qtx.InsertLogEntry(ctx, db.InsertLogEntryParams{
 				ConnectionID: connID,
 				SourceType:   e.SourceType,
 				Severity:     severity,
 				Payload:      e.Payload,
 				UserID:       userID,
 				AppID:        appID,
-			}); err != nil {
-				return stats, fmt.Errorf("insert log entry: %w", err)
+			})
+			if err != nil {
+				return stats, nil, fmt.Errorf("insert log entry: %w", err)
 			}
+			inserted = append(inserted, insertedRow{
+				LogID:      row.ID,
+				AppID:      appID,
+				SourceType: e.SourceType,
+				Severity:   e.Severity,
+			})
 			stats.Inserts++
 		}
 		stats.Accepted++
 	}
-	return stats, nil
+	return stats, inserted, nil
 }

@@ -1,5 +1,9 @@
 # Changelog
 
+- [0.47.3 — Pipeline Page: Time Machine Replay](#0473--pipeline-page-time-machine-replay-2026-04-19)
+- [0.47.2 — Pipeline Page: Production Hardening](#0472--pipeline-page-production-hardening-2026-04-19)
+- [0.47.1 — Pipeline Page: Live Sankey Funnel UI](#0471--pipeline-page-live-sankey-funnel-ui-2026-04-19)
+- [0.47.0 — Pipeline Page: Backend Plumbing](#0470--pipeline-page-backend-plumbing-2026-04-19)
 - [0.46.4 — Schema-Drift Audit: Clean](#0464--schema-drift-audit-clean-2026-04-18)
 - [0.46.3 — Source Filtering Third-Pass Hardening](#0463--source-filtering-third-pass-hardening-2026-04-18)
 - [0.46.2 — Phase 6 Hardening](#0462--phase-6-hardening-2026-04-18)
@@ -124,6 +128,220 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.47.3 — Pipeline Page: Time Machine Replay (2026-04-19)
+
+Fourth and final pipeline-page phase. Turns the visually-complete-but-disabled Time Machine block from 0.47.1 into a working historical picker, and upgrades the journey modal from a timeline-only view into a scaled Sankey replay with a traced particle. Closes the loop on "every log's journey is already being recorded" that Phases 1–3 spent three releases preparing for: a post-hoc query surface over the 48h window, deep-linkable per-log replays, and an Activity→Pipeline pivot that Slack notifications and assessment rows can now target.
+
+### `ListPipelineLogsByApp` picker query
+
+One SQL query that collapses the up-to-four per-log stage rows into a single summary per `log_id`. `GROUP BY log_id` with `MAX(...) FILTER (WHERE stage = X)` and `BOOL_OR(escalated) FILTER (WHERE stage = 'gate')` gives one row per log carrying `first_seen_at`/`last_seen_at` (derived via `MIN`/`MAX(occurred_at)`), `stage_count` (1–4, reflecting how far the log reached), and the stage-specific summary fields.
+
+The `MAX(...) FILTER` trick is load-bearing on an invariant of the writer contract — `agent/pipeline_writer.go` emits each stage at most once per log_id, so the FILTER partitions narrow to at most one row and `MAX` is effectively "pick the one value there is." Documented in the query comment so a future re-classification or multi-assessment writer change can't silently break the picker. The generated code was hand-rolled (same precedent as 0.46.3's `source_filters.sql.go` comment regen) to avoid threading the sqlc binary through this change — the diff matches what `sqlc generate` would produce.
+
+Offset pagination, not cursor. Cursor over a GROUP BY needs `HAVING MAX(occurred_at) < @cursor` plus tie-breaking on `log_id`; at 48h retention and realistic per-app volumes, offset scans via `idx_lpe_app_occurred` are cheap, and the UI layer is already the right place for "render only the visible window."
+
+### `GET /api/apps/{appId}/pipeline/logs` handler
+
+Query params: `since`/`until` (RFC3339, default last 24h, **clamped to 48h max** to match the `log_buffer` cascade-delete ceiling and prevent a buggy client DOSing the picker with a 30-day range), `limit` (1..200, default 50), `offset` (≥0, default 0). Response includes a `truncated` flag when `len(rows) >= limit` so the client can offer "load more" without an off-by-one probe. Authorisation via the existing `authorizeApp` helper; cross-org `appId` returns 404, verified in test.
+
+### `TimeMachineBlock.vue` — wired picker
+
+Rewritten end-to-end, Phase-2 visual shell preserved. Defaults: last 24h window, limit 50. `datetime-local` inputs in local time, converted to UTC RFC3339 at fetch time. Each result row renders a stage bar (● ● ● ●, filled for reached stages, outlined for unreached), a one-line summary (time, source, severity, classification, duration), and a `flagged` pill when the gate escalated. Click emits `inspect` with the `log_id` — consumed by `PipelinePage.vue` via the same handler the ticker uses, so picker-click and ticker-click funnel through identical code.
+
+The retention disclosure is now in the block's subtitle ("Retention is 48 hours — older logs are pruned with their parent row"), satisfying plan §4.4 without a separate callout. Empty state matches the live page's helpful next-step phrasing: "No journeys in this window. Try a wider range, or check source filters on your connections." App switches clear results via `watch` on `appId` so the previous app's journeys don't linger.
+
+No true virtualisation. The plan called for it, but the codebase has no virtualisation library today and 200 DOM rows is fine in a `max-h-72 overflow-auto` container. `vue-virtual-scroller` stays a drop-in future change if telemetry shows users raising the limit to the cap.
+
+### `PipelineJourneyModal.vue` — replay upgrade
+
+The 0.47.1 modal was a timeline-only view with a "Replay view coming soon" footer. This release upgrades it in place: a scaled Sankey (640×140 SVG) at the top with five stage nodes, a pre-gate trunk, and a post-gate fork that renders both flagged (top, amber) and safe (bottom, muted grey) lanes. A single amber-glow circle sits at the first stage node and animates through the stages the log actually reached, driven by a `setTimeout(step, 650ms)` chain for a guided reading rather than a physics sim. Unreached stages stay outlined with a small "—" indicator. Auto-plays once on load; "Replay" button restarts.
+
+The replay modal owns its own Sankey rather than reusing `PipelineFunnel.vue`. The live funnel reads ratios off the pipeline store, which keeps recomputing as events stream in; the replay backdrop needs to be a static visual representing *this log's* journey, not the rolling flagged/safe split of the window. Coupling would have meant freezing ratios at modal-open time (complex) or letting the backdrop drift while the modal was open (wrong). Five equally-spaced anchors in a 640×140 viewBox is simple enough that there's no layout code worth sharing.
+
+### Deep-link route `/pipeline/logs/:logId`
+
+Mounts the same `PipelinePage` component — the `:logId` param is watched inside the page and auto-opens the replay modal when set. Inspecting a log via ticker or picker mirrors into the URL via `router.replace({ name: 'pipeline-log', params: { logId } })`, so every replay is shareable. Closing the modal steps back to `/pipeline` via `router.replace` (not `push`) so the browser back button doesn't accumulate one history entry per modal open. Refresh re-opens the modal with the same log; close clears it.
+
+### Tests
+
+Two new backend integration subtests (skip without `DATABASE_URL`): picker dedupes per log, respects the window (backdated out-of-window log is absent, three in-window logs return `stage_count = 4` with populated summary fields and `rule_hit = RuleErrorType`), and refuses cross-org apps with a 404 via `authorizeApp`. Two new frontend test files: `fetchPipelineLogs` contract tests (2 subtests) and `TimeMachineBlock` behaviour tests (3 subtests — Replay fetches and renders, click emits `inspect` with the right log_id, empty result renders the "No journeys" empty state).
+
+Backend: ~260 LOC across modified files, ~100 LOC tests. Frontend: ~260 LOC across modified files + ~140 LOC new test files. `PipelinePage` chunk grew from 29.4 kB (9.2 kB gzip) to 36.8 kB (11.4 kB gzip). Under the plan's ~400 LOC Phase 4 budget, with one meaningful scope extension (the `ListPipelineLogsByApp` query that Phase 1 had deferred from its originally-planned §1.6). `vue-tsc` clean, `vite build` clean, `go vet ./...` clean, 78/78 frontend tests + full backend suite pass.
+
+### Follow-ups (not blocking)
+
+- **Phase 1b — poller-based connectors** (still open across all four phases). `flyio.go`, `syslog.go`, `vercel.go`, `railway.go`, `supabase.go`, `mongodb.go` each write to `log_buffer` independently of the shared `insertFiltered` helper, so their apps show a silent Ingestion stage on the Pipeline page and in Time Machine picker results. Classified/Gate/Assessment still fire correctly via `monitorApp`. Gets more user-visible now that the picker is real.
+- "Load more" button in the picker (backend already returns `truncated: true`; frontend currently surfaces only a warning line).
+- Window preset buttons (`Last 15m`, `Last hour`, `Last 6h`, `Last 24h`) — a design-refresh moment rather than a Phase 4 follow-up.
+- Slack/Activity deep-link adoption: the Activity page's assessment rows can now deep-link to the underlying pipeline replay via `/pipeline/logs/:logId`. One-line change, deferred to a future UX pass.
+- Longer retention tiers (plan §4.4 punted). Mechanism: decouple `log_pipeline_events` retention from `log_buffer` via a soft reference + independent pruner. Deferred until product need.
+
+---
+
+## 0.47.2 — Pipeline Page: Production Hardening (2026-04-19)
+
+Third pipeline-page phase. Five de-risk hooks around the data plane that 0.47.0 shipped — none visible to the frontend, all firing only under load, abuse, or drift. Addresses three classes of latent concern: visibility gaps (bus drops + SSE connections were invisible to Prometheus), abuse/runaway surfaces (nothing capped per-user SSE connections), and stale bets (the plan's "cache would be cheap" hook finally cashed in now that every Pipeline page mount hits the same aggregate). Plus a codified RLS regression test so future migrations can't silently weaken the posture.
+
+### Bus drop-counter metric
+
+`heimdall_pipeline_bus_dropped_events_total` — a plain Prometheus Counter, no labels. A drop is a drop; per-app/per-stage context lives in the WARN log line (emitted at power-of-two cadence), and Prometheus cardinality budget is too precious to spend on a feature that should stay at zero. `metrics.PipelineBusDroppedEvents.Inc()` runs inside the same `default` branch that does the `sync/atomic.Uint64` add, so the two counters can never diverge. `rate(heimdall_pipeline_bus_dropped_events_total[5m])` in Grafana is now actionable for any non-zero value.
+
+### SSE per-user connection cap
+
+New `sseConnLimiter` — `map[uuid.UUID]int` behind a mutex with paired `Acquire`/`Release` semantics. Cap at `pipelineSSEPerUserCap = 5`. The `PipelineStream` handler calls `Acquire(userID)` *after* JWT validation + app-ownership check (so the counter is never driven by unauthenticated traffic), returns 429 on refusal, and `defer`s `Release` so disconnects free the slot. Per-user, not per-IP — multiple tabs share a session cookie, and IP-based limiting would lump unrelated users behind the same NAT or corporate gateway.
+
+Two Prometheus exports: `heimdall_pipeline_sse_active_connections` (Gauge, inc/dec on Acquire/Release) and `heimdall_pipeline_sse_rejected_total` (Counter, ticks on every cap-driven 429 — rising rate indicates either a runaway client or a probing attacker). Underflow guard on `Release` so a future refactor that accidentally double-releases can't permanently lock out a user.
+
+### `/pipeline/bootstrap` response cache
+
+5-second in-memory cache over the `bootstrapResponse` payload, keyed by `(appID, window, tickerLimit)` — exactly the input tuple that determines the response. `sync.Mutex`-guarded `map[bootstrapCacheKey]bootstrapCacheEntry` with lazy per-Get eviction; no background sweeper needed at this cache's size.
+
+Payloads are pre-marshalled `[]byte` so hits `w.Write(payload)` directly, bypassing `json.Encoder` reflection. Cache read happens *after* `authorizeApp` — auth runs unconditionally, the cache never short-circuits it. Tenant isolation is double-enforced: `authorizeApp` verifies the caller can see `app.ID`, AND `app.ID` is baked into the cache key, so even if auth were somehow bypassed upstream a miss-keyed hit from another tenant is structurally impossible. `X-Cache: HIT`/`MISS` response headers for `curl -I` debugging and test assertions. `heimdall_pipeline_bootstrap_cache_total{result="hit|miss"}` for hit-rate visibility.
+
+Resolves the plan's open question on cache-key granularity: the three-tuple is correct, and a future window-selector in the UI (0.47.1 follow-up) drives a wider key space without weakening isolation.
+
+### Leak-canary sweeper
+
+Per-minute goroutine launched alongside `Monitor`, `Prune`, and `InvestigationScheduler` in `Agent.Start`. Each tick calls `PipelineBus.SubscriberCounts()` for a freshly-allocated per-app snapshot and emits a WARN log for any app above `pipelineSweeperThreshold = 50`. The snapshot (not a live view of the internal map) lets the sweeper iterate while Subscribe/unsub rewrites proceed in parallel, tested explicitly.
+
+The threshold of 50 assumes ~10 concurrent operators × `pipelineSSEPerUserCap = 5` channels each. Anything meaningfully above is a bug: either a handler path forgot to unsub, or the SSE cap has been circumvented. The sweeper *warns but never closes channels* — taking action would mask the actual leak. The canary's job is to make the bug noisy so it gets fixed, not to auto-mitigate it behind the scenes.
+
+### RLS verification codified
+
+0.47.0's migration 038 enabled RLS on `log_pipeline_events` with zero policies, matching the system-table pattern from migrations 030 and 033. The new integration subtest `RLS: non-owner roles see zero pipeline rows` inserts real data, reads `pg_class.relrowsecurity` to assert RLS is still enabled (guard against a future `ALTER TABLE ... DISABLE ROW LEVEL SECURITY` slipping through review), reads `pg_policies` to assert zero policies exist (guard against a permissive policy silently granting read access), then `SET LOCAL ROLE authenticated` and asserts `SELECT count(*)` returns 0 under that role. Same verification pattern 0.43.0 and 0.45.1 used post-deploy, now codified as a regression test so the next migration that touches this table can't silently break the posture without a CI red signal.
+
+### Tests
+
+One new `TestPipelineBus_SubscriberCountsSnapshot` (two subscribers on app A + one on app B, assert `SubscriberCounts()` returns `{A: 2, B: 1}`, mutate the snapshot, assert internal state unchanged). Six new unit tests in `pipeline_support_test.go` covering the limiter (caps per user, per-user isolation, release-underflow-idempotent) and cache (hit/miss, key isolation across appID/window/tickerLimit, expired-entry eviction). Two new integration subtests (bootstrap cache serves hit on second call with `X-Cache: MISS`→`HIT` and byte-identical bodies; RLS verification above). All pre-existing tests still pass under `-race`.
+
+Backend totals: ~160 LOC across new files + ~60 LOC across modified files, ~190 LOC tests. Slightly over the plan's ~150 LOC budget because of the six support-file unit tests, which weren't in the original line-count estimate. No frontend changes.
+
+### Follow-ups (not blocking)
+
+- Grafana dashboard wiring for the four new metrics. Metrics are self-sufficient — `curl /metrics | grep pipeline` is enough for ad-hoc debugging — but a dashboard panel each would close the loop.
+- Per-user SSE cap tuning. Five is a round guess; raise via `pipelineSSEPerUserCap` if rejection counter rises in normal use, trust it if the counter stays zero.
+- Bootstrap cache TTL tuning. 5s was the plan's recommendation. If hit-rate runs hot (>60%) consider raising; if cold (<20%) the cache is paying synchronisation cost for no gain.
+
+---
+
+## 0.47.1 — Pipeline Page: Live Sankey Funnel UI (2026-04-19)
+
+Second pipeline-page phase. The user-visible page — `/pipeline`, live SVG Sankey funnel + Canvas2D particle layer + per-stage detail panels + live log ticker + per-log journey modal + a visually complete but stubbed Time Machine block. Hydrates synchronously via `/pipeline/bootstrap` (stats + ticker seed + cursor in one roundtrip) and streams via `/pipeline/stream` SSE with `?since=` replay and ID-based dedupe to close the hydration-to-stream gap. Backend unchanged from 0.47.0 — this release is pure frontend. The bar was "a user-visible page that hydrates synchronously and stays in sync indefinitely"; both met.
+
+### Store + composable architecture
+
+`usePipelineStore` (Pinia composition store) holds `stats` (replaced wholesale on bootstrap), `events` in a **`shallowRef` with `triggerRef` after every mutation** (a 500-element array of plain objects deep-watched would melt Vue under high-throughput streams — the shallow ref + manual trigger trades ergonomics for predictable cost), a ring buffer capped at 500 with `Set<string>` dedupe for O(1) de-dupe by event id, 1s stage-rate recompute tick gated by lifecycle hooks, computed `flaggedRatio`/`safeRatio`/`assessmentRatio` for funnel widths (defaults to 0.5/0.5 when no gate decisions exist so the funnel still has visible geometry on first paint), and an LRU journey cache (cap 100) keyed by log_id.
+
+`usePipelineStream` composable is the hydration-to-stream glue. Sequence: `bootstrap()` hydrates the store synchronously and captures cursor; `openStream()` opens `EventSource` against `/pipeline/stream?since=<cursor>&token=<jwt>`. Three frame types handled separately — `replay` (frames missed between bootstrap-read and SSE-subscribe, inserted via the same store path as live events; dedupe set rejects the overlap with bootstrap, which is exactly what makes the architecture safe), `live` (first live frame flips `connectionState` to `'streaming'` — not `onopen`, because handshake is not data flow), and `resync` (server hit replay cap, buffer is too stale; reset the store, drop cursor, re-bootstrap, reconnect).
+
+Token-aware manual reconnect, not `EventSource`'s built-in auto-retry. Auto-retry reuses the original URL, meaning a rotated JWT loops on 401 forever; manual reconnect closes the socket and rebuilds the URL with whatever's in the auth store now. Cursor advances per accepted event (not per frame batch), so reconnects never re-replay anything already seen — a monotonic max-of-seen `occurred_at` is sufficient because the server emits in order.
+
+### Funnel geometry — pure SVG
+
+`PipelineFunnel.vue` is pure SVG, five stages laid out as fractional x-positions projected into pixel space via a single `ResizeObserver`. Two path groups: a pre-Gate trunk (phosphor-green gradient rectangle) and a post-Gate split (two cubic-bezier tapers — top stream amber for flagged, bottom stream muted grey for safe). Stream widths come from `store.flaggedRatio` and `store.safeRatio` with a `Math.max(3px, …)` floor so a zero-flagged window still has visible body. Geometry (width, height, cy, trunkHalf, flaggedHalf, safeHalf, stagePoints) is `defineExpose`-d so the particle layer and node card row plant on the same anchor x's without re-implementing the pad math.
+
+Skipped d3-sankey. Five stages is too few to justify a layout-pass dependency, and the bespoke geometry gives pixel-precise control over the post-Gate split shape that d3's standard sankey can't easily produce.
+
+### Canvas2D particle overlay — allocation-free
+
+`PipelineParticles.vue` is a Canvas2D layer absolutely positioned over the SVG. Allocation-free per frame via a fixed-size pool of 600 `Particle` slots that recycle as old particles fade. Each particle gets a travel segment between two stage anchor x's, a lane y (pre-Gate centre with jitter; post-Gate flagged above, safe below — matches the SVG split visually), an ease-out-cubic interpolation across `TRAVEL_MS = 1800`, fade in over the first 15% of life and fade out over the last 15%, and a 2.4px solid disc + 5.5px low-alpha glow halo. Two `arc` calls per particle is the entire per-frame cost.
+
+Sampling under load: `recentSpawns` decays per second; when it exceeds `SAMPLE_THRESHOLD_PER_S = 50`, only 1 in 4 events spawn a particle. The store still records every event — only the visual drops, and it auto-relaxes when traffic calms. Canvas is backed at `devicePixelRatio` so particles stay crisp on Retina while CSS size stays at layout px so canvas and SVG align.
+
+### Per-stage detail panels
+
+`PipelineNodeCard.vue` is tone-aware (`default`/`warn`/`safe`) — Gate uses `warn` so it visually pops as the decision point. A live "active" pulse appears on the right when the per-stage rate > 0. `PipelineNodeDetail.vue` renders stage-specific content sourced from the same in-memory ring buffer (no extra round-trip): Ingestion gets top sources + last 20 ingest rows; Lumber gets Type.Category histogram + last 20 classifications; Gate gets rules-fired hit counts + flagged-share % + last 20 gate decisions; Agent gets recent assessments with deep-link to the Activity row; Activity gets severity breakdown + `Open Activity →` link. Every row is click-to-inspect → fires the journey modal.
+
+### Ticker, journey modal, Time Machine stub
+
+`PipelineLogTicker.vue` renders the most recent 80 events from the 500-cap ring buffer — DOM size bounded even when the buffer is full. Each row is a one-line journey hint (timestamp · stage badge · stage-appropriate content), click-to-inspect. `PipelineJourneyModal.vue` consumes Phase 1's `/pipeline/logs/{logId}/journey` endpoint, lists each stage event with timestamp + stage label + structured detail, and carries a "Replay view coming soon — Phase 4 will animate this log through the funnel" footer. Journey-cache LRU in the store means re-opening the same row is a free open even across modal mount/unmount.
+
+`TimeMachineBlock.vue` is visually complete but disabled: title, "soon" pill, two `datetime-local` controls, a "Replay" button, all with `cursor-not-allowed` styling and a tooltip pointing at "every log's journey is already being recorded." Phase 4 swaps the disabled attribute for behaviour and the picker already looks right.
+
+### Page shell + empty states
+
+`PipelinePage.vue` is the route-level component. Mounts the composable, watches `app.currentAppId`, tears down + restarts on app switch (no accidental leakage of one app's events into another's view; no orphaned `EventSource` connections accumulating across navigations). Header carries a state pill (`streaming` / `reconnecting` / `resyncing` / `error` / `idle` / `bootstrapping`) with a breathing-glow on `streaming`. Two empty states: "no apps" ("Create an application to start watching its pipeline") and "streaming-but-zero-ingestion" ("No ingestion events in the last hour. Enable a source on a connection to start the flow.") — the second matches the plan's new-user case where drop-by-default source filtering means a freshly onboarded user sees zero events forever until they enable sources.
+
+Routing added to `frontend/src/router/index.ts` as a lazy-imported `PipelinePage`. Nav entry added to the **Infrastructure** section in `AppSidebar.vue` immediately after Connections — the plan's wording said "top header" but the codebase keeps primary nav in the sidebar, and the rendered order (between Connections and Agent Configuration) honours the plan's intent.
+
+### Tests
+
+13 new tests across three files; pre-existing 60 still green. Store tests (7 subtests) cover `insertEvent` dedupes by id, prepend order, merge-preserving batch order for bootstrap delivery, `flaggedRatio` defaults and stats-driven updates, `reset()` clears the dedupe set (catches a hidden Set leak), and ring-buffer eviction beyond cap. Composable tests (2 subtests) use a stub `EventSource` to assert bootstrap hydration + SSE URL carries cursor as `?since=` (URL-encoded) + EventSource is `.close()`d on unmount, and that the first live frame flips `connectionState = 'streaming'` while the replay frame gets dedupe-rejected against bootstrap. Component tests (3 subtests) cover funnel stage-label rendering, stream-path count, and post-gate widths driven by store ratios.
+
+Frontend totals: ~1,180 LOC across new files + 5 LOC across modified files, ~190 LOC tests. `PipelinePage` chunk is 29.4 kB (9.2 kB gzip) — well within budget for a major new surface. `vue-tsc` clean, `vite build` clean, 73/73 frontend tests pass.
+
+### Follow-ups (not blocking)
+
+- **Phase 1b — poller-based connectors** still open from 0.47.0. Apps using fly/syslog/vercel/railway/supabase/mongodb show a silent Ingestion node (Classified/Gate/Assessment still fire correctly).
+- **Phase 3 hardening**: drop-counter metric, SSE per-user connection cap, `/bootstrap` in-memory cache, abandoned-subscriber leak canary, codified RLS verification. All isolated backend changes.
+- **Phase 4 — Time Machine replay**. Backend `/journey` is already populated; frontend stub is visually complete. Needs the `/pipeline/logs` listing endpoint + picker behaviour + per-log replay animation.
+- **Bootstrap window picker**. Hardcoded to `1h` today; backend supports up to 24h. A window selector in the page header is a one-day add.
+- **Particle cap + sample threshold tunables** should become env-driven once Phase 3.1's drop-counter produces real throughput telemetry.
+
+---
+
+## 0.47.0 — Pipeline Page: Backend Plumbing (2026-04-19)
+
+First phase of a four-phase feature introducing the **Pipeline page** — a live Sankey/funnel visualisation of every log's journey through the five pipeline stages (Ingestion → Lumber → Gate → Agent → Activity), plus a per-log "Time Machine" replay. 0.47.0 is pure backend plumbing: new `log_pipeline_events` table, in-memory `PipelineBus` pub/sub, SSE streaming endpoint, and instrumentation at three of four stages so that from the moment this ships every log's full history is being recorded in prod — when 0.47.1's UI lands on top, the page has real data on day one with no backfill gap.
+
+Heimdall's pipeline was a black box before this. A log arrives via webhook, gets classified by Lumber, either survives the severity gate or doesn't, maybe gets sent to Claude for assessment — but nothing in the product showed that journey. Debugging a misconfiguration meant reading server logs. The feature's core thesis: record every stage transition in a persisted table *and* fan it out over a live bus, so the frontend can render both a live funnel and a historical replay from the same source of truth.
+
+### Migration 038 — `log_pipeline_events`
+
+One row per log per stage. `log_id UUID NOT NULL REFERENCES log_buffer(id) ON DELETE CASCADE` is the spine — every pipeline event is anchored to its `log_buffer` row, and the cascade means the existing 48h pruner (`agent/pruner.go`) sheds pipeline events in lockstep. No new retention logic. `assessment_id UUID REFERENCES agent_log(id) ON DELETE SET NULL` is deliberately looser than CASCADE: deleting an assessment shouldn't erase the earlier stage events for the log it evaluated; the journey up to the gate should still reconstruct. `stage TEXT NOT NULL` (one of `ingestion|classified|gate|assessment`) is plain TEXT not an enum, so a future `notification_dispatch` stage adds one constant in Go, no DDL. Stage-specific nullable columns (`source_type`, `severity`, `type`, `category`, `confidence`, `summary`, `escalated`, `rule_hit`) plus `metadata JSONB` forward-compat bag.
+
+Three indexes: `(log_id, occurred_at)` for journey lookup, `(app_id, occurred_at DESC)` for ticker and bootstrap, `(app_id, stage, occurred_at DESC)` for stage-partitioned aggregates. RLS enabled with zero policies, matching the system-table pattern from migrations 030 and 033 — only the owner-role pool touches this table, non-owner roles see zero rows.
+
+Migration numbering: 037 (source filter lookup index, 0.46.2 hardening) was the last slot. The 0.46.4 schema-drift audit confirmed prod matches `backend/migrations/*.up.sql` exactly through 037, so 038 lands on a verified-clean parent.
+
+### `PipelineBus` — in-memory pub/sub
+
+`Subscribe(appID) → (<-chan PipelineEvent, unsub func())`; `Publish(evt)` routes to every channel registered for `evt.AppID`. Buffered channels (cap 128) with **non-blocking publish semantics** — if a subscriber's buffer is full, its copy of the event is dropped and a counter ticks up (with log lines at drops #1, #2, #4, #8, #16… — power-of-two cadence keeps the signal loud without spam when a subscriber stays stuck). Blocking publish would let one stalled browser tab back-pressure the entire ingestion path; unacceptable. Drops are recoverable because persistence runs *before* publish, so reconnect + `/bootstrap` + `?since=` replay closes the gap.
+
+Lock discipline matters here. The race-clean version holds `RLock` across the `select { case ch <- evt: default: }` block. The obvious snapshot-then-send alternative (copy channel list under RLock, release, then send) has a subtle race — a concurrent `unsub` can close a channel between the release and the send, panicking with "send on closed channel". The concurrent subscribe/unsub unit test under `-race` catches this in one run. Holding RLock is fine in practice: each per-channel send is bounded by a non-blocking `select`, so the lock is released in microseconds even under fan-out.
+
+### `PipelineWriter` — persist-then-publish helper
+
+Thin helper owning both the DB insert and the bus publish. Four stage-specific entry points — `WriteIngestion`, `WriteClassified`, `WriteGate`, `WriteAssessment` — each with a typed input struct. **Persist first, publish second.** If the DB insert fails, the publish is skipped and the error is logged: losing a live event is recoverable (replay via `/bootstrap`); leaving a particle on the page for a log whose journey isn't in the database is not. Fire-and-forget from the caller, all errors logged at WARN, nothing propagated back to `monitorApp` or the webhook handler — a `log_pipeline_events` outage must not degrade the underlying work. Mirrors the pre-existing `EmitLog` contract.
+
+### Severity gate rule IDs (Option A from the plan)
+
+`ShouldEscalate` was `(event lumber.Event) bool`; now returns `(bool, string)`. The string is a stable rule ID per escalating branch — `error_type`, `request_server_error`, `access_login_failure`, `unknown_type`, etc. — exported as named constants (`RuleErrorType`, `RuleRequestServerError`, …) so call sites reference them by name. Safe branches return `RuleNone = ""`. Rule IDs land on `log_pipeline_events.rule_hit`, so the Gate detail panel can show a "rules that fired" histogram without hard-coding Lumber taxonomy strings into the frontend. Alternatives documented in `pipeline-rule-options.md`: DB-backed rules (Option B), expression engine (Option C) — not pursued.
+
+### `Classifier.Classify` returns every log, not just the flagged subset
+
+`ClassifiedLog` grew two fields: `Escalated bool` and `RuleID string`. The interface changed from returning `(flagged []ClassifiedLog, safeCount int)` to returning `[]ClassifiedLog` — every input log, with the gate decision baked in. The old interface threw away safe-log metadata (only the count survived), but the Classified and Gate stages need to emit events for *every* log. Emitting inside the classifier would have required injecting a writer and a ctx into every Classifier implementation; cleaner to return the full list and let `monitorApp` drive the emit. Six call sites migrated to `flagged, safeCount := FilterFlagged(c.Classify(logs))` — `FilterFlagged` is a new free function that partitions by `Escalated`.
+
+### Instrumentation at three of four stages
+
+Classified + Gate fire inside `monitorApp` as it iterates the full `[]ClassifiedLog`, one call per entry (escalated *and* safe). Assessment fires after `a.RunMonitoring` returns and the resulting `agent_log` row is inserted, one event per log in the post-cap `escalated` slice (`monitorApp` caps at `maxFlaggedForLLM = 50` before calling the LLM), guarded on `logEntryID != uuid.Nil`. Ingestion fires post-commit in `webhooks.go` and `otlp.go`, one event per inserted `log_buffer` row — pre-commit emit would race the FK since `log_pipeline_events.log_id` only resolves once `log_buffer` has committed. Required returning inserted rows from `insertFiltered`, which now returns `(sourceFilterStats, []insertedRow, error)`.
+
+**Poller-based connectors deferred to Phase 1b.** `flyio.go`, `syslog.go`, `vercel.go`, `railway.go`, `supabase.go`, `mongodb.go` write to `log_buffer` independently of the shared `insertFiltered` helper. Classified/Gate/Assessment still fire for their logs via `monitorApp`, so the funnel is mostly complete for those apps — only the Ingestion stage is silent.
+
+### HTTP endpoints
+
+- `GET /api/apps/{appId}/pipeline/bootstrap?window=1h&tickerLimit=50` — bundled first-paint response (`{stats, recent_events, cursor}` in one roundtrip). Window capped at 24h, tickerLimit at 200. Replaces the plan's originally-two-endpoint design with one — the ticker paints synchronously with the rest of the page instead of after a follow-up fetch.
+- `GET /api/apps/{appId}/pipeline/logs/{logId}/journey` — ordered stage history for a single log. **Defence-in-depth:** the underlying `GetPipelineEventsByLog` doesn't filter by `app_id`, so without a per-row `row.AppID != app.ID` cross-check a user could guess another tenant's `log_id` and pull its journey. The handler 404s on mismatch. Dedicated test (`journey_refuses_cross-app_log`) constructs a foreign org + app and asserts the 404.
+- `GET /api/apps/{appId}/pipeline/stream?since=<rfc3339>&token=<jwt>` — SSE endpoint. On connect: validate token, drain `GetPipelineEventsSince` up to a 500-row cap and write each as `event: replay` if `since` is set; if the cap is hit emit `event: resync` and close so the client refetches `/bootstrap`; otherwise subscribe to `PipelineBus` and forward live events as `event: live`; heartbeat every 15s so proxies don't idle-close. Auth via `?token=` matches the existing WebSocket pattern — `EventSource` can't set custom headers. The stream route sits outside the `MaxBodySize`-wrapped protected group because streaming responses shouldn't be body-limited.
+
+### Tests
+
+Four unit subtests for `PipelineBus` (fanout, drops-when-full, unsubscribe-cleanup, concurrent-subscribe-unsubscribe — the last one caught the race bug in the original snapshot-then-send `Publish` implementation). Five integration subtests (skip without `DATABASE_URL`): four-stage walk persists and fans out, cascade delete sheds pipeline events with `log_buffer`, `/bootstrap` returns stats and recent events, `/journey` returns ordered stages, and the cross-app-log 404 above. All pass under `-race`.
+
+Backend totals: ~550 LOC across new files + ~80 LOC across modified files, ~290 LOC tests. Matches the plan's ~600 LOC Phase 1 budget.
+
+### Rollout note
+
+Phase 1 merges behind no flag — backend persistence and endpoints are harmless without the UI consuming them. 0.47.1's frontend lands once Phase 1 has been writing events for at least 24h in prod so the initial Pipeline page render has real data.
+
+### Follow-ups (not blocking)
+
+- **Phase 1b — wire poller-based connectors**. `flyio.go`, `syslog.go`, `vercel.go`, `railway.go`, `supabase.go`, `mongodb.go` each need a `pw.WriteIngestion` call after their direct `queries.InsertLogEntry`.
+- **Phase 3 hardening**: bus drop-counter metric, SSE per-user connection cap, `/bootstrap` 5s in-memory cache, abandoned-subscriber leak canary, codified RLS verification.
+- **Classifier emit during ingestion cap.** `monitorApp` caps at `maxFlaggedForLLM = 50`; the dropped flagged logs currently emit Classified + Gate events but no Assessment event (correct — they weren't assessed). A UI indicator that some flagged logs were dropped rather than assessed is a small UX note, not a Phase 1 blocker.
 
 ---
 

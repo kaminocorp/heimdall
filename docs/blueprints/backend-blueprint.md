@@ -7,7 +7,7 @@ This is the "map of the territory" doc. For a narrower deep-dive on any single s
 - **`agent-architecture.md`** — the three agent modes, provider abstraction, tool registry, `agent_log` emission.
 - **`lumber-integration.md`** — the ONNX classifier pipeline that gates monitoring-mode LLM calls.
 - **`connections.md`** — connection schema, connector types, ingestion paths.
-- **`database-connection-architecture.md`** — pgxpool + RLS via `SET LOCAL`.
+- **`database-connection-blueprint.md`** — pgxpool + RLS via `SET LOCAL`.
 - **`sdks-blueprint.md`** — JS/Python/Go client SDKs that post to `/api/webhooks/logs`.
 
 ---
@@ -512,7 +512,7 @@ tx.Exec(ctx, "SET LOCAL app.current_user_id = $1", userID.String())
 return s.Queries.WithTx(tx)  // all subsequent queries run inside this transaction
 ```
 
-`SET LOCAL` is transaction-scoped, so concurrent requests from different users never share session state. This is the canonical way to combine RLS with connection pooling. See `database-connection-architecture.md` for the full pattern.
+`SET LOCAL` is transaction-scoped, so concurrent requests from different users never share session state. This is the canonical way to combine RLS with connection pooling. See `database-connection-blueprint.md` for the full pattern.
 
 **Current enforcement model**: The backend connects as the `postgres` superuser, which bypasses RLS by default. The policies protect against non-owner access paths (Supabase dashboard roles, PostgREST, direct `psql` with other roles). The `SET LOCAL` plumbing is in place so that a migration to a non-owner app role activates RLS enforcement automatically.
 

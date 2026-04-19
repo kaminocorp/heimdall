@@ -29,6 +29,12 @@ func NewRouter(cfg *config.Config, pool *pgxpool.Pool, ag *agent.Agent, jwks *mi
 		// GitHub callback is hit by browser redirect from GitHub — auth via state JWT, not session.
 		r.Get("/github/callback", s.GitHubCallback)
 
+		// Pipeline SSE stream — auth via ?token= query param (EventSource
+		// can't set headers), not the JWT middleware. Lives outside the
+		// protected group so the streaming response isn't wrapped by
+		// MaxBodySize. App authorisation happens inside the handler.
+		r.Get("/apps/{appId}/pipeline/stream", s.PipelineStream)
+
 		// Protected routes — require Supabase JWT, 1MB body limit.
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.MaxBodySize(1 << 20)) // 1MB for JSON endpoints
@@ -65,6 +71,13 @@ func NewRouter(cfg *config.Config, pool *pgxpool.Pool, ag *agent.Agent, jwks *mi
 				r.Put("/agent/config", s.UpdateAppAgentConfig)
 				r.Get("/monitoring/status", s.GetMonitoringStatus)
 				r.Get("/stats", s.GetAppDashboardStats)
+
+				// Pipeline page — bundled first-paint + per-log journey.
+				// The SSE /stream endpoint is registered above, outside
+				// this protected group (its auth is via ?token=).
+				r.Get("/pipeline/bootstrap", s.PipelineBootstrap)
+				r.Get("/pipeline/logs", s.PipelineLogs)
+				r.Get("/pipeline/logs/{logId}/journey", s.PipelineJourney)
 
 				// Notification management
 				r.Get("/notifications/preferences", s.GetNotificationPreferences)

@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
+
+	"github.com/hejijunhao/heimdall/backend/internal/agent"
 )
 
 // OTLP JSON types — subset of the OpenTelemetry Protocol ExportLogsServiceRequest.
@@ -126,7 +128,7 @@ func (s *Server) IngestOTLPLogs(w http.ResponseWriter, r *http.Request) {
 		jsonServerError(w, "source filter pipeline failed", err)
 		return
 	}
-	stats, err := insertFiltered(r.Context(), qtx, conn.ID, conn.UserID, entries, routes, seenSources)
+	stats, inserted, err := insertFiltered(r.Context(), qtx, conn.ID, conn.UserID, entries, routes, seenSources)
 	if err != nil {
 		jsonServerError(w, "failed to insert log entry", err)
 		return
@@ -135,6 +137,21 @@ func (s *Server) IngestOTLPLogs(w http.ResponseWriter, r *http.Request) {
 	if err := tx.Commit(r.Context()); err != nil {
 		jsonServerError(w, "failed to commit transaction", err)
 		return
+	}
+
+	// Pipeline-page ingestion emits — see the parallel block in
+	// ingestEntries (webhooks.go) for why this is post-commit.
+	if s.Agent != nil {
+		if pw := s.Agent.Pipeline(); pw != nil {
+			for _, ins := range inserted {
+				pw.WriteIngestion(r.Context(), agent.IngestionInput{
+					LogID:      ins.LogID,
+					AppID:      ins.AppID,
+					SourceType: ins.SourceType,
+					Severity:   ins.Severity,
+				})
+			}
+		}
 	}
 
 	scope := "app"

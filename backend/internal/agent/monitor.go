@@ -145,10 +145,38 @@ func (a *Agent) monitorApp(ctx context.Context, app db.ListActiveApplicationsRow
 		return
 	}
 
-	// Classify logs through the pipeline.
-	flagged, safeCount := a.classifier.Classify(logs)
+	// Classify logs through the pipeline. The classifier returns one
+	// ClassifiedLog per input (escalated and safe alike) so the Pipeline
+	// page can render per-log stage events for every log — not just the
+	// flagged subset. FilterFlagged pulls out the LLM-bound slice.
+	results := a.classifier.Classify(logs)
+	flagged, safeCount := FilterFlagged(results)
 	metrics.LogsClassifiedTotal.WithLabelValues("safe").Add(float64(safeCount))
 	metrics.LogsClassifiedTotal.WithLabelValues("flagged").Add(float64(len(flagged)))
+
+	// Emit Pipeline-page Classified + Gate events for every log. Fire-
+	// and-forget: any write failure is logged inside pipeline_writer and
+	// never bubbles out here, so a pipeline-events table outage can't
+	// stall monitoring.
+	if pw := a.pipeline; pw != nil {
+		for _, r := range results {
+			pw.WriteClassified(ctx, ClassifiedInput{
+				LogID:      r.Log.ID,
+				AppID:      r.Log.AppID,
+				Type:       r.Type,
+				Category:   r.Category,
+				Severity:   r.Severity,
+				Confidence: r.Confidence,
+				Summary:    r.Summary,
+			})
+			pw.WriteGate(ctx, GateInput{
+				LogID:     r.Log.ID,
+				AppID:     r.Log.AppID,
+				Escalated: r.Escalated,
+				RuleID:    r.RuleID,
+			})
+		}
+	}
 
 	// If flagged logs exist, escalate to LLM.
 	if len(flagged) > 0 {
@@ -205,6 +233,23 @@ func (a *Agent) monitorApp(ctx context.Context, app db.ListActiveApplicationsRow
 			},
 			severity,
 		)
+
+		// Emit one Pipeline-page Assessment event per flagged log that
+		// actually reached the LLM (the post-cap slice, not the full
+		// flagged set). Carrying the agent_log.id lets the Time Machine
+		// replay view link each log's particle back to the assessment
+		// that evaluated it. Skipped when EmitLog returned uuid.Nil (the
+		// agent_log insert itself failed) — a dangling assessment_id
+		// would be misleading.
+		if pw := a.pipeline; pw != nil && logEntryID != uuid.Nil {
+			for _, cl := range escalated {
+				pw.WriteAssessment(ctx, AssessmentInput{
+					LogID:        cl.Log.ID,
+					AppID:        cl.Log.AppID,
+					AssessmentID: logEntryID,
+				})
+			}
+		}
 
 		// Dispatch notification (fire-and-forget).
 		// Use context.WithoutCancel so the notification isn't killed when monitorApp returns,

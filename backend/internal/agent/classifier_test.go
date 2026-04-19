@@ -27,7 +27,7 @@ func TestPassthroughClassifier(t *testing.T) {
 			classifierLogEntry(`{"message":"hello"}`),
 			classifierLogEntry(`{"message":"world"}`),
 		}
-		flagged, safeCount := c.Classify(logs)
+		flagged, safeCount := FilterFlagged(c.Classify(logs))
 		assert.Equal(t, 2, len(flagged))
 		assert.Equal(t, 0, safeCount)
 		for _, f := range flagged {
@@ -37,7 +37,7 @@ func TestPassthroughClassifier(t *testing.T) {
 	})
 
 	t.Run("empty batch", func(t *testing.T) {
-		flagged, safeCount := c.Classify(nil)
+		flagged, safeCount := FilterFlagged(c.Classify(nil))
 		assert.Equal(t, 0, len(flagged))
 		assert.Equal(t, 0, safeCount)
 	})
@@ -69,7 +69,7 @@ func TestLumberClassifier_Integration(t *testing.T) {
 	defer c.Close()
 
 	t.Run("empty batch", func(t *testing.T) {
-		flagged, safeCount := c.Classify(nil)
+		flagged, safeCount := FilterFlagged(c.Classify(nil))
 		assert.Nil(t, flagged)
 		assert.Equal(t, 0, safeCount)
 	})
@@ -78,7 +78,7 @@ func TestLumberClassifier_Integration(t *testing.T) {
 		logs := []db.LogBuffer{
 			classifierLogEntry(`{"level":"error","message":"connection refused to db-primary:5432"}`),
 		}
-		flagged, safeCount := c.Classify(logs)
+		flagged, safeCount := FilterFlagged(c.Classify(logs))
 		assert.Equal(t, 1, len(flagged))
 		assert.Equal(t, 0, safeCount)
 		assert.Equal(t, "ERROR", flagged[0].Type)
@@ -88,7 +88,7 @@ func TestLumberClassifier_Integration(t *testing.T) {
 		logs := []db.LogBuffer{
 			classifierLogEntry(`{"message":"GET /api/health 200 OK 3ms"}`),
 		}
-		flagged, safeCount := c.Classify(logs)
+		flagged, safeCount := FilterFlagged(c.Classify(logs))
 		assert.Equal(t, 0, len(flagged))
 		assert.Equal(t, 1, safeCount)
 	})
@@ -103,7 +103,7 @@ func TestLumberClassifier_Integration(t *testing.T) {
 			classifierLogEntry(`{"level":"error","message":"FATAL: connection refused to db-primary:5432"}`),
 			classifierLogEntry(`{"level":"error","message":"RuntimeError: null pointer dereference in handler"}`),
 		}
-		flagged, safeCount := c.Classify(logs)
+		flagged, safeCount := FilterFlagged(c.Classify(logs))
 		assert.GreaterOrEqual(t, len(flagged), 2, "at least 2 errors should be flagged")
 		assert.GreaterOrEqual(t, safeCount, 3, "at least 3 healthy requests should be safe")
 		assert.Equal(t, len(logs), len(flagged)+safeCount, "all logs should be accounted for")

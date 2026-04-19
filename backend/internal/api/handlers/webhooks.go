@@ -10,6 +10,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+
+	"github.com/hejijunhao/heimdall/backend/internal/agent"
 	"github.com/hejijunhao/heimdall/backend/internal/db"
 )
 
@@ -359,7 +361,7 @@ func (s *Server) ingestEntries(w http.ResponseWriter, r *http.Request, conn conn
 		jsonServerError(w, "source filter pipeline failed", err)
 		return
 	}
-	stats, err := insertFiltered(r.Context(), qtx, connID, userID, entries, routes, seenSources)
+	stats, inserted, err := insertFiltered(r.Context(), qtx, connID, userID, entries, routes, seenSources)
 	if err != nil {
 		jsonServerError(w, "failed to insert log entry", err)
 		return
@@ -368,6 +370,24 @@ func (s *Server) ingestEntries(w http.ResponseWriter, r *http.Request, conn conn
 	if err := tx.Commit(r.Context()); err != nil {
 		jsonServerError(w, "failed to commit transaction", err)
 		return
+	}
+
+	// Post-commit: emit Pipeline-page ingestion events for every newly
+	// inserted log row. Deliberately after commit so the FK from
+	// log_pipeline_events.log_id resolves; pre-commit it would race with
+	// concurrent reads. Fire-and-forget per call — writer logs its own
+	// failures and never bubbles them back.
+	if s.Agent != nil {
+		if pw := s.Agent.Pipeline(); pw != nil {
+			for _, ins := range inserted {
+				pw.WriteIngestion(r.Context(), agent.IngestionInput{
+					LogID:      ins.LogID,
+					AppID:      ins.AppID,
+					SourceType: ins.SourceType,
+					Severity:   ins.Severity,
+				})
+			}
+		}
 	}
 
 	scope := "app"

@@ -184,6 +184,24 @@ type LogBuffer struct {
 	AppID        uuid.UUID       `json:"app_id"`
 }
 
+type LogPipelineEvent struct {
+	ID           uuid.UUID       `json:"id"`
+	LogID        uuid.UUID       `json:"log_id"`
+	AppID        uuid.UUID       `json:"app_id"`
+	Stage        string          `json:"stage"`
+	OccurredAt   time.Time       `json:"occurred_at"`
+	SourceType   pgtype.Text     `json:"source_type"`
+	Severity     pgtype.Text     `json:"severity"`
+	Type         pgtype.Text     `json:"type"`
+	Category     pgtype.Text     `json:"category"`
+	Confidence   pgtype.Float8   `json:"confidence"`
+	Summary      pgtype.Text     `json:"summary"`
+	Escalated    pgtype.Bool     `json:"escalated"`
+	RuleHit      pgtype.Text     `json:"rule_hit"`
+	AssessmentID *uuid.UUID      `json:"assessment_id"`
+	Metadata     json.RawMessage `json:"metadata"`
+}
+
 type MonitoringState struct {
 	AppID           uuid.UUID `json:"app_id"`
 	LastMonitoredAt time.Time `json:"last_monitored_at"`
