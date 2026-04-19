@@ -11,7 +11,7 @@
 -- `column "org_id" contains null values`, leaving the schema in an inconsistent
 -- state.
 --
--- Usage: psql "$DATABASE_URL" -f docs/runbooks/v0.46.0-preflight.sql
+-- Usage: psql "$DATABASE_URL" -f docs/archive/runbooks/v0.46.0-preflight.sql
 -- Success: "v0.46.0 pre-flight OK." notice and exit code 0.
 -- Failure: exception raised with the orphan count, exit code 3.
 

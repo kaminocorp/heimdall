@@ -1,273 +1,287 @@
-# Heimdall Pricing Overview
+# Heimdall Pricing Blueprint
 
-**Pricing is usage-based with a low base price per Monitored Application.**
+**Pricing philosophy: a cheap floor, a value-aligned meter, and a BYOK ceiling.**
 
-A *Monitored Application* represents one deployable production system (e.g. API backend, frontend app, worker service, etc.), including its ingestion sources, investigation targets, deploy signals and repositories.
+Heimdall charges a low base price per Monitored Application and a per-investigation overage. Idle monitoring is essentially free — the agent only costs you money when it actually does work on your behalf. At the top of the ladder, Enterprise customers bring their own LLM key and their own database, and pay a flat fee for Heimdall as a managed harness.
 
-Base prices cover platform access and modest included allowances. Real cost scales with usage — log volume, agent runtime, and ingestion sources — so customers only pay more as they get more value.
+The model is built around three principles:
 
----
-
-## Pricing Table
-
-| Feature                          |         Starter |          Growth |                      Scale |
-| -------------------------------- | --------------: | --------------: | -------------------------: |
-| **Base price (per app / month)** |             $39 |            $149 |                       $449 |
-| **Applications included**        |               1 |               1 |                          3 |
-| **Additional application**       |       $29 / mo  |      $119 / mo  |                 $149 / mo  |
-| **Included log volume**          |    5 GB / month |  50 GB / month  |  150 GB / month (per app)  |
-| **Log overage**                  |      $1.00 / GB |      $0.50 / GB |                 $0.30 / GB |
-| **Ingestion sources included**   |               1 |               5 |               15 (per app) |
-| **Additional ingestion source**  |   $15 / mo each |   $12 / mo each |              $10 / mo each |
-| **Investigation targets**        |       Unlimited |       Unlimited |                  Unlimited |
-| **Per-investigation runtime**    |          10 min |          30 min |                     60 min |
-| **Included monthly runtime**     |            1 hr |          10 hrs |           30 hrs (per app) |
-| **Runtime overage**              |        $15 / hr |        $12 / hr |                  $10 / hr  |
-| **Historical retention**         |          7 days |         30 days |                    90 days |
-| **Deploy correlation**           |               ✓ |               ✓ |                          ✓ |
-| **Auto-investigation reports**   |               ✓ |               ✓ |                          ✓ |
-| **Trajan ticket creation**       |     With Trajan |     With Trajan |                With Trajan |
-| **Annual discount**              |             20% |             20% |                        20% |
-
-### Typical Monthly Spend
-
-Base prices reflect the entry point, not the expected bill. Real usage for active applications will scale naturally:
-
-| Profile                          | Starter       | Growth         | Scale (per app)  |
-| -------------------------------- | ------------: | -------------: | ---------------: |
-| **Base**                         |           $39 |           $149 |             $449 |
-| **~15 GB logs**                  |     +$10 logs |             — |               — |
-| **~60 GB logs**                  |             — |      +$5 logs  |               — |
-| **~200 GB logs**                 |             — |             — |       +$15 logs  |
-| **+2 ingestion sources**         |           +$30 |             — |               — |
-| **+3 ingestion sources**         |             — |          +$36 |               — |
-| **~3 hrs runtime**               |  +$30 runtime |             — |               — |
-| **~15 hrs runtime**              |             — | +$60 runtime   |               — |
-| **~40 hrs runtime**              |             — |             — |  +$100 runtime   |
-| **Typical total**                |      **~$109** |      **~$250** |        **~$564** |
+1. **Price the unit of value, not the substrate.** Customers experience value in *investigations completed* — not in GBs ingested or hosts monitored. So that's the meter.
+2. **Idle is free, work is paid.** A quiet app pays the floor. A noisy app pays for the work the agent does. This makes the bill self-justifying: the customers paying the most are by definition the ones getting the most value.
+3. **Massively cheaper than incumbents at every tier.** Heimdall lands at 1–20% of comparable Datadog, Dynatrace, or Resolve.ai bills across every realistic customer profile. The "10x better, 10x cheaper" claim must hold from the indie hobbyist to the regulated enterprise.
 
 ---
 
-# Definition: Monitored Application
+## Pricing at a Glance
 
-A **Monitored Application** is:
-
-* One logical production system
-* With its ingestion sources (logs streaming in)
-* Its investigation targets (repos, databases, services the agent can query on demand)
-* Its deploy history
-* Its supporting data stores
-
-It is *not* priced by number of databases, servers, or repositories.
-Infrastructure complexity is abstracted away from billing logic.
-
-Investigation targets are unlimited — the cost of the agent querying a repo or database during an investigation is captured in agent runtime, not connection count. Users should be encouraged to connect everything; more context makes the agent better.
-
----
-
-# Definition: Ingestion Source
-
-An **Ingestion Source** is a distinct connected telemetry input that streams data into Heimdall continuously.
-
-Examples of what counts as one ingestion source:
-
-* A CloudWatch log group
-* A Kubernetes namespace log stream
-* A Datadog service feed
-* A Sentry project
-* A Postgres log stream
-* A Redis log stream
-* A Vercel deployment log stream
-* A CI/CD pipeline deploy signal
-
-In general:
-
-> If it is a separate external stream Heimdall connects to and processes independently, it counts as one ingestion source.
-
-Multiple containers feeding into a single log aggregator = 1 source.
-Separate services each with distinct log groups = multiple sources.
-
-This keeps billing objective and prevents ambiguity.
+| Feature                          |        Hobby |                Pro |               Business |             Enterprise |
+| -------------------------------- | -----------: | -----------------: | ---------------------: | ---------------------: |
+| **Base price**                   |       **$0** | **$29 / app / mo** | **$149 / mo (5 apps)** |  **$1,999 / mo flat**  |
+| **LLM provider**                 |   Heimdall   |    Heimdall        |    Heimdall            |   **BYOK** (your key)  |
+| **Investigations included**      |  3 (capped)  |       10 / mo      |     100 / mo           |       Unlimited        |
+| **Investigation overage**        |    — (cap)   |        $2 each     |       $2 each          |    n/a (you pay LLM)   |
+| **Log volume included**          |  1 GB (cap)  |    25 GB / app     |    250 GB total        |       Unlimited        |
+| **Log overage**                  |    — (cap)   |     $0.50 / GB     |    $0.50 / GB          |   n/a (you own storage)|
+| **Historical retention**         |    48 hours  |       30 days      |       30 days          |  Custom (your storage) |
+| **Applications**                 |       1      |          1         |         5              |       Unlimited        |
+| **Storage location**             |   Heimdall   |    Heimdall        |    Heimdall            |   S3 / GCS / Postgres  |
+| **Default model**                |    Sonnet    |     Sonnet         |     Opus               |   Customer's choice    |
+| **Investigation targets**        |  Unlimited   |    Unlimited       |    Unlimited           |       Unlimited        |
+| **Ingestion sources**            |  Unlimited   |    Unlimited       |    Unlimited           |       Unlimited        |
+| **Deploy correlation**           |       ✓      |          ✓         |          ✓             |          ✓             |
+| **Auto-investigation reports**   |       ✓      |          ✓         |          ✓             |          ✓             |
+| **MCP server**                   |       ✓      |          ✓         |          ✓             |          ✓             |
+| **Trajan ticket creation**       | With Trajan  |    With Trajan     |    With Trajan         |    With Trajan         |
+| **SSO**                          |       —      |          —         |          ✓             |          ✓             |
+| **SOC 2 / DPA**                  |       —      |          —         |          —             |          ✓             |
+| **Support**                      |  Community   |        Email       |     Priority email     |  Dedicated Slack + SLA |
+| **Contract**                     |       —      |  Monthly / Annual  |    Monthly / Annual    |     Annual only        |
+| **Annual discount (base only)**  |       —      |         20%        |        20%             |   Negotiated           |
 
 ---
 
-# Definition: Investigation Target
+## Each Tier in One Sentence
 
-An **Investigation Target** is an on-demand data source the agent queries during investigations. Unlike ingestion sources, these do not stream data in — the agent reaches for them when it needs context.
+The model is intentionally simple enough to recite from memory:
 
-Examples:
+* **Hobby** — Free, with 3 investigations and 1 GB of logs to try Heimdall on us.
+* **Pro** — $29/month per app, with 10 investigations and 25 GB of logs included; overage at $2 per investigation and $0.50 per GB.
+* **Business** — $149/month for 5 apps, with 100 investigations and 250 GB of logs included at the same overage rates, plus SSO.
+* **Enterprise** — $1,999/month flat — bring your own Anthropic key and your own database for unlimited everything.
 
-* A GitHub repository (to inspect recent commits or code)
-* A Postgres database (to run diagnostic queries)
-* A Redis instance (to check cache state)
-* An external API (to verify upstream health)
-
-Investigation targets are **unlimited on all tiers**. The cost of using them is captured in agent runtime, not connection count. This avoids creating a perverse incentive to limit the agent's access.
+Pro and Business share the same overage rates ($2 / investigation, $0.50 / GB) and the same retention (30 days). The only things that change between them are scale (apps, included quota) and SSO. This is deliberate: customers don't have to do "but at what overage rate?" math when comparing tiers, and the upgrade decision becomes pure arithmetic on volume.
 
 ---
 
-# Volume Model
+## Typical Customer Bills
 
-Each Monitored Application includes a tier-dependent log volume:
+Base prices reflect the entry point. Real bills depend on how active each application is.
 
-* Starter: 5 GB / month
-* Growth: 50 GB / month
-* Scale: 150 GB / month (per app)
+| Customer profile                                  | Plan            |        Monthly bill | Notes                                              |
+| ------------------------------------------------- | --------------- | ------------------: | -------------------------------------------------- |
+| Weekend project / Hobby                           | Hobby           |              **$0** | 3 investigations, then upgrade prompt              |
+| Indie startup, ~10 investigations / mo            | Pro             |             **$29** | Stays inside included quota                        |
+| Active SaaS, ~30 investigations / mo              | Pro             |             **$69** | $29 base + 20 × $2 overage                         |
+| Production SaaS, ~80 investigations / mo          | Pro             |            **$169** | $29 base + 70 × $2 overage                         |
+| Multi-app team, ~300 investigations / mo (5 apps) | Business        |            **$549** | $149 base + 200 × $2 overage                       |
+| Heavy production, ~600 investigations / mo        | Business        |          **$1,149** | Approaching the Enterprise crossover               |
+| Regulated enterprise, unlimited everything        | Enterprise BYOK |  **$1,999** + LLM   | Customer pays Anthropic directly                   |
 
-Included volumes are intentionally modest — they cover light or early-stage usage. Active production applications will typically exceed included volume, with overages billed per additional GB at a rate that decreases with tier:
-
-* Starter: $1.00 / GB
-* Growth: $0.50 / GB
-* Scale: $0.30 / GB
-
-Log volume is measured in **GB ingested**, not number of logs and not LLM tokens.
-
-This aligns pricing with:
-
-* Storage cost
-* Processing cost
-* Observability industry standards
+Because Pro and Business share overage rates, the upgrade decision is pure arithmetic on **included quota**: a Pro customer at ~70 investigations / month is paying $169, and Business at $149 already includes more than that — so 70+ investigations is the natural Pro → Business signal. Above ~925 investigations / month, Business and Enterprise cross over (and customers above that threshold typically also want SOC 2 / data residency, which only Enterprise provides).
 
 ---
 
-# Tier Differentiation Logic
+## Competitive Check
 
-Plans differ in four dimensions:
+Heimdall sits inside the **10–20% of competitor cost** band across every realistic customer profile, with 5x cheaper at the high end and 50–100x cheaper at the low end.
 
-## 1. Agent Runtime
+| Customer profile                          | Heimdall    | Datadog mid-market[^dd] | incident.io / Resolve.ai[^ai] |
+| ----------------------------------------- | ----------: | ----------------------: | ----------------------------: |
+| Indie startup                             |        $29  |       $4,000 – $12,000  |             $1,600 – $8,000   |
+| Active SaaS                               |        $69  |       $4,000 – $12,000  |             $1,600 – $8,000   |
+| Production SaaS (single app)              |       $169  |       $4,000 – $12,000  |             $1,600 – $8,000   |
+| Multi-app team (5 apps)                   |       $549  |       $8,000 – $20,000  |             $3,000 – $15,000  |
+| Regulated enterprise (BYOK + BYODB)       |     $1,999  |     $8,000 – $33,000+   |             $8,000 – $12,000+ |
+| **Heimdall as % of competitor**           |             |          **0.5 – 7%**   |                  **2 – 25%**  |
 
-Agent runtime is the primary differentiator and the axis most aligned with cost. Each investigation consumes agent runtime as the LLM reasons, queries tools, and builds its diagnosis.
+[^dd]: Per-month equivalent of Datadog mid-market annual contracts ($50K–$400K range), per the market-research deck.
+[^ai]: AI-SRE peer category — incident.io published pricing ($20K–$100K/year) and Resolve.ai estimated enterprise pricing ($100K+/year).
 
-**Per-investigation cap** — the maximum wall-clock time for a single investigation:
-
-* Starter: 10 minutes — Quick-response investigations. Agent checks recent logs, correlates with the last deploy, produces a report. Handles the majority of straightforward issues.
-* Growth: 30 minutes — Multi-source deep investigations. Agent cross-references logs with database state, checks the repo for recent changes, reviews historical patterns within the retention window.
-* Scale: 60 minutes — Full investigative sweeps. Broad historical context, multi-source correlation, extended reasoning chains. For complex multi-factor production incidents.
-
-**Included monthly runtime** — agent compute time included in the base price:
-
-* Starter: 1 hour
-* Growth: 10 hours
-* Scale: 30 hours (per app)
-
-**Runtime overage** — billed per additional hour when the included budget is exceeded:
-
-* Starter: $15 / hr
-* Growth: $12 / hr
-* Scale: $10 / hr
-
-Runtime overage is the primary revenue scaling mechanism on Starter. An indie dev whose app generates a few investigations per week will stay near the base price. A production app with frequent incidents naturally consumes more runtime and pays proportionally.
-
-If runtime is exhausted and overage billing is not enabled, investigations run at reduced depth (graceful degradation) rather than hard cutoff.
+The key structural advantage: **Heimdall does not double-dip on ingestion + indexing** (Datadog's primary pricing complaint), does not charge per-host (Dynatrace), does not charge per-seat (incident.io), and does not bill for investigation runtime as a separate line item. One base + one investigation meter + one log-volume safety meter — that's the entire bill.
 
 ---
 
-## 2. Log Volume
+## What Counts as an Investigation
 
-Included volume scales with tier. Starter includes enough for light or early-stage usage; production workloads are expected to exceed it:
+This is the central billing unit, so the definition needs to be precise. An **investigation** is a Claude reasoning loop with tool access (search_logs, query_database, repo inspection) that produces a structured assessment.
 
-* Starter: 5 GB / month
-* Growth: 50 GB / month
-* Scale: 150 GB / month (per app)
+**Counted:**
 
----
+- Lumber-flagged log → Claude assessment (the monitoring loop's primary mode)
+- Scheduled cron-based investigation runs (you opt in, you pay)
+- Manually triggered "investigate this" actions from the UI
 
-## 3. Historical Retention
+**Not counted:**
 
-How long logs and investigation outputs are retained:
+- Interactive chat sessions (user-pulled, conversational — capped only by reasonable use)
+- Failed or aborted investigations (model errored, timed out, infra fault on our side)
+- Lumber classification itself (runs locally on our ONNX model, no LLM cost)
+- Log ingestion, parsing, retention reads (covered by the log-volume meter)
 
-* Starter: 7 days
-* Growth: 30 days
-* Scale: 90 days
+The chat exemption is deliberate. Half the product's value is the on-demand interrogation surface; making chats meter would push customers off it, which is the opposite of what we want.
 
-Retention directly affects correlation depth and pattern detection. Longer retention enables the agent to recognise recurring failure modes and reference past incidents.
-
----
-
-## 4. Applications Covered
-
-* Starter and Growth: 1 Monitored Application
-* Scale: 3 Monitored Applications
-
-Additional applications can be added at a discount relative to the base price:
-
-* Starter: $29 / mo per additional app (Starter limits apply)
-* Growth: $119 / mo per additional app (Growth limits apply)
-* Scale: $149 / mo per additional app (Scale limits apply)
-
-Scale is intended for teams running multiple production systems.
+The "failed investigation" exemption is a trust signal — customers should never pay for our infra problems.
 
 ---
 
-# Core Capabilities (All Tiers)
+## Definitions
 
-All plans include:
+### Monitored Application
 
-* Log ingestion and anomaly detection
-* Change / Deploy Correlation
-  (Automatically linking runtime anomalies to recent commits or deploys)
-* Structured Auto-Investigation Reports
-* Investigation targets (repos, databases) — unlimited
+A **Monitored Application** is one logical production system — an API backend, a frontend app, a worker service. It includes its ingestion sources, investigation targets, deploy signals, and supporting data stores. It is *not* priced by number of databases, servers, or repositories. Infrastructure complexity is abstracted away from billing logic.
+
+Investigation targets are unlimited on every tier. Connect everything — more context makes the agent better.
+
+### Ingestion Source
+
+An **Ingestion Source** is a distinct connected telemetry input that streams data into Heimdall continuously: a CloudWatch log group, a Vercel deployment log stream, a Postgres log feed, a Sentry project, a CI/CD deploy signal.
+
+Ingestion sources are **unlimited on all tiers**. (The previous pricing model billed per source; that line item has been removed because it created perverse incentives — customers were under-connecting their infra to save $15/mo, which made the agent worse at its job.)
+
+The cost of running an ingestion source is captured in the log-volume meter, which is the right place for it: a connector that streams 200 GB/month costs us more than one that streams 200 MB/month, regardless of how the customer logically draws the boundary.
+
+### Investigation Target
+
+An **Investigation Target** is an on-demand data source the agent queries during investigations: a GitHub repository, a Postgres database, a Redis instance, an external API. Unlike ingestion sources, these do not stream data in.
+
+Investigation targets are **unlimited on all tiers**. The cost of using them is captured per-investigation, not per-target.
 
 ---
 
-# Trajan Integration
+## Tier Differentiation Logic
+
+Plans differ along five dimensions. Each dimension addresses a specific customer maturity level.
+
+### 1. Investigation Quota
+
+The primary cost-aligned meter. Each investigation burns LLM tokens (roughly $0.30–$0.80 on Sonnet, $1.50–$3.00 on Opus with extended thinking). The included quota grows with tier; the overage rate is held flat across paid tiers for simplicity.
+
+| Tier       | Included          | Overage      |
+| ---------- | ----------------- | -----------: |
+| Hobby      | 3 (hard cap)      |   — (cap)    |
+| Pro        | 10 / mo           |    $2 each   |
+| Business   | 100 / mo          |    $2 each   |
+| Enterprise | Unlimited (BYOK)  |        n/a   |
+
+The flat $2 overage rate is set to maintain healthy margins on typical Sonnet investigations (~75%) while staying defensible on heavier Opus runs (~25%). Customers with sustained heavy usage upgrade to Business (or Enterprise) for the larger included quota, not for a discount on overage.
+
+If a customer hits their included quota and overage billing is not enabled, investigations are paused (with banner notification) rather than cut off mid-execution. Customers can flip the overage toggle from the dashboard at any time.
+
+### 2. Log Volume
+
+A safety meter, not the primary cost driver. Included volumes scale with tier; the overage rate is held flat across paid tiers.
+
+| Tier       | Included          | Overage     |
+| ---------- | ----------------- | ----------: |
+| Hobby      | 1 GB (hard cap)   |   — (cap)   |
+| Pro        | 25 GB / app       | $0.50 / GB  |
+| Business   | 250 GB total      | $0.50 / GB  |
+| Enterprise | Unlimited         |        n/a  |
+
+Log volume is measured in **GB ingested**, not number of logs and not LLM tokens. This aligns with industry billing standards and with the actual underlying storage and processing cost.
+
+### 3. Historical Retention
+
+How long logs and investigation outputs are retained on Heimdall's infrastructure.
+
+* Hobby: 48 hours
+* Pro: 30 days
+* Business: 30 days
+* Enterprise: Custom (logs drain to your S3 / GCS / Postgres; you own retention)
+
+Retention is held at 30 days for both paid tiers — long enough for meaningful correlation and historical pattern detection on production workloads, short enough to keep the model simple. Customers needing longer retention move to Enterprise, where they own the storage and set their own policy.
+
+### 4. Applications Covered
+
+* Hobby: 1 application
+* Pro: 1 application (additional apps at $29 / mo each, Pro limits apply)
+* Business: 5 applications included (additional apps at $29 / mo each, Pro-tier limits per added app)
+* Enterprise: Unlimited applications
+
+Customers running multiple production systems are the natural Business and Enterprise audience.
+
+### 5. BYOK & BYODB (Enterprise only)
+
+Enterprise unlocks two architectural changes that are unavailable at lower tiers:
+
+**BYOK (Bring Your Own Key):** the customer supplies their own Anthropic API key. Every investigation Heimdall runs on their behalf bills directly to their Anthropic account, not to Heimdall's. This removes the per-investigation meter entirely and unlocks unlimited investigations, because the variable cost has moved off Heimdall's P&L.
+
+**BYODB (Bring Your Own Database):** logs and investigation outputs persist to the customer's own Postgres database (and optionally drain to S3 / GCS for cold storage). Heimdall's process still runs the agent and processes the logs, but **nothing is persisted on Heimdall's infrastructure** — the customer owns the data plane end-to-end.
+
+Together, BYOK + BYODB give Enterprise customers a clean answer for security review: "logs and AI outputs never live in a third-party database." This is positioned as **data residency**, not zero-trust isolation (logs still transit Heimdall's process); see `enterprise-archi.md` for the architectural detail.
+
+The Enterprise base price ($1,999 / mo) covers the harness — ingestion, classification, agent orchestration, dashboards, MCP, support, SOC 2 — and is held flat regardless of LLM or storage cost, because BYOK/BYODB is what the customer values, not what reduces our cost.
+
+---
+
+## Hobby Tier — Hard Caps, Not Overage
+
+Hobby is a true demo tier. When a Hobby user hits 3 investigations or 1 GB of logs, the wall says "upgrade to Pro" — there is no overage option, no surprise bill, no card charge for a $0 plan.
+
+This is deliberate:
+
+* No support tickets about $4 invoices on free accounts.
+* No "I thought it was free" friction.
+* Crisp psychological boundary: the wall is the conversion event.
+
+The 3-investigation cap costs Heimdall roughly $3 of unrecoverable LLM spend per signup — treat that as the customer-acquisition cost line, not as a free product. At even a 5% Hobby → Pro conversion rate, payback is in month one.
+
+---
+
+## Annual Billing
+
+All paid tiers offer a **20% discount on the base price** for annual commitment. Enterprise pricing is negotiated; the published $1,999 / mo is the monthly-equivalent floor.
+
+| Tier       | Monthly      | Annual (per month) | Annual (total) |
+| ---------- | -----------: | -----------------: | -------------: |
+| Pro        |        $29   |              $23   |          $279  |
+| Business   |       $149   |             $119   |        $1,428  |
+| Enterprise |     $1,999   |   Negotiated       |   Negotiated   |
+
+The annual discount applies to the base price only. Usage-based overages (investigations, log volume) bill at the same per-unit rate regardless of billing cycle — this prevents customers from gaming the discount by front-loading commitment then driving heavy usage.
+
+---
+
+## Pricing Philosophy
+
+Heimdall uses a **land-and-expand** model with one twist that distinguishes it from Supabase / Vercel-style usage pricing: the meter is investigations, not infrastructure consumption.
+
+**Why this matters:**
+
+* **$29 / mo is a credit-card swipe. $149 / mo is a manager conversation.** The Pro entry price determines conversion rate. For founding engineers, vibe-coders, and indie devs — Heimdall's first 10 customers — the bar must be low enough that trying it is a non-event.
+* **The investigation meter aligns cost with value.** Idle apps pay nothing extra. Active apps pay for the work the agent does on their behalf. This is fairer and more defensible than front-loading cost on log volume or seat counts, which is what every incumbent does.
+* **Customers who outgrow Pro don't feel trapped.** A Pro customer hitting 80 investigations / month sees Business at $149 with a much larger included quota and recognises the upgrade as math, not coercion. The product sells the upgrade; sales doesn't have to.
+* **Each tier fits in one sentence.** The model is simple enough to recite from memory, simple enough to compare against any competitor's pricing page in 30 seconds, and simple enough that a customer can predict next month's bill without a calculator. This is a real product feature — every observability incumbent has lost deals on pricing complexity alone.
+* **BYOK at the top is a feature, not a discount.** Enterprises want BYOK independent of price — for compliance, data residency, and direct cost control with their existing Anthropic enterprise contract. Heimdall holds the harness fee flat at $1,999 because that's what the customer is buying; the inference cost is theirs to bear, and they prefer it that way.
+
+This follows the pattern established by Vercel ($0 → $20 base, scales with edge / function usage) and Supabase ($0 → $25 base, scales with DB / storage), with the meter changed to match Heimdall's actual cost driver: AI investigation runtime, not infrastructure consumption.
+
+---
+
+## Trajan Integration
 
 Automated ticket creation is available on all tiers **via Trajan integration**.
 
-Heimdall does **not** maintain its own ticketing system. When the agent completes an investigation, it produces a structured report available to all users. For teams using Trajan, this report can automatically generate a tracked ticket in Trajan's workflow system.
+Heimdall does not maintain its own ticketing system. When the agent completes an investigation, it produces a structured report available to all users. For teams using Trajan, this report can automatically generate a tracked ticket in Trajan's workflow system.
 
 * Investigation reports: available to everyone, all tiers
 * Automated ticket creation: requires Trajan
 
-This positions Trajan as the natural execution layer without making Heimdall feel incomplete without it.
+This positions Trajan as the natural execution layer without making Heimdall feel incomplete without it. Heimdall handles runtime intelligence; Trajan handles execution and workflow. Together they form a cohesive system.
 
 ---
 
-# Annual Billing
-
-All tiers offer a **20% discount** on the base price for annual commitment:
-
-| Tier    | Monthly | Annual (per month) | Annual (total) |
-| ------- | ------: | -----------------: | -------------: |
-| Starter |     $39 |                $31 |           $372 |
-| Growth  |    $149 |               $119 |         $1,428 |
-| Scale   |    $449 |               $359 |         $4,308 |
-
-Annual discount applies to the base price only. Usage-based overages (logs, runtime, ingestion sources) are billed at the same rates regardless of billing cycle.
-
----
-
-# Pricing Philosophy
-
-Heimdall uses a **land-and-expand** pricing model. The base price is set low enough that an indie developer or small team can start monitoring without a significant commitment. Revenue scales with usage as the product proves its value.
-
-**Why this matters for a new product:**
-
-* **$39/mo is a credit card swipe. $149/mo is a decision that needs approval.** The entry price determines conversion rate. For vibecoders and indie devs — our early adopters — the bar must be low enough that trying Heimdall is a non-event.
-* **Usage-based pricing aligns cost with value.** A customer only pays more when they're ingesting more logs, running more investigations, and getting more value. This is fairer and more defensible than front-loading cost.
-* **The total spend for an active user lands in the same range.** A Starter customer with real production traffic will typically spend $100–150/mo. The difference is psychological: they *grew into* that spend rather than committing upfront.
-
-This follows the pattern established by Supabase ($0 → $25 base, scales with usage), Vercel ($0 → $20 base), and PlanetScale — low entry, usage-based expansion, natural upgrade path to higher tiers when limits are hit frequently.
-
----
-
-# Product Positioning
+## Product Positioning
 
 Heimdall is positioned as:
 
-> An autonomous runtime investigator for production systems.
+> **An autonomous runtime investigator for production systems.**
 
 It is:
 
-* Not priced per seat
-* Not token-metered
-* Not a basic log viewer
-* Not a ticketing tool
+* **Not priced per seat** — teams add unlimited viewers at every tier
+* **Not priced per host** — infrastructure complexity does not affect the bill
+* **Not token-metered** — customers pay per investigation, not per LLM token (except at Enterprise, where they pay Anthropic directly)
+* **Not a basic log viewer** — the value is in autonomous investigation, not log search
+* **Not a ticketing tool** — Trajan integrates for that
 
-Heimdall handles runtime intelligence.
-Trajan handles execution and workflow.
-
-Together they form a cohesive system.
+The cheapest paid tier is $29 / mo; the most expensive published tier is $1,999 / mo. Across that 70x range, the pricing model has the same shape: a base for "Heimdall is watching" plus a meter for "Heimdall is investigating." Easy to explain, easy to compare, easy to forecast.
 
 ---
+
+## Open Questions for Future Iteration
+
+1. **BYOK on Business as a paid add-on?** A motivated mid-market customer might want BYOK without going to Enterprise. Possible: $99 / mo Business add-on that drops the per-investigation overage to $0. Leaks Enterprise demand downward but generates incremental revenue. Not in v1; revisit if mid-market demand surfaces in sales calls.
+2. **Investigation quota separation.** Should "auto-investigations triggered by Lumber" and "scheduled cron investigations" share a single quota, or have separate meters? Single quota is simpler; split quotas let customers schedule aggressively without burning their reactive budget. Default to single; revisit on customer feedback.
+3. **Fair-use cap on chats.** Chats are uncounted, but at extreme volumes they're real LLM cost. Worth quietly publishing a fair-use line ("~500 chat messages / day per user, contact us above") so the model isn't open-ended on the upside.
+4. **Enterprise pricing ceiling.** The published $1,999 is a floor. Negotiated Enterprise contracts for orgs with 50+ apps, custom integrations, on-prem, or dedicated infra can land much higher and remain inside the 10–20% of competitor cost band. Keep "custom pricing for orgs > 50 apps" as the standard escape hatch in sales conversations.

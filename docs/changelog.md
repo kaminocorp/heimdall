@@ -1,5 +1,6 @@
 # Changelog
 
+- [0.47.4 — Archive v0.46.0 Runbook](#0474--archive-v0460-runbook-2026-04-19)
 - [0.47.3 — Pipeline Page: Time Machine Replay](#0473--pipeline-page-time-machine-replay-2026-04-19)
 - [0.47.2 — Pipeline Page: Production Hardening](#0472--pipeline-page-production-hardening-2026-04-19)
 - [0.47.1 — Pipeline Page: Live Sankey Funnel UI](#0471--pipeline-page-live-sankey-funnel-ui-2026-04-19)
@@ -128,6 +129,16 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.47.4 — Archive v0.46.0 Runbook (2026-04-19)
+
+Docs-only cleanup. Moved `docs/runbooks/v0.46.0-deploy.md` and `docs/runbooks/v0.46.0-preflight.sql` to `docs/archive/runbooks/`, and removed the now-empty `docs/runbooks/` directory. The runbook was written for environments sitting on commit `18153bd` where migration 035 had not yet been applied; production is long past that point and a fresh-from-scratch `make migrate-up` cannot hit the orphan `applications.org_id IS NULL` case because migration 014 has always created `applications.org_id` as `NOT NULL`. The files are preserved (rather than deleted) so the 0.46.0 / 0.46.1 / 0.46.2 / 0.46.3 changelog entries retain working links and the "why we didn't edit migration 035 in place" reasoning stays on the record.
+
+Updated the `psql -f` usage line inside both archived files to match the new path, and rewrote navigational `docs/runbooks/...` references in the prose of the 0.46.x entries to `docs/archive/runbooks/...`. The fixed-width "files changed" tables in those entries were left untouched — they're a frozen record of what was at which path at release time, and rewriting them would misalign the column widths.
+
+No code changes, no schema changes, no user-visible impact.
 
 ---
 
@@ -411,7 +422,7 @@ This is cheaper than both proposals (no second map; no long-held lock) while bei
 
 ### Deploy runbook: "Skip this runbook" branch gains a sanity check
 
-`docs/runbooks/v0.46.0-deploy.md` step 1 tells the operator to skip the runbook if `schema_migrations` version is already ≥ 35, which is correct for the runbook's stated purpose (the race window only exists *during* application of 035). But any environment that applied 035 via `make migrate-up` before this runbook existed — staging on commit `18153bd`, for example — never had writers stopped. A silent partial failure during that window would leave orphan `connections.org_id IS NULL` rows that went uncaught.
+`docs/archive/runbooks/v0.46.0-deploy.md` step 1 tells the operator to skip the runbook if `schema_migrations` version is already ≥ 35, which is correct for the runbook's stated purpose (the race window only exists *during* application of 035). But any environment that applied 035 via `make migrate-up` before this runbook existed — staging on commit `18153bd`, for example — never had writers stopped. A silent partial failure during that window would leave orphan `connections.org_id IS NULL` rows that went uncaught.
 
 The skip branch now tells the operator to run the post-migration sanity check anyway. A zero count confirms the landing was clean; a non-zero count means the race fired silently and manual repair is needed before proceeding.
 
@@ -493,7 +504,7 @@ Source-filtering clears the 8.5/10 deploy bar. No silent flipflops across Phases
 Second post-assessment pass on the source-filtering overhaul. Four new review agents (backend authz, migrations/schema, syslog runtime, frontend integration) scored 0.46.1 at ~7.5/10 against an 8.5 deploy bar and surfaced eleven items across three severity tiers: two deploy-blockers, three operational-safety issues, six correctness polish. This release lands all eleven. ~350 lines of code, 0 schema changes (migrations are immutable once committed), one new deploy runbook, and 39 new unit tests.
 
 **Plan:** `docs/completions/source-filtering-phase6-hardening.md`
-**Runbook:** `docs/runbooks/v0.46.0-deploy.md` + `docs/runbooks/v0.46.0-preflight.sql`
+**Runbook:** `docs/archive/runbooks/v0.46.0-deploy.md` + `docs/archive/runbooks/v0.46.0-preflight.sql`
 
 ### Migrations stay immutable; protection moves to a deploy runbook
 
@@ -501,8 +512,8 @@ The assessment's top finding was that migration 035 (`connections.org_id NOT NUL
 
 Instead, protection ships as a deploy runbook:
 
-- **`docs/runbooks/v0.46.0-preflight.sql`** — a standalone `DO $$` block that queries `connections LEFT JOIN applications` and raises if any parent app has a NULL `org_id`. Runs idempotently with `psql -f`; exits 3 on failure.
-- **`docs/runbooks/v0.46.0-deploy.md`** — the procedure: check `schema_migrations` for the current version, run the pre-flight if < 35, stop writers (e.g. `fly scale count 0`), run `make migrate-up`, post-migration sanity checks for 035/036/037, restart writers. Also includes rollback guidance for each migration boundary.
+- **`docs/archive/runbooks/v0.46.0-preflight.sql`** — a standalone `DO $$` block that queries `connections LEFT JOIN applications` and raises if any parent app has a NULL `org_id`. Runs idempotently with `psql -f`; exits 3 on failure.
+- **`docs/archive/runbooks/v0.46.0-deploy.md`** — the procedure: check `schema_migrations` for the current version, run the pre-flight if < 35, stop writers (e.g. `fly scale count 0`), run `make migrate-up`, post-migration sanity checks for 035/036/037, restart writers. Also includes rollback guidance for each migration boundary.
 
 The runbook approach works because the race window only exists *during* application of 035. Environments where 035 already passed don't need the LOCK — their migration is already durable. Environments where 035 hasn't run get the protection without modifying any already-committed file.
 
