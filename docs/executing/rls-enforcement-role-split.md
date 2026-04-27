@@ -68,6 +68,8 @@ DIRECT_URL         → postgres:<pw>@<host>:5432/postgres
 
 This is the Supabase-recommended production pattern. The two-role-plus-migrations split is what Prisma, Drizzle, and most Supabase-native stacks ship with; the `CRON_DATABASE_URL` addition is what multi-tenant SaaS with scheduler workloads (e.g. Elephantasm, any codebase with APScheduler-shaped jobs) converge on independently. The `DIRECT_URL` vs. `DATABASE_URL` naming matches the convention those ORMs use, so it's recognisable to anyone onboarding.
 
+Role creation itself follows the Trajan rule: **bootstrap roles manually per environment; let migrations grant, verify, and fail loud if the role is missing.** Password-bearing `CREATE ROLE ... LOGIN PASSWORD ...` statements are environment bootstrap, not app-schema migration material.
+
 ### Why a third role and not "just let the monitor loop use DIRECT_URL"
 
 Tempting, and wrong. The monitor loop is a long-running goroutine inside the app process; handing it a superuser connection re-creates the exact blast radius the role split is trying to eliminate. A SQL injection in a scheduler query, or a future AI-authored scheduled investigation that builds a dynamic `ORDER BY`, would have `DROP TABLE` / `ALTER SYSTEM` / `auth.*` access *and* the ability to run for hours without a request boundary to time it out. `cron_user` gives the scheduler exactly what it needs (cross-tenant `SELECT`, advisory locks) and nothing else.
@@ -116,6 +118,8 @@ Pool sizes also map to load-shedding behaviour: if the cron pool saturates, back
 ### 4.1 `app_user` — the RLS-enforced runtime role
 
 ```sql
+-- Bootstrap SQL run manually per environment (Supabase SQL editor / psql),
+-- not from golang-migrate.
 CREATE ROLE app_user LOGIN PASSWORD '<strong-generated>';
 -- Deliberately NO: SUPERUSER, BYPASSRLS, CREATEDB, CREATEROLE, REPLICATION.
 
@@ -133,6 +137,8 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public
 ### 4.2 `cron_user` — the BYPASSRLS enumeration role
 
 ```sql
+-- Bootstrap SQL run manually per environment (Supabase SQL editor / psql),
+-- not from golang-migrate.
 CREATE ROLE cron_user LOGIN PASSWORD '<strong-generated-distinct-from-app_user>' BYPASSRLS;
 -- Deliberately NO: SUPERUSER, CREATEDB, CREATEROLE, REPLICATION.
 -- BYPASSRLS is the whole point, but it is the ONLY elevated attribute.
@@ -160,6 +166,8 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public
 
 The narrow-write grants matter. If `cron_user` can `INSERT` into any tenant table, a bug in the scheduler can still produce cross-tenant writes — BYPASSRLS silences the RLS policy that would otherwise catch it. By keeping writes scoped to infra-shape tables (`monitoring_state`, future scheduler-metadata tables) and forcing every write to tenant data through `app_user` under `UserQueries`, we preserve the "RLS is the backstop" property for the overwhelming majority of write volume.
 
+`monitoring_state` is the one explicit exception to the "cron enumerates, app writes" slogan. Treat it as infra metadata owned by the scheduler, not as a precedent for writing ordinary tenant tables from `cron_user`. If more exceptions appear, list them explicitly and justify them at the same review bar as a new BYPASSRLS path.
+
 ### 4.3 FORCE RLS on every user-scoped table
 
 Without `FORCE`, the table *owner* still bypasses RLS. Supabase's table ownership model varies across migrations, so rely on `FORCE` rather than assuming ownership. Note: `FORCE` does NOT apply to roles with the `BYPASSRLS` attribute — that's `cron_user`'s whole design, and the §4.2 narrow-write grants are what keep it safe. RLS enforcement remains real against `app_user` (which is where 99%+ of write volume flows) and cosmetic only for `cron_user` (which writes to exactly the tables you've explicitly allowed).
@@ -167,21 +175,27 @@ Without `FORCE`, the table *owner* still bypasses RLS. Supabase's table ownershi
 ```sql
 ALTER TABLE users                 FORCE ROW LEVEL SECURITY;
 ALTER TABLE organizations         FORCE ROW LEVEL SECURITY;
+ALTER TABLE org_members           FORCE ROW LEVEL SECURITY;
 ALTER TABLE applications          FORCE ROW LEVEL SECURITY;
 ALTER TABLE connections           FORCE ROW LEVEL SECURITY;
+ALTER TABLE github_repos          FORCE ROW LEVEL SECURITY;
 ALTER TABLE connection_sources    FORCE ROW LEVEL SECURITY;
 ALTER TABLE app_source_filters    FORCE ROW LEVEL SECURITY;
 ALTER TABLE log_buffer            FORCE ROW LEVEL SECURITY;
 ALTER TABLE conversations         FORCE ROW LEVEL SECURITY;
-ALTER TABLE reports               FORCE ROW LEVEL SECURITY;
+ALTER TABLE investigations        FORCE ROW LEVEL SECURITY;
 ALTER TABLE agent_log             FORCE ROW LEVEL SECURITY;
 ALTER TABLE app_agent_config      FORCE ROW LEVEL SECURITY;
 ALTER TABLE monitoring_state      FORCE ROW LEVEL SECURITY;
+ALTER TABLE investigation_schedules FORCE ROW LEVEL SECURITY;
+ALTER TABLE notification_channels FORCE ROW LEVEL SECURITY;
+ALTER TABLE notification_preferences FORCE ROW LEVEL SECURITY;
+ALTER TABLE notification_log      FORCE ROW LEVEL SECURITY;
 ALTER TABLE log_pipeline_events   FORCE ROW LEVEL SECURITY;
--- ...plus any user-scoped table added in the meantime.
+-- ...plus any other public table with rowsecurity=true that is user-scoped.
 ```
 
-This list must be exhaustive at the time of the migration. Treat `pg_tables WHERE schemaname='public'` as the source of truth and cross-check every entry.
+This list must be exhaustive at the time of the migration. Treat the catalog as the source of truth, not this doc from memory: enumerate `public` tables with `rowsecurity = true`, classify them as user-scoped vs. infra/system, and make the FORCE list match that output exactly. Today that means **including** `notification_*`, `investigation_schedules`, `org_members`, and `github_repos`; it also means **not assuming** a `reports` table exists just because the product has a Reports surface.
 
 ### 4.4 What must NOT be granted (to either runtime role)
 
@@ -255,7 +269,7 @@ If any of these currently calls `s.Pool.Begin` directly and inserts without `SET
 
 **Background goroutines with no user context.** These are the paths `cron_user` exists for:
 
-- `agent/monitor.go` — the 15-second monitoring loop. Enumerates active apps across all tenants, then for each app fetches new logs → classifies → escalates to Claude → writes to `agent_log`, `log_pipeline_events`, and `reports`.
+- `agent/monitor.go` — the 15-second monitoring loop. Enumerates active apps across all tenants, then for each app fetches new logs → classifies → escalates to Claude → writes to `agent_log`, `log_pipeline_events`, and notification-related tables via the dispatcher.
 - Scheduled investigations (0.31.0) — cron-shape scheduler running stored prompts on user apps.
 - Connector pollers — Fly.io drain, Supabase log poller, future pull-based connectors.
 - Pipeline writer — `agent/pipeline_writer.go` (post-0.47.0) inserts one row per stage per log. Hot write path.
@@ -327,24 +341,30 @@ Action items for §5.5:
 2. Audit every existing `UserQueries` call site for the pattern `defer commit/done; ... commit(); ... q.<another query>` — the second query is the bug. None should exist today; confirm.
 3. The pairing tripwire in §5.6c catches future regressions of this invariant.
 
-### 5.4 Write the migrations (two, not one)
+### 5.4 Write the migrations (two, plus one manual bootstrap step)
 
 Split into two migration pairs so the steps remain independently reversible. Rolling role creation and FORCE RLS into one file couples two concerns that need different gating: the role has to land before CI can exercise `app_user`, but FORCE RLS is only safe to land once §5.2's policy audit has confirmed every INSERT / UPDATE / DELETE path has a matching policy. Splitting keeps the "each step is independently reversible until the final flip" property §5 promises.
 
-**Migration A — `039_runtime_roles.up.sql` / `.down.sql`**
+**Manual bootstrap step — per environment, before Migration A**
 
-Creates both non-superuser roles in one migration. They land together because the code changes to switch the app over (§5.3 handoff pattern) touch both pools as a unit — splitting the role creation across two migrations adds file count without decoupling the rollout. The env-var flips (§5.5) remain independently reversible, which is what actually gives the staged rollout property §5 promises.
+Create `app_user` and `cron_user` manually in the Supabase SQL editor (or `psql`) with environment-specific passwords. This follows the Trajan pattern and avoids baking cluster-global principals plus secrets into app-schema migrations. The bootstrap SQL is the §4.1 / §4.2 `CREATE ROLE` block, run once per environment.
 
-1. `CREATE ROLE app_user LOGIN PASSWORD '<strong-generated>'` — no `BYPASSRLS`, `SUPERUSER`, `CREATEDB`, `CREATEROLE`, or `REPLICATION`.
-2. The §4.1 grants (`USAGE` on `public`, CRUD on all tables, `USAGE, SELECT` on all sequences, plus the two `ALTER DEFAULT PRIVILEGES` statements so future migrations inherit the grants).
-3. `CREATE ROLE cron_user LOGIN PASSWORD '<distinct-strong-generated>' BYPASSRLS` — deliberately `BYPASSRLS`, deliberately nothing else elevated.
+Migration A should assume the roles already exist and fail loudly if they do not.
+
+**Migration A — `039_runtime_role_grants.up.sql` / `.down.sql`**
+
+Grants and verifies both non-superuser roles in one migration. They land together because the code changes to switch the app over (§5.3 handoff pattern) touch both pools as a unit — splitting the grants across two migrations adds file count without decoupling the rollout. The env-var flips (§5.5) remain independently reversible, which is what actually gives the staged rollout property §5 promises.
+
+1. Assert `app_user` exists; if not, raise with a clear error telling the operator to run the manual bootstrap first.
+2. Assert `cron_user` exists; same failure mode.
+3. The §4.1 grants (`USAGE` on `public`, CRUD on all tables, `USAGE, SELECT` on all sequences, plus the two `ALTER DEFAULT PRIVILEGES` statements so future migrations inherit the grants).
 4. The §4.2 grants (`USAGE` on `public`, blanket `SELECT` on all tables, narrow `INSERT, UPDATE` on `monitoring_state`, `USAGE, SELECT` on all sequences, plus `ALTER DEFAULT PRIVILEGES ... GRANT SELECT` so future tables default to read-only for the cron role).
 5. The conditional PG17 `GRANT app_user TO postgres WITH SET TRUE` block from §5.6d (and same for `cron_user`). On PG14–PG16 this falls through to plain `GRANT ... TO postgres`. Required for the §5.6d opt-in role-flip test fixture; production code never uses `SET ROLE`.
 6. If the §4.5 helper-function audit surfaced any `SECURITY INVOKER` (default) RLS helpers, re-declare them as `SECURITY DEFINER` and `GRANT EXECUTE ... TO app_user, cron_user`.
 
-After this lands: both non-superuser roles exist. Neither is in the hot path yet (env vars still point at `postgres`), so the risk of this migration is effectively zero — it only creates roles and grants, it doesn't revoke anything from `postgres` or flip any RLS posture. RLS is still not enforced (no `FORCE` yet), so pointing staging's `DATABASE_URL` / `CRON_DATABASE_URL` at the new roles at this point is a no-op for correctness but lets CI validate that every handler and every background goroutine actually *runs* under the new roles.
+After this lands: both non-superuser roles have the expected grants. Neither is in the hot path yet (env vars still point at `postgres`), so the risk of this migration is effectively zero — it grants and verifies, it doesn't revoke anything from `postgres` or flip any RLS posture. RLS is still not enforced (no `FORCE` yet), so pointing staging's `DATABASE_URL` / `CRON_DATABASE_URL` at the new roles at this point is a no-op for correctness but lets CI validate that every handler and every background goroutine actually *runs* under the new roles.
 
-Down: revoke grants in reverse order, `DROP ROLE app_user`, `DROP ROLE cron_user`. Clean because we grant rather than transfer ownership.
+Down: revoke grants in reverse order. Do **not** drop the roles in the migration; role lifecycle stays a manual environment concern, same as bootstrap.
 
 **Migration B — `040_rls_force_enforcement.up.sql` / `.down.sql`**
 
@@ -355,7 +375,7 @@ This is the migration that actually flips "RLS is cosmetic" to "RLS is enforced"
 
 Down: drop `FORCE` on each table, revert any policy patches. Does not touch Migration A — if B rolls back, both runtime roles still exist and are still usable.
 
-**Why the numbering matters:** `039` and `040` land on separate commits, separate PRs, and — importantly — can land in separate deploys. If Migration B surfaces a missed code path in prod, rolling it back does not invalidate the roles or force a re-seed. If they were one migration, a partial failure during application would leave the DB in a state neither down-migration cleanly undoes.
+**Why the numbering matters:** `039` and `040` land on separate commits, separate PRs, and — importantly — can land in separate deploys. If Migration B surfaces a missed code path in prod, rolling it back does not invalidate the roles or force any re-bootstrap. If they were one migration, a partial failure during application would leave the DB in a state neither down-migration cleanly undoes.
 
 ### 5.5 Env-var split + Makefile update + code wiring
 
@@ -445,20 +465,26 @@ The §5.6a allowlist file (`backend/internal/db/rls_policy_allowlist.go`) declar
 ```go
 // Verb shapes — adjust per the §5.2 audit, not from this plan in isolation.
 var rlsPolicyAllowlist = map[string][]string{
-    "users":              {"SELECT", "INSERT", "UPDATE", "DELETE"},
-    "organizations":      {"SELECT", "INSERT", "UPDATE", "DELETE"},
-    "applications":       {"SELECT", "INSERT", "UPDATE", "DELETE"},
-    "connections":        {"SELECT", "INSERT", "UPDATE", "DELETE"},
-    "connection_sources": {"SELECT", "INSERT", "UPDATE", "DELETE"},
-    "app_source_filters": {"SELECT", "INSERT", "UPDATE", "DELETE"},
-    "conversations":      {"SELECT", "INSERT", "UPDATE", "DELETE"},
-    "reports":            {"SELECT", "INSERT", "UPDATE", "DELETE"},
-    "app_agent_config":   {"SELECT", "INSERT", "UPDATE", "DELETE"},
-    "monitoring_state":   {"SELECT", "INSERT", "UPDATE", "DELETE"},
-    "log_buffer":         {"SELECT", "INSERT", "DELETE"},      // append + retention prune; no UPDATE
-    "agent_log":          {"SELECT", "INSERT"},                // append-only
-    "log_pipeline_events":{"SELECT", "INSERT"},                // append-only, retention via cascade
-    // Add any user-scoped table introduced in the meantime.
+    "users":                    {"SELECT", "INSERT", "UPDATE", "DELETE"},
+    "organizations":            {"SELECT", "INSERT", "UPDATE", "DELETE"},
+    "org_members":              {"SELECT", "INSERT", "UPDATE", "DELETE"},
+    "applications":             {"SELECT", "INSERT", "UPDATE", "DELETE"},
+    "connections":              {"SELECT", "INSERT", "UPDATE", "DELETE"},
+    "github_repos":             {"SELECT", "INSERT", "UPDATE", "DELETE"},
+    "connection_sources":       {"SELECT", "INSERT", "UPDATE", "DELETE"},
+    "app_source_filters":       {"SELECT", "INSERT", "UPDATE", "DELETE"},
+    "conversations":            {"SELECT", "INSERT", "UPDATE", "DELETE"},
+    "investigations":           {"SELECT", "INSERT", "UPDATE", "DELETE"},
+    "app_agent_config":         {"SELECT", "INSERT", "UPDATE", "DELETE"},
+    "monitoring_state":         {"SELECT", "INSERT", "UPDATE", "DELETE"},
+    "investigation_schedules":  {"SELECT", "INSERT", "UPDATE", "DELETE"},
+    "notification_channels":    {"SELECT", "INSERT", "UPDATE", "DELETE"},
+    "notification_preferences": {"SELECT", "INSERT", "UPDATE", "DELETE"},
+    "notification_log":         {"SELECT", "INSERT", "UPDATE", "DELETE"},
+    "log_buffer":               {"SELECT", "INSERT", "DELETE"}, // append + retention prune; no UPDATE
+    "agent_log":                {"SELECT", "INSERT"},           // append-only
+    "log_pipeline_events":      {"SELECT", "INSERT"},           // append-only, retention via cascade
+    // Add any other user-scoped RLS table introduced in the meantime.
 }
 ```
 
@@ -505,44 +531,57 @@ These two tests catch the "everything compiles, all behaviour tests pass, but th
 
 Lifted from Trajan §9.4 (`TestBackgroundTaskRlsContext.test_async_session_maker_pairs_with_set_rls_user_context`) and adapted to Go. This is the single most important test for catching §5.3a/§5.3b regressions — it's a static analysis tripwire, runs in CI, doesn't require a DB, and catches the entire class of "developer added a new background writer and forgot `UserQueries`" bugs.
 
+Heimdall needs a **wider** tripwire than Trajan did, because many of its risky paths use a long-lived raw `*db.Queries` facade rather than calling `Pool.Begin` inline. Today that includes `agent/monitor.go`, `agent/scheduler.go`, `agent/emit.go`, `agent/pipeline_writer.go`, and `notifications/notifier.go`. A `Pool.Begin` grep would miss all of them.
+
 ```go
 // backend/internal/db/rls_pairing_test.go (pseudocode).
 //
-// Walk every .go file under backend/internal/ and backend/cmd/. For each file
-// that contains "Pool.Begin" or "pgxpool.Begin" outside a test, require it to
-// also contain "UserQueries" — OR be in the explicit allowlist below.
+// Walk every .go file under backend/internal/ and backend/cmd/. Apply two
+// checks:
 //
-// Allowlist: files that legitimately use the raw pool (cron enumeration,
+// 1. Any file that contains "Pool.Begin" or "pgxpool.Begin" outside a test
+//    must also contain "UserQueries" — OR be in the explicit allowlist below.
+// 2. Any long-lived background package file (agent/, notifications/,
+//    connectors/) that calls methods on a raw "*db.Queries" handle must
+//    either:
+//      - be in the explicit allowlist as enumeration-only / infra-only, or
+//      - contain "UserQueries" (or a wrapper that obviously re-enters through
+//        app_user with userID in hand).
+//
+// Allowlist: files that legitimately use the raw pool or raw *db.Queries
+// because they are enumeration-only / infra-only (cron enumeration,
 // advisory-lock helpers, schema-migrations bookkeeping, the UserQueries
 // helper itself). Every entry is a deliberate exception with a comment
 // explaining why.
-var rawPoolAllowlist = map[string]string{
+var rawDBAccessAllowlist = map[string]string{
     "backend/internal/api/handlers/userqueries.go": "implementation of UserQueries itself",
-    "backend/internal/agent/monitor.go":            "cron-pool enumeration of applications",
-    "backend/internal/agent/scheduler.go":          "cron-pool enumeration of due schedules",
-    "backend/internal/connectors/poller.go":        "cron-pool enumeration of active pollers",
+    "backend/internal/agent/monitor.go":            "temporary until monitor enumeration and writes are split; should shrink over time",
+    "backend/internal/agent/scheduler.go":          "temporary until scheduler enumeration and writes are split; should shrink over time",
+    "backend/internal/connectors/poller.go":        "cron-pool enumeration of active pollers only",
     // Each new entry is a code review item: is this really a no-user path?
 }
 
-func TestRawPoolUseIsAllowlisted(t *testing.T) {
+func TestRawDBAccessIsAllowlisted(t *testing.T) {
     walkBackend(t, func(path string, body []byte) {
-        if !regexp.MustCompile(`Pool\.Begin|pgxpool.*\.Begin`).Match(body) {
+        hasRawBegin := regexp.MustCompile(`Pool\.Begin|pgxpool.*\.Begin`).Match(body)
+        hasRawQueries := regexp.MustCompile(`\.(Queries|queries)\.[A-Z]`).Match(body)
+        if !hasRawBegin && !hasRawQueries {
             return
         }
-        if _, ok := rawPoolAllowlist[path]; ok {
+        if _, ok := rawDBAccessAllowlist[path]; ok {
             return
         }
         require.Contains(t, string(body), "UserQueries",
-            "%s calls Pool.Begin but does not reference UserQueries — "+
+            "%s uses raw DB access but does not reference UserQueries — "+
             "every tenant write must go through UserQueries(ctx, userID). "+
-            "If this is a no-user path, add it to rawPoolAllowlist with a justification.", path)
+            "If this is genuinely enumeration-only / infra-only, add it to rawDBAccessAllowlist with a justification.", path)
     })
 }
 ```
 
-This test would fail today on `webhooks.go` and `otlp.go` (the two known §5.3 gaps from `rls-enforcement-mental-model.md`). That's the desired signal — it converts "we know there are two gaps, please someone remember to fix them" into a CI failure that blocks the PR.
+This test would fail today on `webhooks.go` and `otlp.go` (the two known `Pool.Begin` gaps from `rls-enforcement-mental-model.md`) and, with the widened second pass, on background writers like `emit.go`, `pipeline_writer.go`, and `notifications/notifier.go` if they were left on raw pool-backed queries. That's the desired signal — it converts "we know there are gaps, please someone remember to fix them" into a CI failure that blocks the PR.
 
-A second test in the same file walks the allowlist and asserts each entry still exists and still contains `Pool.Begin` — catches the case where a refactor moves the raw-pool use elsewhere and the allowlist entry becomes a stale lie.
+A second test in the same file walks the allowlist and asserts each entry still exists and still contains the raw-access pattern it claims to justify — catches the case where a refactor moves the raw access elsewhere and the allowlist entry becomes a stale lie.
 
 ### 5.6d Opt-in role-flip test fixture
 
@@ -641,7 +680,7 @@ Order: prod directly. With Stage 1 already clean, any new error surfaced here is
 **Compensating controls for the missing staging environment:**
 
 - Exercise both stages end-to-end against a local Postgres with representative seed data before each prod deploy. Every path in §5.3's background-writer list needs at least one manual trigger — webhook ingestion, OTLP receive, syslog receive, GitHub webhook, a scheduled investigation cycle, a full monitor-loop iteration.
-- Keep the deploys small by design: Migration A is purely additive (creates roles, grants privileges, revokes nothing), Migration B is a flag flip plus targeted policy patches. Neither is structurally hard to revert.
+- Keep the deploys small by design: the manual bootstrap step creates roles out-of-band, Migration A is purely additive (grants privileges, verifies role presence, revokes nothing), and Migration B is a flag flip plus targeted policy patches. None is structurally hard to revert.
 - The "strictly better than today" checkpoint at the end of Stage 1 is where the risk concentrates. If something looks off at hour 48 — elevated error rate, a scheduled job that didn't fire, missing `log_pipeline_events` rows — hold Stage 2 and investigate. Don't press forward on the theory that FORCE RLS will surface the root cause; it will, but it'll do so in a way that mixes two error classes.
 - When customer count crosses ~10 or paid revenue enters the picture, the independent case for a staging environment strengthens. Worth revisiting the rollout playbook at that point — not as a blocker on this work, but as a follow-up that would have made this rollout materially safer.
 
@@ -687,7 +726,7 @@ Revised against Trajan's actual elapsed time. Trajan's role split touched ~7 lay
 - §5.3a known-user background-task audit: **half a day**. Grep `go func` across `backend/internal/`, classify each, fix any that touch RLS-protected tables without threading `userID`. Expected hit count: ~3–8 sites based on the codebase shape (chat fan-out, pipeline emitters, fire-and-forget writers).
 - §5.3b post-commit invariant decision: **half a day**. Document the single-transaction `UserQueries` lifetime contract in code; audit existing call sites for commit-and-continue patterns (expected hit count: zero).
 - §4.5 helper-function audit + `SECURITY DEFINER` retrofit: **a few hours**, possibly a no-op if Heimdall's policies are inline-only.
-- §5.4 migrations: **two to three hours** once the audit is done — both roles go into Migration A, so SQL is modestly longer but still trivial. Add the `WITH SET TRUE` PG17 grant block from §5.6d.
+- §5.4 migrations: **two to three hours** once the audit is done — the manual bootstrap step is tiny, and Migration A's grant/verification SQL is still modest. Add the `WITH SET TRUE` PG17 grant block from §5.6d.
 - §5.5 env-var split + cron pool wiring: **one to two days** — Makefile edits, env-var docs, the new `*pgxpool.Pool` in `main.go`, and threading it into the agent / scheduler / connector pollers / notifications dispatcher. The handoff-pattern refactor for background writers is the bulk of this. Call it **two to three days** if any writer turns out to be entangled with `s.Pool` in a way that needs untangling.
 - §5.6 + §5.6a–d test suite: **two to three days** — RLS regression tests per critical table for `app_user`, the four `cron_user` posture tests (§5.6), the catalog drift checks + policy allowlist (§5.6a), the cron pool connectivity tests (§5.6b), the source-tree pairing tripwire (§5.6c), and the opt-in role-flip fixture wiring (§5.6d). The pairing tripwire and the allowlist together are the long-tail items.
 - §5.7 staged rollout: **elapsed time over ~5–7 days**, dominated by two 48h prod bake windows (Stage 1, then Stage 2). No staging means prod traffic is the exercise surface — don't compress the bakes to save calendar time. Add a half-day buffer between stages for the §5.3a known-user audit's findings to surface in real traffic.
@@ -713,9 +752,10 @@ This assumes no surprises in §5.1 or §4.5. If any code path turns out to need 
 Ship-ready when all of these are true:
 
 **Migrations and roles**
-- [ ] Migration A (`039_runtime_roles`) has landed in prod: `app_user` exists with the §4.1 grants and none of the denied privileges; `cron_user` exists with the §4.2 narrow grants, `BYPASSRLS`, and none of the denied privileges.
+- [ ] Manual bootstrap has been run in prod: `app_user` and `cron_user` exist with distinct random passwords and the intended role attributes.
+- [ ] Migration A (`039_runtime_role_grants`) has landed in prod: `app_user` has the §4.1 grants and none of the denied privileges; `cron_user` has the §4.2 narrow grants, `BYPASSRLS`, and none of the denied privileges.
 - [ ] Migration A includes the conditional PG17 `GRANT app_user TO postgres WITH SET TRUE` (and same for `cron_user`) so the §5.6d test fixture can flip roles.
-- [ ] Migration B (`040_rls_force_enforcement`) has landed in prod: every user-scoped table has `FORCE ROW LEVEL SECURITY` set and a policy verb-set matching the §5.6a allowlist.
+- [ ] Migration B (`040_rls_force_enforcement`) has landed in prod: every user-scoped table with `rowsecurity = true` has `FORCE ROW LEVEL SECURITY` set and a policy verb-set matching the §5.6a allowlist.
 - [ ] §4.5 RLS helper functions (if any) are declared `SECURITY DEFINER` and granted `EXECUTE` to both runtime roles.
 
 **Environment wiring**
@@ -736,7 +776,7 @@ Ship-ready when all of these are true:
 - [ ] The §5.6a catalog drift checks exist in CI: (1) every RLS-enabled public table is `FORCE`'d, (2) every RLS-enabled table is in the policy allowlist with verbs matching `pg_policies` exactly, (3) `app_user` does not have `BYPASSRLS`, (4) `cron_user` does not have `SUPERUSER`.
 - [ ] `backend/internal/db/rls_policy_allowlist.go` exists and is the single source of truth for per-table verb expectations.
 - [ ] §5.6b cron-pool connectivity tests (`TestCronPool_IsActuallyCronUser`, `TestAppPool_IsActuallyAppUser`) exist in CI.
-- [ ] §5.6c source-tree pairing tripwire exists in CI: every file calling `Pool.Begin` either references `UserQueries` or is in `rawPoolAllowlist` with a justification comment.
+- [ ] §5.6c source-tree pairing tripwire exists in CI: every file using raw DB access (`Pool.Begin` or raw pool-backed `*db.Queries` in long-lived background packages) either references `UserQueries` or is in `rawDBAccessAllowlist` with a justification comment.
 - [ ] §5.6d opt-in `asAppUser` test fixture exists, with at least one test per critical table that uses it to verify enforcement actually fires.
 
 **Observability (production, no staging)**
