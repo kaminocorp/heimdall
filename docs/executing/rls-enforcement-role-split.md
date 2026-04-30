@@ -227,6 +227,23 @@ If Heimdall's current RLS policies are written entirely in inline subqueries (no
 
 Order matters — each step is independently reversible until the final flip.
 
+### 5.0 `service_role` audit (gating, before §5.1)
+
+If any code path uses Supabase's `service_role` key against PostgREST, that path bypasses RLS via a **completely different route** than the `postgres` superuser connection — and the role split does nothing to protect it. A `service_role` write to a tenant table after the flip is just as cross-tenant as it is today; the entire defensive posture this plan builds collapses for that path.
+
+This audit is a gate, not a batched cleanup. Do it first.
+
+```bash
+grep -rn 'service_role\|SUPABASE_SERVICE_ROLE_KEY\|SERVICE_ROLE_KEY' backend/ frontend/ --include='*.go' --include='*.ts' --include='*.vue'
+```
+
+For each hit, classify:
+
+- **Zero hits in app code:** confirm and move on. The remainder of §5 proceeds unchanged.
+- **Hits in app code:** every one is a separate decision *before* §5.1 starts. Either the path can be rewritten to go through `app_user` + `UserQueries` (preferred), or it has a structural reason to bypass RLS that needs documenting (auth bootstrap, billing reconciliation against Supabase-managed tables, etc.). Rewrites land before Stage 1; documented exceptions land in a `service_role_allowlist.md` companion to this plan with the same review bar as a new `BYPASSRLS` grant.
+
+The audit is a one-liner. The remediation, if any hits exist, is what gates §5.1.
+
 ### 5.1 Audit every query for superuser-only behaviour
 
 Run the backend test suite and a representative prod-shape workload against `app_user` in a staging database **before** flipping the env var. Specifically look for:
@@ -335,10 +352,20 @@ Cons: substantially more code (custom pool wrapper, `RESET app.current_user_id` 
 
 **Decision (this plan):** Adopt **Option A**. Document the invariant explicitly in `userqueries.go` as a comment. Enforce mechanically via §5.6c. Revisit if and only if a feature genuinely needs commit-and-continue — at which point Option B becomes a small, scoped follow-up rather than baggage carried by every developer who reads the code today.
 
+**Named audit targets — the longest-lived RLS-scoped sessions in the codebase.** Every other call site in the backend is a short-lived HTTP handler (request in, transaction out, done in milliseconds) where Option A is structurally guaranteed. The two paths where the invariant can plausibly be violated *today*, before the role split even ships, are both in the agent subsystem:
+
+- **`backend/internal/api/handlers/chat.go` — the WebSocket chat handler.** A chat session opens, the client sends a prompt, the agent loop runs up to 10 tool-use iterations (each calling `search_logs` or `query_database`), and the conversation persists as JSONB. The expected shape under Option A: **one** `UserQueries(ctx, userID)` call at the start of each prompt cycle, threaded through every tool iteration in that cycle, committed at the end. **Failure shapes to look for:**
+  1. A fresh `UserQueries` opened per tool iteration → multiple round-trips, each with its own `SET LOCAL`. Not a correctness bug, but wasteful and obscures the lifetime contract.
+  2. A `commit()` between tool iterations followed by a continuation that reuses the same `*db.Queries` handle → the second query loses RLS context and silently returns zero rows / writes that violate policy. This is the bug the Trajan `after_begin` listener exists to paper over; under Option A it must not exist.
+  3. The WS connection holding one long `UserQueries` across multiple prompt cycles → fine for correctness but locks a connection from the pool for the lifetime of the WS, which is unacceptable. Fresh per-prompt is the right shape.
+- **`backend/internal/agent/loop.go` — the agent tool-use loop.** Same pattern, different entry point. Whatever shape `chat.go` enforces, this file must match — they call into the same loop.
+
+Confirm both files match Option A before Stage 1. If either commits-and-continues today, the fix lands as a Stage 1 prerequisite (§5.7), not as a follow-up.
+
 Action items for §5.5:
 
 1. Add a `// INVARIANT:` doc comment at the top of `UserQueries` stating the single-transaction lifetime contract.
-2. Audit every existing `UserQueries` call site for the pattern `defer commit/done; ... commit(); ... q.<another query>` — the second query is the bug. None should exist today; confirm.
+2. Audit every existing `UserQueries` call site for the pattern `defer commit/done; ... commit(); ... q.<another query>` — the second query is the bug. The named targets above (`chat.go`, `agent/loop.go`) are the only places this is plausible; confirm explicitly.
 3. The pairing tripwire in §5.6c catches future regressions of this invariant.
 
 ### 5.4 Write the migrations (two, plus one manual bootstrap step)
@@ -385,6 +412,18 @@ Down: drop `FORCE` on each table, revert any policy patches. Does not touch Migr
 - Add a second `*pgxpool.Pool` in `backend/cmd/heimdall/main.go` for the cron engine, parallel to the existing one. Construct it from `CRON_DATABASE_URL`. Thread it through to `agent.Agent`, the scheduler, and anywhere else §5.3 identified as a background writer. If `CRON_DATABASE_URL` is empty at startup, **fall back to the primary pool and emit a loud `WARN`** — the scheduler will still run (superuser bypass works the same way), but the warning makes the degraded posture visible in logs. In prod, treat missing `CRON_DATABASE_URL` as a config error rather than a silent downgrade.
 - Refactor every site identified in §5.3's "background goroutines" list to use the handoff pattern: cron pool for enumeration, app pool + `UserQueries` for per-user writes.
 - Add a config-level invariant: in production builds, refuse to start if `DATABASE_URL` and `CRON_DATABASE_URL` resolve to the same role (would silently undo the entire plan).
+
+**The pair-of-pools API ripple — call out as the dominant cost of §5.5.** Today `agent.Agent`, the scheduler, the connector pollers, and the notifications dispatcher each take a single `*db.Queries` (or equivalent) facade in their constructors. Post-flip they need access to **both** pools — cron for enumeration, app for per-user writes. The constructor signature change ripples through every call site that builds one of these subsystems, plus every test that does the same.
+
+Concrete shape: introduce a small `db.Pools` struct (or pair the two `*pgxpool.Pool` handles directly on `*handlers.Server`) and thread it through. Order of work:
+
+1. **`main.go`** — construct both pools side-by-side, fail loud if either fails to connect, fail loud if both resolve to the same role (the §5.5 prod invariant).
+2. **`handlers.Server`** — already holds the app pool; add the cron pool. Most handlers don't need the cron pool at all and shouldn't see it; expose it only on the path that constructs background subsystems.
+3. **`agent.Agent` constructor** — takes both pools. The interactive loop uses only the app pool (every chat session has a JWT, so there's no enumeration step). The monitoring loop uses both per the handoff pattern.
+4. **`scheduler` + connector pollers + notifications dispatcher** — same shape as `agent.Agent`. Each has a constructor change plus a small per-iteration refactor (enumerate on cron, then loop calling `UserQueries` per tenant).
+5. **Tests** — every test that constructs one of the above takes the new shape. Realistic count: 20–40 files. Most are mechanical (rename `db.Queries` arg to `db.Pools{App: ..., Cron: ...}`); a small subset of tests will need a real second pool because they exercise enumeration paths.
+
+Don't underestimate this — it's the largest single line-count change in §5.5 and its mechanical-but-wide nature makes it where review fatigue mistakes happen. Land it as its own PR before the env-var flip, behind a feature flag if necessary (default both pools to the same `DATABASE_URL` until the actual env-var split lands), so the constructor refactor and the privilege flip are reviewed and reverted independently.
 
 ### 5.6 The RLS regression test
 
@@ -458,6 +497,31 @@ SELECT rolname FROM pg_roles WHERE rolname = 'app_user' AND rolbypassrls = true;
 
 -- Test 4: cron_user must never gain SUPERUSER.
 SELECT rolname FROM pg_roles WHERE rolname = 'cron_user' AND rolsuper = true;
+
+-- Test 5: cron_user's writable-table set must exactly match the cron-write
+-- allowlist. The §4.2 plan grants cron_user narrow INSERT/UPDATE on
+-- monitoring_state and nothing else; a future migration that quietly adds
+-- GRANT INSERT ON log_buffer TO cron_user would pass every other test in this
+-- suite (RLS posture unchanged, role attributes unchanged, policy verbs
+-- unchanged) and silently re-introduce a cross-tenant write surface that
+-- BYPASSRLS makes invisible. Only this check catches it.
+--
+-- Implemented as Go code, not raw SQL — pseudo-shape shown.
+--   var cronWriteAllowlist = map[string][]string{
+--       "monitoring_state": {"INSERT", "UPDATE"},
+--       // Add further infra-shape tables here, with justification, at the
+--       // same review bar as a new BYPASSRLS grant.
+--   }
+--   got := SELECT table_name, array_agg(DISTINCT privilege_type)
+--          FROM information_schema.role_table_grants
+--          WHERE grantee = 'cron_user'
+--            AND table_schema = 'public'
+--            AND privilege_type IN ('INSERT', 'UPDATE', 'DELETE')
+--          GROUP BY table_name;
+--   require.Equal(t, cronWriteAllowlist, got)
+--
+-- Note: SELECT grants are blanket-allowed for cron_user (it's the
+-- enumeration role). This test only constrains writes.
 ```
 
 The §5.6a allowlist file (`backend/internal/db/rls_policy_allowlist.go`) declares the source-of-truth verb set per table. Initial shape, lifted from Heimdall's actual data shapes:
@@ -654,6 +718,21 @@ The migration split in §5.4 unlocks a two-stage rollout that separates "does th
 
 **No staging environment.** Heimdall runs only a production deployment today — a deliberate choice during the <10-customer Beta phase. That raises the bar on the two-stage structure rather than removing it: both stages still land in prod, but separating them over time is what lets us attribute any error to the right cause. Collapsing Stage 1 and Stage 2 into a single deploy would fuse privilege errors and policy errors into one incident, which is exactly what the split is meant to prevent. The bake windows below refer to **production traffic**, not staging.
 
+**Stage 1 prerequisites — must be true before the env-var flip.**
+
+These are not "should be done eventually" — they are the exhaustive list of code-side fixes that *must* land before `DATABASE_URL` points at `app_user`. Under Stage 1's privilege-only posture, a `Pool.Begin` without `SET LOCAL` doesn't fail loud — it produces zero-row reads and policy-violating writes, both of which are silent until something downstream complains. The point of enumerating this list is so nothing on it ships as a Stage-1-bake "discovery."
+
+1. **`backend/internal/api/handlers/webhooks.go`** — log ingestion. Today opens `Pool.Begin` directly (per §5.6c). Must be refactored to resolve the bearer token → owning `userID` → `s.UserQueries(ctx, userID)` → INSERT.
+2. **`backend/internal/api/handlers/otlp.go`** — OTLP HTTP receiver. Same shape as webhooks; same fix.
+3. **GitHub webhook receiver** (wherever it currently writes — confirm path during §5.1 audit). HMAC-verify, resolve installation → owner_user_id via the cron pool, then `UserQueries` on the app pool.
+4. **Syslog TLS listener** — not HTTP, but writes to the same DB. Same handoff pattern.
+5. **Background writers identified in §5.3** — `agent/monitor.go`, `agent/scheduler.go`, `agent/pipeline_writer.go`, `agent/emit.go`, connector pollers (Fly.io drain, Supabase poller), notifications dispatcher. Each must use cron-pool-for-enumeration, app-pool-for-writes per §5.3's handoff pattern.
+6. **§5.3a known-user goroutines** — every `go func` in `backend/internal/` and `backend/cmd/` that touches an RLS-protected table threads `userID` and calls `UserQueries(ctx, userID)`. Expected hit count: ~3–8 sites.
+7. **§5.3b WS chat / agent loop invariant** — `chat.go` and `agent/loop.go` confirmed to match Option A (one `UserQueries` per prompt cycle, no commit-and-continue inside the cycle).
+8. **§5.6c pairing tripwire green** — every file using raw DB access either references `UserQueries` or is in `rawDBAccessAllowlist` with a justification. The first run of this test enumerates remaining gaps; treat its initial green as the gate signal.
+
+If any of these is incomplete on the morning of the Stage 1 deploy, **postpone the deploy**. The cost of an extra day of audit work is hours; the cost of a misdiagnosed silent-zero-row bug in prod is days, and the absence of a staging environment to disambiguate makes that diagnosis materially harder.
+
 **Stage 1 — `DATABASE_URL` → `app_user` AND `CRON_DATABASE_URL` → `cron_user`, FORCE RLS not yet landed.**
 
 Order: local dev → prod (no staging to vet through first). After Migration A lands but before Migration B:
@@ -711,7 +790,7 @@ The revert path is **not** "rollback the deploy" — the deploy is the env-var c
 
 These are orthogonal to the role split but easy to do in the same PR cycle:
 
-- **`service_role` key usage**: grep the codebase for `service_role`, `SUPABASE_SERVICE_ROLE_KEY`, or similar. Any path that uses Supabase's service-role key against PostgREST bypasses RLS via a completely different route and needs the same "why is this privileged access necessary" audit.
+- **`service_role` key usage** — **moved to §5.0 as a gating audit.** It can't be batched; if any path uses Supabase's service-role key against PostgREST, the role split does nothing to protect that path, so the decision on each occurrence has to land before §5.1 begins. This entry remains here as a back-reference.
 - **RLS coverage on 0.46.x tables**: `connection_sources`, `app_source_filters` were added mid-0.46.x. `log_pipeline_events` (migration 038) is in flight. Each needs a full SELECT / INSERT / UPDATE / DELETE policy set, not just RLS-enabled. The `source_filtering-phase*` completion docs (now in `docs/archive/`) should be cross-referenced.
 - **`SET LOCAL` usage audit**: verify that every code path that writes to a user-scoped table goes through `UserQueries`, not the raw pool directly. Any call site that uses `s.Pool` to begin a transaction without the `SET LOCAL` is already a latent bug under superuser (relies on app-code filtering) and a hard failure under `app_user` (RLS denies the write).
 - **Idempotency / rate-limit tables**: 0.45.1 added RLS to the idempotency table. Check whether there are other infra-shape tables (e.g. `schema_migrations` — that one we don't want to lock down, since golang-migrate uses `DIRECT_URL` anyway) that need the same treatment.
@@ -767,13 +846,15 @@ Ship-ready when all of these are true:
 - [ ] Cron pool size is deliberately bounded (per §3 "Pool sizing") and documented in `main.go`.
 
 **Code & tests**
+- [ ] §5.0 `service_role` audit complete: zero hits in app code, OR every hit has been rewritten to go through `UserQueries`, OR each remaining occurrence has a documented justification in `service_role_allowlist.md`.
+- [ ] §5.7 Stage 1 prerequisite list complete before Stage 1 deploy: `webhooks.go`, `otlp.go`, GitHub webhook receiver, syslog listener, every §5.3 background writer, every §5.3a known-user goroutine, and the §5.3b WS chat / agent loop invariant all confirmed Option-A-shaped.
 - [ ] Every background writer identified in §5.3 uses the cron-pool-for-enumeration, app-pool-for-writes handoff pattern. No background goroutine calls `s.Pool.Begin` directly on the superuser pool.
 - [ ] §5.3a audit complete: every `go func` in `backend/internal/` and `backend/cmd/` that touches an RLS-protected table threads `userID` and calls `UserQueries(ctx, userID)`.
 - [ ] §5.3b invariant documented: the doc comment at the top of `UserQueries` states the single-transaction lifetime contract, and no existing call site violates it.
 - [ ] All backend tests pass against `app_user` + `cron_user` in CI.
 - [ ] At least one RLS regression test per critical table exists in CI and fails if BYPASSRLS is re-granted to `app_user`.
 - [ ] The four `cron_user` behaviour tests from §5.6 exist in CI and fail if cron_user grows `SUPERUSER`, loses `BYPASSRLS`, gains blanket INSERT on `public.*`, or gains access to `auth.*`.
-- [ ] The §5.6a catalog drift checks exist in CI: (1) every RLS-enabled public table is `FORCE`'d, (2) every RLS-enabled table is in the policy allowlist with verbs matching `pg_policies` exactly, (3) `app_user` does not have `BYPASSRLS`, (4) `cron_user` does not have `SUPERUSER`.
+- [ ] The §5.6a catalog drift checks exist in CI: (1) every RLS-enabled public table is `FORCE`'d, (2) every RLS-enabled table is in the policy allowlist with verbs matching `pg_policies` exactly, (3) `app_user` does not have `BYPASSRLS`, (4) `cron_user` does not have `SUPERUSER`, (5) `cron_user`'s writable-table set in `information_schema.role_table_grants` matches the cron-write allowlist exactly.
 - [ ] `backend/internal/db/rls_policy_allowlist.go` exists and is the single source of truth for per-table verb expectations.
 - [ ] §5.6b cron-pool connectivity tests (`TestCronPool_IsActuallyCronUser`, `TestAppPool_IsActuallyAppUser`) exist in CI.
 - [ ] §5.6c source-tree pairing tripwire exists in CI: every file using raw DB access (`Pool.Begin` or raw pool-backed `*db.Queries` in long-lived background packages) either references `UserQueries` or is in `rawDBAccessAllowlist` with a justification comment.
