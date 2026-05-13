@@ -43,8 +43,13 @@ func (a *Agent) Prune(ctx context.Context) {
 // pruneTick performs a single PruneExpiredLogs call, logging success or
 // failure. Exposed as a method (rather than inlined in Prune) so tests can
 // exercise it directly without waiting on the ticker.
+//
+// Runs on the cron pool — the pruner is a cross-tenant DELETE on log_buffer,
+// the canonical "enumerate without RLS scope" shape. Phase 4's Migration A
+// adds the DELETE grant on log_buffer to cron_user (the parent plan §4.2
+// grant set was SELECT-only on tenant tables; the audit caught this).
 func (a *Agent) pruneTick(ctx context.Context) {
-	rows, err := a.queries.PruneExpiredLogs(ctx)
+	rows, err := a.cronQ.PruneExpiredLogs(ctx)
 	if err != nil {
 		slog.Error("pruner: failed to delete expired logs", "err", err)
 		return

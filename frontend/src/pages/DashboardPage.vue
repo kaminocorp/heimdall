@@ -6,7 +6,6 @@ import { getAppStats, getAppAgentConfig, getMonitoringStatus, listConnectionsByA
 import type { AppAgentConfig, MonitoringStatus } from '@/types/organization'
 import type { Connection } from '@/types/connection'
 import StatusBadge from '@/components/common/StatusBadge.vue'
-import SkeletonBlock from '@/components/common/SkeletonBlock.vue'
 
 const appStore = useAppStore()
 const logsStore = useLogsStore()

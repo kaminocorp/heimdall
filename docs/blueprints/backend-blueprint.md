@@ -514,7 +514,17 @@ return s.Queries.WithTx(tx)  // all subsequent queries run inside this transacti
 
 `SET LOCAL` is transaction-scoped, so concurrent requests from different users never share session state. This is the canonical way to combine RLS with connection pooling. See `database-connection-blueprint.md` for the full pattern.
 
-**Current enforcement model**: The backend connects as the `postgres` superuser, which bypasses RLS by default. The policies protect against non-owner access paths (Supabase dashboard roles, PostgREST, direct `psql` with other roles). The `SET LOCAL` plumbing is in place so that a migration to a non-owner app role activates RLS enforcement automatically.
+**Current enforcement model** (post-rollout, completed via the eight-phase RLS role split — see `docs/completions/rls-enforcement-phase-{1..8}.md` and the archived [`rls-enforcement-roadmap.md`](../archive/rls-enforcement-roadmap.md)):
+
+- **Two runtime roles**, neither superuser:
+  - `app_user` (`DATABASE_URL`) — authenticates the JWT-scoped HTTP/WebSocket path. **No `BYPASSRLS`.** Every protected table is `FORCE ROW LEVEL SECURITY`'d, so RLS is the actual access boundary, not a defence-in-depth layer.
+  - `cron_user` (`CRON_DATABASE_URL`) — authenticates the no-JWT background path (monitor loop, scheduler, connector pollers, log-buffer pruner). Has `BYPASSRLS` for cross-tenant enumeration plus a deliberately narrow set of writes (`INSERT/UPDATE` on `monitoring_state`, `DELETE` on `log_buffer`) — every write is a documented exception.
+- **One migration role**, kept superuser-only: `postgres` (`DIRECT_URL`), used by `make migrate-*` and nothing else. Runtime traffic never touches it.
+- **Bypass-then-scope handoff** for non-JWT paths: `cron_user` does the smallest possible cross-tenant lookup ("which user owns this app?"), then closes that session and reopens via `Pools.WithUserQueries(ctx, ownerUserID)` on the `app_user` pool with `app.current_user_id` set — so the audit trail and policy evaluation match a normal JWT request.
+- **One SECURITY DEFINER escape hatch**: `lookup_user_for_invite(email)` (migration 041) lets the org-member invite handler resolve a not-yet-org-mate user by email. The function is owned by `postgres`, has `search_path` pinned, and is `EXECUTE`-granted only to `app_user`.
+- **Startup invariant**: when `HEIMDALL_ENV=production`, `cmd/heimdall/main.go:79–84` refuses to launch if `DATABASE_URL` and `CRON_DATABASE_URL` authenticate as the same role — caught in deployment health checks before traffic is accepted.
+
+The `SET LOCAL app.current_user_id` snippet above is what makes RLS load-bearing under FORCE: every request runs inside a transaction whose first statement pins the GUC the policies read.
 
 ### Read-Only Database Queries
 

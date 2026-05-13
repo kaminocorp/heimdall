@@ -22,8 +22,14 @@ func (s *Server) GetNotificationPreferences(w http.ResponseWriter, r *http.Reque
 	if app == nil {
 		return
 	}
+	userID, _ := middleware.UserIDFromContext(r.Context())
 
-	prefs, err := s.Queries.GetNotificationPreferences(r.Context(), app.ID)
+	var prefs db.NotificationPreference
+	err := s.Pools.WithUserQueries(r.Context(), userID, func(q *db.Queries) error {
+		var e error
+		prefs, e = q.GetNotificationPreferences(r.Context(), app.ID)
+		return e
+	})
 	if err != nil {
 		// No row yet — return defaults.
 		w.Header().Set("Content-Type", "application/json")
@@ -109,8 +115,14 @@ func (s *Server) ListNotificationChannels(w http.ResponseWriter, r *http.Request
 	if app == nil {
 		return
 	}
+	userID, _ := middleware.UserIDFromContext(r.Context())
 
-	channels, err := s.Queries.ListNotificationChannelsByApp(r.Context(), app.ID)
+	var channels []db.NotificationChannel
+	err := s.Pools.WithUserQueries(r.Context(), userID, func(q *db.Queries) error {
+		var e error
+		channels, e = q.ListNotificationChannelsByApp(r.Context(), app.ID)
+		return e
+	})
 	if err != nil {
 		jsonServerError(w, "failed to list notification channels", err)
 		return
@@ -328,9 +340,14 @@ func (s *Server) TestNotificationChannel(w http.ResponseWriter, r *http.Request)
 		jsonError(w, "invalid channel id", http.StatusBadRequest)
 		return
 	}
+	userID, _ := middleware.UserIDFromContext(r.Context())
 
-	ch, err := s.Queries.GetNotificationChannel(r.Context(), channelID)
-	if err != nil {
+	var ch db.NotificationChannel
+	if err := s.Pools.WithUserQueries(r.Context(), userID, func(q *db.Queries) error {
+		var e error
+		ch, e = q.GetNotificationChannel(r.Context(), channelID)
+		return e
+	}); err != nil {
 		jsonError(w, "notification channel not found", http.StatusNotFound)
 		return
 	}
@@ -383,10 +400,16 @@ func (s *Server) ListNotificationHistory(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	history, err := s.Queries.ListNotificationLogByApp(r.Context(), db.ListNotificationLogByAppParams{
-		AppID:  app.ID,
-		Limit:  limit,
-		Offset: offset,
+	userID, _ := middleware.UserIDFromContext(r.Context())
+	var history []db.ListNotificationLogByAppRow
+	err := s.Pools.WithUserQueries(r.Context(), userID, func(q *db.Queries) error {
+		var e error
+		history, e = q.ListNotificationLogByApp(r.Context(), db.ListNotificationLogByAppParams{
+			AppID:  app.ID,
+			Limit:  limit,
+			Offset: offset,
+		})
+		return e
 	})
 	if err != nil {
 		jsonServerError(w, "failed to list notification history", err)

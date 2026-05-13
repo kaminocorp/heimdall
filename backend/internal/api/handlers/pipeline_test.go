@@ -37,20 +37,25 @@ func insertPipelineTestLog(t *testing.T, env *testEnv, connID uuid.UUID) uuid.UU
 
 // walkLogThroughPipeline writes one event per stage for a given log using
 // the PipelineWriter, so the integration test covers the exact production
-// code path rather than raw SQL.
+// code path rather than raw SQL. Phase 2 of the RLS rollout made the writer
+// caller-supplied for queries — every Write* takes a *db.Queries the
+// caller has scoped to a UserQueries transaction. The test passes
+// env.Queries (raw, RLS-cosmetic) which is the right contract today;
+// post-Phase-7 the test would need to wrap each call in
+// env.Server.Pools.WithUserQueries.
 func walkLogThroughPipeline(t *testing.T, pw *agent.PipelineWriter, logID, appID uuid.UUID) {
 	t.Helper()
 	ctx := context.Background()
-	pw.WriteIngestion(ctx, agent.IngestionInput{
+	pw.WriteIngestion(ctx, env.Queries, agent.IngestionInput{
 		LogID: logID, AppID: appID, SourceType: "test", Severity: "info",
 	})
-	pw.WriteClassified(ctx, agent.ClassifiedInput{
+	pw.WriteClassified(ctx, env.Queries, agent.ClassifiedInput{
 		LogID: logID, AppID: appID,
 		Type: "ERROR", Category: "runtime_exception",
 		Severity: "error", Confidence: 0.92,
 		Summary: "runtime exception in handler",
 	})
-	pw.WriteGate(ctx, agent.GateInput{
+	pw.WriteGate(ctx, env.Queries, agent.GateInput{
 		LogID: logID, AppID: appID,
 		Escalated: true, RuleID: agent.RuleErrorType,
 	})
@@ -63,7 +68,7 @@ func walkLogThroughPipeline(t *testing.T, pw *agent.PipelineWriter, logID, appID
 		uuid.MustParse(env.UserID), appID,
 	).Scan(&assessmentID)
 	require.NoError(t, err)
-	pw.WriteAssessment(ctx, agent.AssessmentInput{
+	pw.WriteAssessment(ctx, env.Queries, agent.AssessmentInput{
 		LogID: logID, AppID: appID, AssessmentID: assessmentID,
 	})
 }
@@ -80,7 +85,7 @@ func TestPipeline_Integration(t *testing.T) {
 	connID := uuid.MustParse(connIDStr)
 
 	bus := agent.NewPipelineBus()
-	pw := agent.NewPipelineWriter(env.Queries, bus)
+	pw := agent.NewPipelineWriter(bus)
 
 	t.Run("four-stage walk persists and fans out", func(t *testing.T) {
 		appUUID := uuid.MustParse(env.AppID)

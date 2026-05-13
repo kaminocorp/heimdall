@@ -8,7 +8,7 @@ import ChatWindow from '@/components/agent/ChatWindow.vue'
 const route = useRoute()
 const existingId = route.query.conversation_id as string | undefined
 
-const { messages, status, conversationId, isThinking, activeTools, error, sendMessage, loadMessages } =
+const { messages, status, isThinking, activeTools, error, sendMessage, loadMessages } =
   useAgent(existingId)
 
 function formatTool(name: string): string {

@@ -56,16 +56,18 @@ function connectionsForCategory(cat: ConnectionCategory): Connection[] {
 }
 
 // Build a flat list of all bubble elements with their category, preserving order for FlowLines
-function setBubbleRef(el: any, globalIndex: number) {
-  bubbleEls.value[globalIndex] = el?.$el ?? el
+function setBubbleRef(el: unknown, globalIndex: number) {
+  const node = el as { $el?: HTMLElement } | HTMLElement | null
+  if (!node) return
+  bubbleEls.value[globalIndex] = '$el' in node && node.$el ? node.$el : (node as HTMLElement)
 }
 
 // Ordered list of categories per global bubble index — used by FlowLines
 const bubbleCategories = computed<ConnectionCategory[]>(() => {
   const cats: ConnectionCategory[] = []
-  for (const conn of ingestionConns.value) cats.push('ingestion')
-  for (const conn of enrichmentConns.value) cats.push('enrichment')
-  for (const conn of outboundConns.value) cats.push('outbound')
+  for (let i = 0; i < ingestionConns.value.length; i++) cats.push('ingestion')
+  for (let i = 0; i < enrichmentConns.value.length; i++) cats.push('enrichment')
+  for (let i = 0; i < outboundConns.value.length; i++) cats.push('outbound')
   return cats
 })
 

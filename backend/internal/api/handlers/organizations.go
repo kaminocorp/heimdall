@@ -39,7 +39,12 @@ func (s *Server) ListUserOrganizations(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	orgs, err := s.Queries.ListOrganizationsByUser(r.Context(), userID)
+	var orgs []db.ListOrganizationsByUserRow
+	err := s.Pools.WithUserQueries(r.Context(), userID, func(q *db.Queries) error {
+		var e error
+		orgs, e = q.ListOrganizationsByUser(r.Context(), userID)
+		return e
+	})
 	if err != nil {
 		jsonServerError(w, "failed to list organizations", err)
 		return
@@ -260,7 +265,12 @@ func (s *Server) Onboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Idempotency guard: if user already has an org, return conflict.
-	hasOrg, err := s.Queries.HasOrgMembership(r.Context(), userID)
+	var hasOrg bool
+	err := s.Pools.WithUserQueries(r.Context(), userID, func(q *db.Queries) error {
+		var e error
+		hasOrg, e = q.HasOrgMembership(r.Context(), userID)
+		return e
+	})
 	if err != nil {
 		jsonServerError(w, "failed to look up user", err)
 		return

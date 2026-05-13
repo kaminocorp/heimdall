@@ -1,5 +1,8 @@
 # Changelog
 
+- [0.48.2 — RLS Pre-Deploy Review: Critical & High Fixes](#0482--rls-pre-deploy-review-critical--high-fixes-2026-05-04)
+- [0.48.1 — RLS Phase 10: Pre-Deploy Polish](#0481--rls-phase-10-pre-deploy-polish-2026-05-04)
+- [0.48.0 — RLS Role-Split Enforcement (8-Phase Rollout + Polish)](#0480--rls-role-split-enforcement-8-phase-rollout--polish-2026-05-04)
 - [0.47.4 — Archive v0.46.0 Runbook](#0474--archive-v0460-runbook-2026-04-19)
 - [0.47.3 — Pipeline Page: Time Machine Replay](#0473--pipeline-page-time-machine-replay-2026-04-19)
 - [0.47.2 — Pipeline Page: Production Hardening](#0472--pipeline-page-production-hardening-2026-04-19)
@@ -129,6 +132,293 @@
 - [0.1.2 — Frontend Fixes](#012--frontend-fixes-2026-02-20)
 - [0.1.1 — Backend Fixes & Hardening](#011--backend-fixes--hardening-2026-02-20)
 - [0.1.0 — Scaffolding](#010--scaffolding-2026-02-19)
+
+---
+
+## 0.48.2 — RLS Pre-Deploy Review: Critical & High Fixes (2026-05-04)
+
+A four-agent independent review of the 0.48.0 + 0.48.1 rollout (one each for Phase-2 code refactor, pool-wiring + migrations, Phase-5 test coverage, and a build/test/lint gate) surfaced one **Critical** issue and four **High** items that landed at the seams the prior phases didn't fully cover. None of them invalidate the structural design — the chokepoint, role split, FORCE policies, and migration ordering all check out — but the Critical is a `pgx.Tx` concurrency hazard on a real production code path and would have surfaced under client flapping. Closing it is the deploy-blocker; the Highs are pre-deploy quality gates around shielding ctx-cancel, pinning the loop-only GUC scoping, behaviourally exercising FORCE-vs-table-owner, and protecting the notifier from per-statement timeouts during external HTTP sends.
+
+`go vet`, `go build`, `go test ./...`, `npm run lint`, and `npm run test -- --run` all clean post-fix.
+
+### Critical fix
+
+- **`pgx.Tx` concurrency race in `handleChatMessage` on WS-write-error paths.** `chat.go:194-222` runs the agent inside one `UserQueriesForLoop` txn (parent plan §5.3b Option A); the producer goroutine in `RunConversationStream` (`loop_stream.go:64`) holds exclusive use of `q` while it iterates. The pre-existing for-range consumer correctly drained `events` on the happy path, but every `wsjson.Write` error inside the loop bailed out via `return` — which fired `defer done()` while the producer goroutine was still issuing `q.X` calls (tool dispatch, EmitLog, GetAppAgentConfig). Result: `tx.Rollback` racing concurrent `q.Exec` on the same `pgx.Tx`, which is documented as not goroutine-safe — best case "tx is closed", worst case a connection returned to the pool mid-statement in an inconsistent state. Trigger shape is common: WebSocket client disconnects mid-tool-call (mobile suspend, network flap, browser close during a slow Claude turn). Fixed by replacing the early `return` with a `wsWriteErr` flag — the loop continues to drain `events` (still capturing terminal `message`/`error` events for symmetry) and only returns *after* the producer-side `defer close(ch)` has fired, guaranteeing exclusive ownership of `q` is back in the consumer's hands before `done()` runs the rollback. Added a concurrency-invariant comment block above the dispatch site documenting the contract for future readers.
+
+### High fixes
+
+- **Webhook idempotency cache write was bound to `r.Context()`.** `webhooks.go:472-489` runs the post-commit cache row insert inside its own short `UserQueries` scope. Webhook senders frequently disconnect immediately after reading the response status (RFC-compliant — they only wait for headers), which cancels `r.Context()`. With the original code, `Pools.UserQueries(r.Context(), userID)` then errored out on `Begin()` with `ctx.Canceled`, the cache write silently failed (only `slog.Warn`), and a subsequent retry from the sender would re-ingest the entire batch — defeating the idempotency contract Phase 10's TOCTOU re-check is paired with. Fixed by wrapping the cache scope in `context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)` so the write survives client-disconnect but still bounds its own runtime. Same pattern Phase 10 applied inside `userTx`'s rollback path; webhooks.go now consistent with it.
+- **Notifier held a `UserQueries` (non-loop) txn across external HTTP sends.** `notifier.go:72`'s `Notify` opened a short transaction and dispatched to Slack/Discord/SMTP *inside* it (`dispatchToChannel:142`). Slack p99 webhook latency is 5–10s; SMTP can block for tens of seconds on slow MX paths. With Supabase's per-role 8s `statement_timeout`, the txn would abort on the next `markSent`/`markFailed` UPDATE — leaving `notification_log` rows stuck in `pending` and the `metrics.NotificationsTotal` counters out of sync with reality. Fixed by switching to `UserQueriesForLoop`, which Phase 10 already gates on `SET LOCAL statement_timeout = 0` and `idle_in_transaction_session_timeout = 0` for the whole txn. Trade-off documented inline: one App-pool conn pinned for the dispatch window (~15s typical, ~30s worst case across 3 channels).
+- **Phase-10 H2 TOCTOU re-check was not test-covered.** The webhook + OTLP guard (`webhooks.go:361`, `otlp.go:139`) re-reads the connection through `GetConnectionByUser` inside the user-scoped txn so an orphan-token request (token still valid, owner removed from the connection's org) returns 401 instead of an opaque 500 from a WITH CHECK violation. A regression that dropped the re-check would not have failed any test. Closed by adding `ingest_toctou_test.go` with two end-to-end tests that exercise both ingestion paths: create a connection + activate + enable filter, sanity-POST to confirm the healthy path works, then `DELETE FROM org_members` to sever the owner's membership and POST again — must return 401 on both `/api/webhooks/logs` and `/api/v1/logs`.
+- **`UserQueriesForLoop` GUC scoping had no behavioural test.** `pools.go:142-149` is the only place setting `statement_timeout = 0` and `idle_in_transaction_session_timeout = 0`, gated behind a `loop bool`. A future refactor that swapped the branches would compile, pass every test, and either (a) silently disable per-statement timeouts on every short HTTP handler (loop semantics applied to non-loop) or (b) abort the agent loop at Supabase's 8s default (non-loop semantics applied to loop). Closed by adding `pools_loop_guc_test.go` (in package `db` rather than `db_test` so it can reach the unexported `Queries.db` field for raw `SHOW`). Two tests: `TestUserQueriesForLoop_DisablesTimeouts` pins the positive assertion (both GUCs read `"0"` inside the loop txn); `TestUserQueries_DoesNotTouchTimeouts` pins the no-bleed assertion (non-loop txn readings equal the session default — works regardless of whether the role default is `0` on dev Postgres or `8s` on Supabase).
+- **No behavioural test that FORCE bites the table-owner case.** `TestRLSRegression_CrossTenant` runs through `asAppUser` which `SET LOCAL ROLE app_user` — RLS bites because `app_user` is non-owner *whether or not* FORCE is on. The whole point of Phase 7's `ALTER TABLE … FORCE ROW LEVEL SECURITY` (migration 040) is to bind the *owning* role (`postgres`) too. `TestCatalogDrift_ForceCoverage` pins `forcerowsecurity = true` structurally, but nothing pinned what FORCE means at query time. A runtime path that accidentally connected as `postgres` (forgetting to flip `DATABASE_URL` to `app_user`) would otherwise see every tenant's rows. Closed by adding `rls_force_test.go::TestRLSForce_PostgresOwnerIsBound` — explicitly does *not* `SET LOCAL ROLE app_user`, instead opens a transaction as the underlying `postgres` connection, pins `app.current_user_id` to tenant A, and asserts cross-tenant rows on `connections`, `log_buffer`, and `conversations` are invisible. Sanity-skips with a clear message if `DATABASE_URL` has already been flipped to `app_user` (Phase 6 dev parity), so it doesn't produce a misleading green in that environment.
+
+### Doc deliverable
+
+- This changelog entry. The Phase-10 completion doc remains the runbook-grade record of the underlying rollout; this entry exists so the closing review-pass fixes are traceable on their own without spelunking the diff.
+
+### Build / test surface
+
+`go vet`, `go build`, `go test ./... -count=1`, `npm run lint`, and `npm run test -- --run` all clean. Two new RLS-suite tests skip cleanly without `DATABASE_URL`; the FORCE test additionally skips when `current_user != 'postgres'` so post-flip dev environments don't false-fail.
+
+### What remains (deferred, non-blocking)
+
+- Cross-tenant regression coverage extension (5/17 → 17/17 tables) — Phase 9 §"What did NOT land" estimate stands at 1–2h; carries into the operator-bake window.
+- The pre-existing M-tier items from the review (monitor cursor-advance non-atomicity, scheduler commit-failure retry loop, `userID == uuid.Nil` fast-fail) are acceptable risk for the operator flip and tracked separately.
+
+---
+
+## 0.48.1 — RLS Phase 10: Pre-Deploy Polish (2026-05-04)
+
+Pre-deploy review pass against the 0.48.0 rollout. Eight residual items, none invalidating the structural design — all sitting at the seams (Supabase pooler quirks, defense-in-depth on the BYPASSRLS path, a real migration-ordering bug, frontend lint debt blocking CI). Phase 10 lands the code fixes, regenerates sqlc against the v1.30 toolchain on this branch, and clears the deploy gate. The operator-side flip is the only step left and lives in `docs/executing/rls-enforcement-next-steps.md`. Full what/where/why record in `docs/completions/rls-enforcement-phase-10.md`.
+
+### Critical fixes
+
+- **Migration 040 referenced a table that 036 had dropped.** Phase 7 wrote a `github_repos` policy patch + `ALTER TABLE … FORCE` block, but migration 036 retired the table entirely (replaced by `connection_sources` + `app_source_filters` in the 0.46.0 source-filtering overhaul). A clean `make migrate-up` would have failed at `040.up.sql:103` with `relation "github_repos" does not exist`. Removed the dead block from both `040.up.sql` and `040.down.sql`; trimmed the now-stale `"github_repos": {"ALL"}` entry from `rls_catalog_test.go`'s `rlsPolicyAllowlist`. Audit miss: Phase 1's table inventory was generated pre-036 and not re-run.
+- **Agent-loop transactions could die at Supabase's per-role `statement_timeout`.** Phase 2 disabled `idle_in_transaction_session_timeout` so the txn would survive *between* tool calls while Claude was thinking, but the next tool query *executing* inside the same txn would still hit Supabase's 8s default and abort with `canceling statement due to statement timeout`. Added `SET LOCAL statement_timeout = 0` to `pools.go::userTx`'s loop branch alongside the existing idle-in-txn disable. SET LOCAL is txn-scoped — doesn't bleed into other paths.
+- **sqlc v1.30 lost nullable-inference for FILTER aggregates and SECURITY DEFINER returns.** Re-running `make sqlc-generate` on this branch produces `interface{}` for `ListPipelineLogsByApp`'s FILTER columns and non-nullable `uuid.UUID` for `LookupUserIDForInvite`. The committed code uses `pgtype.Text` / `*uuid.UUID` and was generated by an older sqlc. Resolution: restored the committed `log_pipeline_events.sql.go` (consumer-rewrite for that one read query is deferred — non-critical UI surface), and rewrote `LookupUserIDForInvite`'s SQL with a `COALESCE(..., uuid.Nil)::uuid` sentinel so future regens are stable. `org_members.go::AddOrgMember` updated to compare against `uuid.Nil` instead of `nil`.
+- **Frontend ESLint failed with 33 errors.** Nine production unused vars/imports (`ModelPicker`'s dead `formatContext`, `OrgDropdown`'s unused `OrganizationWithRole` import, `ConnectionWizard`'s `_mode` destructure that the lint rule couldn't infer as semantically used, `AgentChatPage`'s unused `conversationId`, `ConnectionsPage`'s `setBubbleRef: any` + three unused `conn` loop vars, `DashboardPage`'s unused `SkeletonBlock`, `test/setup.ts`'s unused `config`) plus 24 `any`-in-tests. Fixed each production case directly; scoped `@typescript-eslint/no-explicit-any: 'off'` to test paths via `eslint.config.js` override (tests reach into Vue VM internals where `any` is the pragmatic shape).
+
+### High fixes
+
+- **Always-on role-mismatch WARN at startup.** Phase 3's `assertRoleSplit` only hard-fails when `HEIMDALL_ENV=production`. A prod deploy that forgets to set that env var would have booted silently as the `postgres` superuser on both pools — zero tenant isolation, no log line. New `logPoolRoles` runs unconditionally, emits an INFO with `app_role`/`cron_role` from a `SELECT current_user` on each pool, and a WARN ("set HEIMDALL_ENV=production to make this fatal") if both pools resolve to the same role. Probe failures are logged but never fatal.
+- **Webhook/OTLP TOCTOU on user-deleted-mid-request.** Both ingestion handlers resolve the bearer token on the cron pool (BYPASSRLS) and then open `UserQueries(conn.UserID)` for the actual writes. If the user was deleted or removed from the connection's org between those two steps, downstream WITH CHECK violations would surface as opaque 500s. Added a `GetConnectionByUser` visibility re-check inside the user-scoped txn — orphaned-token requests now return an explicit 401 with actionable messaging. One extra round-trip per webhook; acceptable for the SLO.
+- **`resolveSourceFilterApp` ownership audit (verified, no fix needed).** The pre-deploy audit flagged a potential cross-org filter-mutation gap. Verified the helper already calls `GetApplicationByOrgUser` (membership check) and explicitly compares `app.OrgID != conn.OrgID` to refuse the cross-org case. Both denial branches return 403 with intentionally-identical messaging — defence-in-depth against existence-leak via error-message diffing. Documented in the Phase 10 completion doc so a future audit doesn't re-flag it.
+
+### Medium fixes
+
+- **`userTx` error-path rollbacks now use `context.WithoutCancel`.** The deferred `done()` already shielded against client-disconnect cancellation; the two early-error rollbacks (between `tx.Begin` and the `defer done()`) used the caller's raw `ctx`, which could already be cancelled by the time we hit them. Hoisted `finalCtx := context.WithoutCancel(ctx)` to the top of `userTx` and routed all three rollback paths through it. Per-statement `Exec` calls still use the caller's ctx so requests can cancel in-flight queries — only the cleanup path is shielded. Doc-clarified the `committed` flag's single-owner-sequential expectation.
+- **Migration 039 down-migration was unsafe under live traffic.** Revoking `USAGE ON SCHEMA public` from `app_user`/`cron_user` against a system serving traffic would kill every in-flight query mid-statement and break subsequent queries on those connections until the pool reconnects. Added a `pg_stat_activity` guard: counts non-self connections authenticated as the runtime roles and `RAISE EXCEPTION`s with actionable messaging if any exist. Operator can override with `SET LOCAL heimdall.allow_revoke_with_traffic = 'yes'` for emergency lockdown — override path emits a `RAISE WARNING` so the audit log records the deliberate choice.
+
+### Doc deliverables
+
+- **`docs/executing/rls-enforcement-next-steps.md`** (new) — operator-facing runbook for the manual gates that remain. Single ordered checklist: confirm Supabase pooler is in *session pooling* mode (load-bearing — `SET LOCAL` and `app.current_user_id` are void in transaction mode, RLS would silently return zero rows for everything), bootstrap `app_user`/`cron_user` via the Supabase SQL editor (with a fill-in-passwords stanza), apply migrations 039–041 in staging then prod, flip the three URL env vars + `HEIMDALL_ENV=production` in a single secrets-update transaction, watch a 48h bake, then archive. Do not skip steps.
+- **`docs/completions/rls-enforcement-phase-10.md`** (new) — what/where/why record for each polish above, with three deferred items called out (`authorizeApp` double-txn refactor, `agent_log` first-user attribution data-quality, the sqlc nullable-inference upstream regression).
+
+### Build / test surface
+
+`go vet`, `go build`, `go test ./... -count=1`, `npm run lint`, and `npm run test -- --run` all clean. Phase 5 RLS pinning tests skip cleanly without a live DB and pass with one when their respective env-var gates (`HEIMDALL_ROLE_SPLIT_LIVE`, `HEIMDALL_RLS_FORCE_LIVE`) are set.
+
+---
+
+## 0.48.0 — RLS Role-Split Enforcement (8-Phase Rollout + Polish) (2026-05-04)
+
+The structural close of the RLS enforcement program. Ships the eight-phase plan in one composite release plus a Phase 9 pre-deploy polish pass. Production runtime is moved off the `postgres` superuser onto two non-superuser roles (`app_user` for tenant CRUD, `cron_user` for cross-tenant enumeration), every RLS-enabled `public.*` table is `FORCE ROW LEVEL SECURITY`, the policy gaps Phase 1 surfaced are closed, the test surface that pins all of this is in `backend/internal/db/`, and the parent-plan §2 threat model is closed against `app_user`. Migrations are operator-deploy-pending; codebase is shipped.
+
+Each phase has its own completion doc in `docs/completions/rls-enforcement-phase-{1..9}.md` — the level of detail there is preserved deliberately. This entry is the changelog summary; the completion docs are the runbook-grade record.
+
+### Phase 1 — Audit & discover (read-only)
+
+A full source-tree audit producing a classified inventory of every code path the role split affects. Surfaced three things the parent plan didn't enumerate: ~30 JWT-authed handler reads (the `s.Queries.X` direct-call shape) that would silently zero-row under `app_user` + `FORCE`; four tables with RLS enabled but **zero policies** (`webhook_idempotency`, `log_pipeline_events`, `agent_config`, plus the benign `schema_migrations`); one stale policy (`github_repos_owner` still scoping by `connections.user_id`, a pre-035 shape); and one cron-grant widening — `agent/pruner.go`'s `DELETE FROM log_buffer` cross-tenant sweep needs an explicit `DELETE` grant beyond the parent plan's SELECT-only `cron_user` baseline. The audit's output is the prerequisite list every subsequent phase implements against.
+
+### Phase 2 — Code refactor (handoff pattern)
+
+The big diff. ~30 production files rewired so every read and write that will be RLS-evaluated under `app_user` runs inside a `Pools.UserQueries(ctx, userID)` (or `WithUserQueries` / `UserQueriesForLoop` / `CronQueries`) scope. Privilege change zero — both pools still resolve to the same `postgres` handle — but the call shape is now compatible with the post-flip topology.
+
+Key landings:
+
+- **`backend/internal/db/pools.go`** (new). The chokepoint: `Pools{App, Cron *pgxpool.Pool}` plus `UserQueries`, `UserQueriesForLoop`, `WithUserQueries`, `CronQueries`. Every other DB entry point in the codebase routes through this struct.
+- **Bearer-token handlers** (`webhooks.go`, `otlp.go`) — token resolved on `CronQueries`; entire transactional ingest opens `UserQueries(conn.UserID)`; idempotency cache write is post-commit but inside its own UserQueries scope.
+- **Background writers** (`agent/monitor.go`, `agent/scheduler.go`, `agent/pipeline_writer.go`, `agent/emit.go`, `agent/pruner.go`, `notifications/notifier.go`, `connectors/poller.go`, `connectors/logs/syslog.go`) — `monitorTick` / `schedulerTick` enumerate via `cronQ`; per-tenant work hands off to `UserQueries(ctx, ownerUserID)` for cursor read → classify → pipeline emit → assess → notify. Pipeline writer's `Write*` methods now take `q *db.Queries` from the caller instead of holding one. Pruner stays cron-pool but needs the `DELETE on log_buffer` grant Phase 4 ships.
+- **Option A in chat + agent loop.** `chat.go`'s per-message cycle opens **one** `UserQueriesForLoop(ctx, userID)` that wraps all 10 LLM tool-use iterations. `runConversationCore` / `RunMonitoring` / tool dispatch all take `q *db.Queries`. `SET LOCAL idle_in_transaction_session_timeout = 0` keeps the transaction alive across slow ChatCompletion round-trips. Trade-off: one App-pool connection pinned per active loop; mitigated by the App=30 sizing in Phase 3.
+- **JWT-authed handler reads (Class D).** Mechanical sweep across `applications.go`, `chat.go`, `github_install.go`, `investigation_schedules.go`, `logs.go`, `notifications.go`, `organizations.go`, `org_members.go`, `pipeline.go` — every `s.Queries.X` read replaced with `Pools.WithUserQueries(...)`. Two helpers (`authorizeApp`, `resolveOrgForUser`) refactored once; every caller benefits.
+- **Activity-feed emit helper.** `helpers.go` gains `emitActivity(ctx, pools, userID, ...)` so handlers stop reaching for `s.Agent.EmitLog` directly.
+- **Constructor ripple.** `NewServer`, `NewRouter`, `agent.New`, `connectors.NewPoller`, `connectors.NewSyslog`, `notifications.NewDispatcher` all take `*db.Pools`. Smaller than feared — seven call sites total because Heimdall's wiring funnels through `main.go` + `router.go`.
+
+### Phase 3 — Pool wiring (dual pool, single role)
+
+Promotes `db.NewPools(pool, pool)` (one physical pool, passed twice) to two physical `*pgxpool.Pool` handles sized App=30 / Cron=5, plus the env-var topology that Phase 6 will flip:
+
+- **Three URLs documented** — `DATABASE_URL` (app pool; production `app_user`), `CRON_DATABASE_URL` (cron pool; production `cron_user`; falls back to `DATABASE_URL` with a startup `WARN`), `DIRECT_URL` (migration superuser; falls back to `DATABASE_URL`). `make migrate-up` / `make migrate-down` now read `${DIRECT_URL:-$DATABASE_URL}`.
+- **Production startup invariant** (`cmd/heimdall/main.go`'s `assertRoleSplit`). Dormant by default; gated on `HEIMDALL_ENV=production`. Runs `SELECT current_user` on each pool and refuses to launch when both authenticate as the same role. URL string-comparison was rejected — the same role can resolve from two distinct URLs (different `application_name`, host aliases, PgBouncer rewrites). Comparing `pg_authid` rows is the strongest signal.
+- **Always-two-physical-pools today** — sharing a handle would mean `MaxConns` (30/5) couldn't diverge until Phase 6, leaving an untested topology at flip time.
+
+Code change is ~20 LOC in `main.go` plus a new `buildPool` helper, three `Config` fields, and doc updates to `.env.example`, `Makefile`, `CLAUDE.md`, `README.md`.
+
+### Phase 4 — Migration A (role grants)
+
+`backend/migrations/039_runtime_role_grants.{up,down}.sql`. Purely additive — adds grants, never revokes runtime traffic, never enables `FORCE`, never patches a policy. Safe to ship into a production still running entirely on the postgres superuser pool.
+
+Structure:
+
+1. **Bootstrap-assertion guard.** `DO` block raising a clear, file-path-bearing exception when either runtime role is missing. Naming the bootstrap doc in the error message saves an operator one search-engine hop.
+2. **`app_user` grants** — `USAGE` on `public`; `SELECT, INSERT, UPDATE, DELETE` on all tables; `USAGE, SELECT` on all sequences; `ALTER DEFAULT PRIVILEGES FOR ROLE postgres ... GRANT ... ON TABLES / ON SEQUENCES`.
+3. **`cron_user` grants** — `USAGE` + blanket `SELECT` on tables and sequences; `INSERT, UPDATE` on `monitoring_state`; **`DELETE` on `log_buffer`** (the audit-discovered widening for the pruner); `ALTER DEFAULT PRIVILEGES FOR ROLE postgres ... GRANT SELECT ON TABLES`. Future tables default to read-only for cron_user — every new write is an explicit grant, which is an explicit security review.
+4. **PG17 conditional grant block** — `GRANT app_user TO postgres WITH SET TRUE` (and likewise for cron_user); plain `GRANT ... TO postgres` on PG14–PG16. Required for the Phase 5 `asAppUser` fixture's `SET LOCAL ROLE` calls.
+5. **Function execute grants** — `app_current_user_id()` and `app_user_org_ids()` get explicit `EXECUTE` grants. PUBLIC has them by default; the explicit shape is defence-in-depth so a future `REVOKE ... FROM PUBLIC` doesn't silently strand the runtime roles.
+
+`ALTER DEFAULT PRIVILEGES` uses the explicit `FOR ROLE postgres` form — functionally identical today, structurally robust if a future restore runs as a different superuser.
+
+Role lifecycle stays manual (passwords never enter version control); the migration is rerunnable. Down migration skips cleanly with `RAISE NOTICE` when roles are absent and revokes in reverse order otherwise. Does **not** `DROP ROLE`.
+
+### Phase 5 — Test infrastructure
+
+Six new test files in `backend/internal/db/`, ~700 LOC, structured so each parent-plan subsection (§5.6, §5.6a, §5.6b, §5.6c, §5.6d) lives in its own file and fails for one specific reason if it regresses. Test-only; no production-code changes.
+
+- **`rls_helpers_test.go`** — `asAppUser(t, ctx, pool, userID)` and `asCronUser(t, ctx, pool)`. Both open a postgres-authenticated transaction, run `SET LOCAL ROLE <role>`, and (for `asAppUser`) pin `app.current_user_id`. Caller defers `cleanup()` (rollback). Front-loads a `requireRoleExists` skip-with-clear-message when migration 039 is unapplied.
+- **`rls_regression_test.go`** — `TestRLSRegression_CrossTenant` builds two synthetic tenants A/B under postgres, then per-table inserts a B-owned row and asserts `asAppUser(A.UserID)` reads return `pgx.ErrNoRows`. Coverage: `connections`, `log_buffer`, `conversations`, `connection_sources`, `app_source_filters`. Tables with no policies yet (Phase 7's targets) are deliberately excluded.
+- **`rls_cron_test.go`** — four subtests: enumeration succeeds; `DROP TABLE` denied (`42501`); `auth.users` read denied; blanket tenant-table INSERT denied (the BYPASSRLS-suppresses-RLS-but-not-grants distinction). Matches SQLSTATE codes, not message text.
+- **`rls_catalog_test.go`** — five drift checks: every `rowsecurity = true` table is also `forcerowsecurity = true` (Test 1, gated on `HEIMDALL_RLS_FORCE_LIVE` until Phase 7); per-table verb-set matches `rlsPolicyAllowlist` exactly (Test 2, ungated, the load-bearing pin for Phase 7); `app_user.rolbypassrls = false` and `rolsuper = false`; `cron_user.rolbypassrls = true` and `rolsuper = false`; `cron_user`'s grants match `cronWriteAllowlist` exactly. Allowlists are co-located with the tests rather than promoted to standalone `.go` files (test data shouldn't ship in the production binary).
+- **`rls_connectivity_test.go`** — `TestAppPool_IsActuallyAppUser` and the `cron_user` sibling. Gated on `HEIMDALL_ROLE_SPLIT_LIVE`; Phase 6 turns the flag on at the operator-invoked smoke gate.
+- **`rls_pairing_test.go`** — walks every `.go` under `backend/internal/` and `backend/cmd/`, regex-matches eight raw-DB-access patterns, and asserts each match is in `rawDBAccessAllowlist` or references the chokepoint API (`UserQueries`/`WithUserQueries`/`CronQueries`). Today's allowlist is **three entries**: `internal/db/pools.go`, `cmd/heimdall/main.go`, `internal/api/handlers/health.go`. The smallness is the strongest evidence Phase 2's refactor was thorough.
+
+### Phase 6 — Stage 1 env-var flip (runbook + rehearsal)
+
+No code changes. The deliverable is the runbook in `docs/completions/rls-enforcement-phase-6.md` plus a Phase 6 example fill stanza in `.env.example`.
+
+Three load-bearing decisions:
+
+1. **Single combined deploy** — URL flip + `HEIMDALL_ENV=production` ship in one Fly.io secrets transaction. The split-deploy alternative gives a misconfigured deploy a window to ship symptoms before `assertRoleSplit` activates. One transaction means the *first* boot post-flip verifies the role split.
+2. **Operator-invoked smoke gate, not CI** — Heimdall has no `.github/workflows/`. The Phase 5 `HEIMDALL_ROLE_SPLIT_LIVE=1` flag is exercised via operator-invoked `go test -run TestAppPool TestCronPool` against the live prod URLs.
+3. **Two-step verification** — `assertRoleSplit`'s `role-split verified app_role=app_user cron_role=cron_user` boot log is the primary signal; the connectivity test is the secondary signal from outside the running process.
+
+Local rehearsal procedure: every Phase 1 §5.3 path (webhook, OTLP, syslog, monitor loop, scheduled investigation, pruner, GitHub install, notifications, interactive chat) is exercised against a local DB with `DATABASE_URL` pointed at `app_user` and `CRON_DATABASE_URL` at `cron_user` before any prod flip. Revert lever: `flyctl secrets set DATABASE_URL=...postgres... CRON_DATABASE_URL="" HEIMDALL_ENV=""` — full pre-flip topology in <60s. RLS is **still cosmetic** at this point — failures during the 48h bake are by construction privilege-set misses, not policy misses.
+
+### Phase 7 — Migration B (`FORCE RLS` + policy patches)
+
+`backend/migrations/040_rls_force_enforcement.{up,down}.sql`. Two named sections:
+
+**§1 — Policy patches.** Five `CREATE POLICY` statements:
+
+- `agent_config_global` — global singleton, `FOR SELECT USING (true)`. (Phase 9 tightened this from `FOR ALL` — see below.)
+- `webhook_idempotency_via_connection` — `connection_id IN (SELECT id FROM connections)`. The inner SELECT runs under RLS too, so `connections_org_member` filters transitively.
+- `log_pipeline_events_via_app` — `app_id IN (SELECT id FROM applications)`. Same transitive shape via `applications_user_policy`.
+- `github_repos_via_connection` — replaces the stale `github_repos_owner` (which still scoped by `connections.user_id`, a pre-035 shape) with the post-035 org-scoped form. Down-migration restores migration-020's body verbatim; the `IF EXISTS` + restore pair is load-bearing for the revert lever.
+- `users_org_visible` — `FOR SELECT` only, allowing org-mates to read sibling members' email under FORCE. The existing `users_self FOR ALL` keeps INSERT/UPDATE/DELETE locked to the caller's own row. Combined stack on `users` is `{ALL[self], SELECT[org-mates]}`.
+
+All four new FOR ALL policies include explicit `WITH CHECK` clauses identical to their `USING` clauses — readability under FORCE, symmetry for future tightening.
+
+**§2 — `ALTER TABLE ... FORCE ROW LEVEL SECURITY`** on every `rowsecurity = true` table (22 statements). `schema_migrations` gets FORCE too even though no runtime role reads it — adheres literally to "every rowsecurity=true table" and pre-empts a future `cron_user` BYPASSRLS revoke.
+
+Catalog allowlist (`rls_catalog_test.go`) updated: `users` promoted to `{"ALL", "SELECT"}`; comments on the three Phase-7 patch entries refreshed past tense. Phase 5 §5.6a Test 2 (verb coverage) goes green for the first time against a Migration-040-applied DB. Test 1 (FORCE coverage) flips on at the operator smoke gate via `HEIMDALL_RLS_FORCE_LIVE=1`. Revert lever is `make migrate-down` — no redeploy needed (runtime is already on app_user/cron_user from Phase 6).
+
+**Known follow-up surfaced here, fixed in Phase 8:** `org_members.go InviteMember`'s `GetUserByEmail` lookup returns `pgx.ErrNoRows` for any user not yet in the caller's org under FORCE (the target user is by definition NOT yet a member; the inviter just can't see them).
+
+### Phase 8 — Cleanup & docs
+
+- **Phase 7 invite-by-email regression resolved** via migration 041 (`backend/migrations/041_lookup_user_for_invite.{up,down}.sql`) — `public.lookup_user_for_invite(target_email TEXT) RETURNS UUID`, `LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public`. Returns NULL on no match. `EXECUTE`-granted to `app_user` only; PUBLIC explicitly revoked. `org_members.go InviteMember` rewired to use the helper; the response body now echoes `req.Email` (caller-supplied) rather than `targetUser.Email`. Pre-existing `TestInviteMember*` tests still pass — the visibility-vs-existence distinction is a property of `app_user`+FORCE, and tests run as postgres.
+- **Blueprints rewritten.** `docs/blueprints/backend-blueprint.md` §10 RLS subsection's "Current enforcement model" paragraph (which still asserted "the backend connects as the postgres superuser, which bypasses RLS by default") rewritten in place to describe the three-role topology, the bypass-then-scope handoff, the SECURITY DEFINER escape hatch (migration 041), and the production startup invariant. `docs/blueprints/database-connection-blueprint.md` gets a new §0 ("Three URLs, three roles, two runtime pools") at the top plus an intro reading-note scoping the rest of the doc as "still applies, but read every singular as a per-role plural"; the `§3` "constructs a single pool" line is updated to "constructs two pools threaded into a `*db.Pools` struct."
+- **Cross-links reconciled.** `docs/refs/trajan-db-roles.md` gains a Heimdall analogue back-reference naming the three deviations from the Trajan baseline (`DELETE on log_buffer`; the Heimdall-specific catalog-drift tests; `lookup_user_for_invite`). Phase 1 broken-link prerequisite (`docs/executing/rls-enforcement-mental-model.md` — never existed at that path) reconciled — the actual file lives in `docs/blueprints/`.
+- **Executing-plan docs archived.** `docs/executing/rls-enforcement-roadmap.md` and `docs/executing/rls-enforcement-role-split.md` `git mv`'d to `docs/archive/` (history preserved). All seven prior completion docs' `../executing/...` links rewritten to `../archive/...` via a single sed pass; CLAUDE.md's RLS section refreshed.
+- **Production secrets rotation** documented as the *Production secrets-rotation runbook* (operator action; `openssl rand -base64 32` per role, `ALTER ROLE`, secrets-manager update, single `flyctl secrets set` for atomic Fly redeploy). Not executed in this commit — operator window.
+
+### Phase 9 — Pre-deploy polish
+
+Not in the original roadmap. Came out of three independent pre-push reviews (spec compliance, security/migration safety, code quality) all converging on "cleared to push" with a small list of edits:
+
+1. **Migration 040 — `SET LOCAL lock_timeout = '5s';`** at the top of the transaction. The 22 `ALTER TABLE ... FORCE` statements are metadata-only (microseconds each) but if any target table is held by a long-running query when migrate reaches it, every writer queues behind the lock-wait. 5s aborts cleanly instead of jamming prod indefinitely. golang-migrate runs each migration in its own transaction, so `SET LOCAL` is the right scope.
+2. **Migration 040 — `agent_config_global` tightened to `FOR SELECT USING (true)`.** The legacy global singleton has no runtime writer (`agent/loop.go:104` only reads it via `GetAgentConfig`; sqlc-generated `UpsertAgentConfig` has no caller). The pre-Phase-9 `FOR ALL USING (true) WITH CHECK (true)` would have let any `app_user` session globally rewrite default model / mode / system_prompt_override post-FORCE. Catalog allowlist updated `{"ALL"}` → `{"SELECT"}`. Edited in place because 040 is on the in-flight branch and hasn't yet shipped — anyone reading 040 sees the final shape, not a "see migration 042 for the patch" trail.
+3. **`Server.Pool` and `Server.Queries` removed.** Both were transitional shims left over from Phase 2's incremental refactor; Phase 8's `LookupUserIDForInvite` was the last in-tree caller of `s.Queries`. Removing them eliminates the footgun where a future handler could write `s.Queries.GetX(...)` and silently bypass RLS. `pgxpool` import dropped from `server.go`.
+4. **`Health` probes both pools.** Post-Phase-6 the cron pool authenticates as a different role with potentially different connectivity (different DSN, different PgBouncer client tier); a cron-pool outage was previously invisible to the LB. `Health` now calls `s.Pools.App.Ping(...)` and `s.Pools.Cron.Ping(...)` in sequence, returning 503 with `db: "app_pool_unreachable"` or `db: "cron_pool_unreachable"`.
+5. **Pairing tripwire updated.** `\bPool\.Ping\(` doesn't match `s.Pools.App.Ping(...)` (word boundary). Two new patterns — `\bApp\.Ping\(` and `\bCron\.Ping\(` — restore tripwire coverage of `health.go`'s new shape and pre-emptively catch any future handler trying to bypass the chokepoint via the same syntactic path.
+6. **`README.md` Database URLs section.** Three-row table mapping each URL to its purpose, prod role, and dev fallback, plus the `HEIMDALL_ENV=production` invariant note and a pointer to CLAUDE.md for the full grant table. New step 3 in Setup calls out `make bootstrap-roles`.
+7. **`make bootstrap-roles` target.** Wraps the Phase 4 bootstrap SQL with env-var-supplied passwords (`APP_USER_PASSWORD`, `CRON_USER_PASSWORD`), `ON_ERROR_STOP=1`, and a verification SELECT. Fails loudly with the `openssl rand -base64 36` command in the error message when the vars are missing. Closes the "fresh-DB onboarding cliff" where migration 039 raised an EXCEPTION with no in-tree path to satisfy it.
+
+**Pushed back on, not implemented:** the review flagged the explicit `appPool.Close()` on the cron-pool init-failure path in `cmd/heimdall/main.go` as a redundant double-close. The reviewer was wrong — `os.Exit(1)` skips deferred functions, so removing the close would have leaked appPool's connections at process exit (the OS reclaims them, but pgx's graceful drain doesn't fire). The explicit close stayed; a new comment documents the asymmetry.
+
+### Cross-cutting outcomes
+
+- **`backend/internal/db/pools.go` is the single chokepoint** for "where does a query run?" decisions. Three production files do raw DB access today (the chokepoint itself, `main.go`'s `pgxpool.New` + `assertRoleSplit`, and `health.go`'s `Ping`). Every other file in `backend/internal/` and `backend/cmd/` routes through `UserQueries`/`WithUserQueries`/`CronQueries` — caught by the pairing tripwire on every `go test`.
+- **Two transactional patterns coexist** for tenant work: short `WithUserQueries` for handler reads + bearer-token writes; long `UserQueriesForLoop` (with `idle_in_transaction_session_timeout = 0`) for chat / monitor / scheduled-investigation loops where one transaction wraps all 10 LLM tool-use iterations. App pool sized 30 absorbs the loop pinning at current load; if Phase 6's bake surfaces "App pool exhausted," the documented follow-up is a third "loop pool," not Option B (which would weaken the snapshot guarantee).
+- **`HEIMDALL_ENV=production`** is exclusively a startup-invariant gate (today: `assertRoleSplit`; future candidates: "refuse to launch when migrations are behind"). It is **not** a feature flag for log format, CORS rules, or anything else — overloading invites the failure mode where flipping one capability accidentally activates an unrelated one.
+- **The Phase 1 docs-prerequisite carried across six prior completion docs** (the broken `docs/executing/rls-enforcement-mental-model.md` link) is closed in Phase 8. Mental-model doc lives in `docs/blueprints/`.
+- **Operator-side residuals** (production role bootstrap, Phase 6 secrets flip, Phase 7 migration deploy + 48h bake, Phase 8 password rotation) are documented runbooks; the codebase side is shipped. None of these block the codebase landing — every phase's runtime change has a named, rehearsed revert lever.
+
+### Files changed
+
+Production code:
+
+```
+backend/cmd/heimdall/main.go
+backend/internal/config/config.go
+backend/internal/db/pools.go                      (new)
+backend/internal/api/router.go
+backend/internal/api/handlers/server.go
+backend/internal/api/handlers/userqueries.go
+backend/internal/api/handlers/helpers.go
+backend/internal/api/handlers/health.go
+backend/internal/api/handlers/webhooks.go
+backend/internal/api/handlers/otlp.go
+backend/internal/api/handlers/chat.go
+backend/internal/api/handlers/applications.go
+backend/internal/api/handlers/connections.go
+backend/internal/api/handlers/connections_test_handler.go
+backend/internal/api/handlers/github_install.go
+backend/internal/api/handlers/investigation_schedules.go
+backend/internal/api/handlers/logs.go
+backend/internal/api/handlers/notifications.go
+backend/internal/api/handlers/organizations.go
+backend/internal/api/handlers/org_members.go
+backend/internal/api/handlers/pipeline.go
+backend/internal/agent/{agent,emit,loop,loop_stream,monitor,scheduler,pruner,pipeline_writer,tools,tools_logs,tools_db,tools_codebase}.go
+backend/internal/notifications/notifier.go
+backend/internal/connectors/{poller,factory}.go
+backend/internal/connectors/logs/syslog.go
+backend/internal/db/queries/users.sql + users.sql.go         (LookupUserIDForInvite)
+```
+
+Migrations:
+
+```
+backend/migrations/039_runtime_role_grants.{up,down}.sql        (new — Phase 4)
+backend/migrations/040_rls_force_enforcement.{up,down}.sql      (new — Phase 7, edited in Phase 9)
+backend/migrations/041_lookup_user_for_invite.{up,down}.sql     (new — Phase 8)
+```
+
+Tests:
+
+```
+backend/internal/db/rls_helpers_test.go              (new)
+backend/internal/db/rls_regression_test.go           (new)
+backend/internal/db/rls_cron_test.go                 (new)
+backend/internal/db/rls_catalog_test.go              (new)
+backend/internal/db/rls_connectivity_test.go        (new)
+backend/internal/db/rls_pairing_test.go              (new)
+backend/internal/api/handlers/testhelpers_test.go
+backend/internal/api/handlers/pipeline_test.go
+backend/internal/agent/{loop_test,monitor_test,tools_test}.go
+backend/internal/connectors/poller_test.go
+```
+
+Config / docs / build:
+
+```
+.env.example
+Makefile                                             (DIRECT_URL fallback; bootstrap-roles target)
+README.md                                            (Database URLs section + bootstrap step)
+CLAUDE.md                                            (Database URLs subsection; archived-roadmap path)
+docs/blueprints/backend-blueprint.md                 (§10 RLS subsection rewrite)
+docs/blueprints/database-connection-blueprint.md     (§0 + intro reading-note + §3 line update)
+docs/refs/trajan-db-roles.md                         (Heimdall back-reference)
+docs/archive/rls-enforcement-roadmap.md              (was: docs/executing/...)
+docs/archive/rls-enforcement-role-split.md           (was: docs/executing/...)
+docs/completions/rls-enforcement-phase-{1..9}.md     (new)
+```
+
+### Acceptance status
+
+Codebase:
+
+- ✅ Every Phase 1 prerequisite-list file routes through `UserQueries`/`WithUserQueries`/`UserQueriesForLoop`/`CronQueries`.
+- ✅ `cd backend && go build ./...` clean.
+- ✅ `cd backend && go vet ./...` clean.
+- ✅ `cd backend && go test ./...` green; integration tests skip cleanly without `DATABASE_URL`.
+- ✅ Phase 5 §5.6c pairing tripwire green against the three-entry `rawDBAccessAllowlist`.
+- ✅ `Server.Pool` / `Server.Queries` removed; `pgxpool` import dropped from `server.go`.
+
+Operator-side (post-deploy):
+
+- ⏳ Production role bootstrap (`make bootstrap-roles`).
+- ⏳ Phase 6 secrets flip + 48h bake (zero `42501`; `agent_log` and `log_pipeline_events` rates within ±5% of pre-flip baseline).
+- ⏳ Phase 7 deploy of migration 040 + 48h bake (zero `new row violates row-level security policy`; both catalog tests green; cross-tenant probe returns ErrNoRows).
+- ⏳ Phase 8 password rotation per the documented runbook.
+
+### Follow-ups (not blocking)
+
+- **Extend `rls_regression_test.go`** to cover the remaining RLS-enabled tables (`agent_log`, `investigations`, `monitoring_state`, `notification_log`, `org_members`, `applications`, `app_agent_config`, `investigation_schedules`, etc.). Catalog test confirms policy *existence*; cross-tenant regression confirms policy *correctness* — five tables today.
+- **Always log `current_user` summary at startup**, not just when `HEIMDALL_ENV=production`. A dev pointing at a non-superuser role without setting the env would have all cron-pool queries silently zero-row.
+- **Strip the unused `UpsertAgentConfig` sqlc query.** Generated code is mechanical; the source is `backend/internal/db/queries/agent_config.sql`.
+- **Pull the `asAppUser` fixture out of `internal/db/`** into a shared `rlstest` package so handler-level tests (e.g. `TestInviteMember` under FORCE) can exercise the visibility-vs-existence distinction migration 041 specifically fixes.
 
 ---
 

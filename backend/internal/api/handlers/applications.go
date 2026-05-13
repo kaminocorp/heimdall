@@ -20,13 +20,19 @@ func (s *Server) ListApplications(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	userID, _ := middleware.UserIDFromContext(r.Context())
 
 	// Opt-in counts mode. The Settings page uses `?include=counts` to render
 	// per-app connection/schedule summaries in a single request. Default
 	// callers (sidebar selector, etc.) get the lean shape to keep the common
 	// path cheap and avoid breaking existing frontends.
 	if r.URL.Query().Get("include") == "counts" {
-		rows, err := s.Queries.ListApplicationsByOrgWithCounts(r.Context(), org.ID)
+		var rows []db.ListApplicationsByOrgWithCountsRow
+		err := s.Pools.WithUserQueries(r.Context(), userID, func(q *db.Queries) error {
+			var e error
+			rows, e = q.ListApplicationsByOrgWithCounts(r.Context(), org.ID)
+			return e
+		})
 		if err != nil {
 			jsonServerError(w, "failed to list applications", err)
 			return
@@ -36,7 +42,12 @@ func (s *Server) ListApplications(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	apps, err := s.Queries.ListApplicationsByOrg(r.Context(), org.ID)
+	var apps []db.Application
+	err := s.Pools.WithUserQueries(r.Context(), userID, func(q *db.Queries) error {
+		var e error
+		apps, e = q.ListApplicationsByOrg(r.Context(), org.ID)
+		return e
+	})
 	if err != nil {
 		jsonServerError(w, "failed to list applications", err)
 		return
@@ -108,17 +119,12 @@ func (s *Server) CreateApplication(w http.ResponseWriter, r *http.Request) {
 	// record a creation that was rolled back. Matches the pattern in
 	// DeleteApplication. The agent_log table is keyed by user_id (not app_id),
 	// so we stash the app identity in the detail JSONB column.
-	if s.Agent != nil {
-		s.Agent.EmitLog(
-			r.Context(), userID, nil, nil,
-			"application_created",
-			fmt.Sprintf("Application %q created", app.Name),
-			map[string]any{
-				"app_id":   app.ID.String(),
-				"app_name": app.Name,
-			},
-		)
-	}
+	emitActivity(r.Context(), s.Pools, userID, "application_created",
+		fmt.Sprintf("Application %q created", app.Name),
+		map[string]any{
+			"app_id":   app.ID.String(),
+			"app_name": app.Name,
+		})
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -199,23 +205,24 @@ func (s *Server) DeleteApplication(w http.ResponseWriter, r *http.Request) {
 	// is user-scoped, not app-scoped, so it survives the cascade delete
 	// of everything under the app — which is the whole point: the audit
 	// entry must outlive the thing it audits.
-	if s.Agent != nil {
-		s.Agent.EmitLog(
-			r.Context(), userID, nil, nil,
-			"application_deleted",
-			fmt.Sprintf("Application %q deleted", app.Name),
-			map[string]any{
-				"app_id":   app.ID.String(),
-				"app_name": app.Name,
-			},
-		)
-	}
+	emitActivity(r.Context(), s.Pools, userID, "application_deleted",
+		fmt.Sprintf("Application %q deleted", app.Name),
+		map[string]any{
+			"app_id":   app.ID.String(),
+			"app_name": app.Name,
+		})
 
 	w.WriteHeader(http.StatusNoContent)
 }
 
 // authorizeApp verifies the app belongs to the authenticated user's org.
-// Returns the application on success, writes an HTTP error and returns nil on failure.
+// Returns the application on success, writes an HTTP error and returns
+// nil on failure.
+//
+// Routes through UserQueries so the GetApplicationByOrgUser read sees
+// app.current_user_id == userID. Every per-app handler funnels through
+// this helper, so threading the handoff here covers most of Class D
+// in one place.
 func (s *Server) authorizeApp(w http.ResponseWriter, r *http.Request) *db.Application {
 	userID, ok := middleware.UserIDFromContext(r.Context())
 	if !ok {
@@ -229,7 +236,14 @@ func (s *Server) authorizeApp(w http.ResponseWriter, r *http.Request) *db.Applic
 		return nil
 	}
 
-	app, err := s.Queries.GetApplicationByOrgUser(r.Context(), db.GetApplicationByOrgUserParams{
+	queries, _, done, err := s.UserQueries(r.Context(), userID)
+	if err != nil {
+		jsonServerError(w, "database error", err)
+		return nil
+	}
+	defer done()
+
+	app, err := queries.GetApplicationByOrgUser(r.Context(), db.GetApplicationByOrgUserParams{
 		AppID:  appID,
 		UserID: userID,
 	})
@@ -256,8 +270,14 @@ func (s *Server) GetAppAgentConfig(w http.ResponseWriter, r *http.Request) {
 	if app == nil {
 		return
 	}
+	userID, _ := middleware.UserIDFromContext(r.Context())
 
-	cfg, err := s.Queries.GetAppAgentConfig(r.Context(), app.ID)
+	var cfg db.AppAgentConfig
+	err := s.Pools.WithUserQueries(r.Context(), userID, func(q *db.Queries) error {
+		var e error
+		cfg, e = q.GetAppAgentConfig(r.Context(), app.ID)
+		return e
+	})
 	if err != nil {
 		// No config row yet — return defaults
 		w.Header().Set("Content-Type", "application/json")
@@ -396,6 +416,7 @@ func (s *Server) GetMonitoringStatus(w http.ResponseWriter, r *http.Request) {
 	if app == nil {
 		return
 	}
+	userID, _ := middleware.UserIDFromContext(r.Context())
 
 	type monitoringStatus struct {
 		Mode                 string  `json:"mode"`
@@ -403,8 +424,21 @@ func (s *Server) GetMonitoringStatus(w http.ResponseWriter, r *http.Request) {
 		LastMonitoredAt      *string `json:"last_monitored_at"`
 	}
 
-	cfg, err := s.Queries.GetAppAgentConfig(r.Context(), app.ID)
-	if err != nil {
+	// Both reads (cfg and state) live in one UserQueries scope so they
+	// share the same RLS context.
+	var cfg db.AppAgentConfig
+	var state db.MonitoringState
+	var stateErr error
+	cfgErr := s.Pools.WithUserQueries(r.Context(), userID, func(q *db.Queries) error {
+		var e error
+		cfg, e = q.GetAppAgentConfig(r.Context(), app.ID)
+		if e != nil {
+			return e
+		}
+		state, stateErr = q.GetMonitoringState(r.Context(), app.ID)
+		return nil
+	})
+	if cfgErr != nil {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(monitoringStatus{Mode: "off", ScheduleIntervalSecs: 60})
 		return
@@ -415,8 +449,7 @@ func (s *Server) GetMonitoringStatus(w http.ResponseWriter, r *http.Request) {
 		ScheduleIntervalSecs: cfg.ScheduleIntervalSecs,
 	}
 
-	state, err := s.Queries.GetMonitoringState(r.Context(), app.ID)
-	if err == nil {
+	if stateErr == nil {
 		ts := state.LastMonitoredAt.Format("2006-01-02T15:04:05Z07:00")
 		status.LastMonitoredAt = &ts
 	}
@@ -430,8 +463,14 @@ func (s *Server) GetAppDashboardStats(w http.ResponseWriter, r *http.Request) {
 	if app == nil {
 		return
 	}
+	userID, _ := middleware.UserIDFromContext(r.Context())
 
-	stats, err := s.Queries.GetAppDashboardStats(r.Context(), app.ID)
+	var stats db.GetAppDashboardStatsRow
+	err := s.Pools.WithUserQueries(r.Context(), userID, func(q *db.Queries) error {
+		var e error
+		stats, e = q.GetAppDashboardStats(r.Context(), app.ID)
+		return e
+	})
 	if err != nil {
 		jsonServerError(w, "failed to get stats", err)
 		return
@@ -446,8 +485,14 @@ func (s *Server) ListConnectionsByApp(w http.ResponseWriter, r *http.Request) {
 	if app == nil {
 		return
 	}
+	userID, _ := middleware.UserIDFromContext(r.Context())
 
-	connections, err := s.Queries.ListConnectionsByApp(r.Context(), app.ID)
+	var connections []db.Connection
+	err := s.Pools.WithUserQueries(r.Context(), userID, func(q *db.Queries) error {
+		var e error
+		connections, e = q.ListConnectionsByApp(r.Context(), app.ID)
+		return e
+	})
 	if err != nil {
 		jsonServerError(w, "failed to list connections", err)
 		return

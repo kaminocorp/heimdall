@@ -31,16 +31,22 @@ const (
 // skip the publish. Better to lose a live particle than to render a
 // particle for a log whose journey can't be reconstructed from
 // log_pipeline_events later.
+//
+// Caller-supplied queries: Write* methods take a *db.Queries provided by
+// the caller, which must already be scoped to a UserQueries transaction
+// for the owning user. The writer holds no DB handle of its own — that
+// pre-Phase-2 shape silently bypassed RLS via the postgres-owner pool,
+// and would return zero rows under post-Phase-6 app_user. Each caller
+// (webhook ingestion, monitor loop) already opens a UserQueries for its
+// own work and now passes the same handle through.
 type PipelineWriter struct {
-	queries *db.Queries
-	bus     *PipelineBus
+	bus *PipelineBus
 }
 
-// NewPipelineWriter constructs a writer. Both dependencies are required —
-// a nil bus would silently swallow all live events and a nil queries would
-// skip all persistence.
-func NewPipelineWriter(queries *db.Queries, bus *PipelineBus) *PipelineWriter {
-	return &PipelineWriter{queries: queries, bus: bus}
+// NewPipelineWriter constructs a writer. The bus is required; nil-bus
+// would silently swallow all live SSE events.
+func NewPipelineWriter(bus *PipelineBus) *PipelineWriter {
+	return &PipelineWriter{bus: bus}
 }
 
 // IngestionInput is the caller-supplied info for a StageIngestion write.
@@ -53,14 +59,15 @@ type IngestionInput struct {
 }
 
 // WriteIngestion records that a log landed in log_buffer for an app. Called
-// from the webhook handler inside the ingestion transaction's trailing tail
-// — after commit — because the event row references log_buffer.id via an
-// FK that only resolves once the log insert has committed.
-func (w *PipelineWriter) WriteIngestion(ctx context.Context, in IngestionInput) {
-	if w == nil {
+// from the webhook handler inside a post-commit UserQueries scope — after
+// the log_buffer rows have committed — because the event row references
+// log_buffer.id via an FK that only resolves once the log insert has
+// committed.
+func (w *PipelineWriter) WriteIngestion(ctx context.Context, q *db.Queries, in IngestionInput) {
+	if w == nil || q == nil {
 		return
 	}
-	row, err := w.queries.InsertPipelineEvent(ctx, db.InsertPipelineEventParams{
+	row, err := q.InsertPipelineEvent(ctx, db.InsertPipelineEventParams{
 		LogID:      in.LogID,
 		AppID:      in.AppID,
 		Stage:      StageIngestion,
@@ -91,11 +98,11 @@ type ClassifiedInput struct {
 // Emitted for *every* classified log (flagged and safe alike) so the
 // Lumber-stage detail panel can show the full type/category histogram —
 // not just the escalated slice.
-func (w *PipelineWriter) WriteClassified(ctx context.Context, in ClassifiedInput) {
-	if w == nil {
+func (w *PipelineWriter) WriteClassified(ctx context.Context, q *db.Queries, in ClassifiedInput) {
+	if w == nil || q == nil {
 		return
 	}
-	row, err := w.queries.InsertPipelineEvent(ctx, db.InsertPipelineEventParams{
+	row, err := q.InsertPipelineEvent(ctx, db.InsertPipelineEventParams{
 		LogID:      in.LogID,
 		AppID:      in.AppID,
 		Stage:      StageClassified,
@@ -124,11 +131,11 @@ type GateInput struct {
 }
 
 // WriteGate records the gate decision for a single log.
-func (w *PipelineWriter) WriteGate(ctx context.Context, in GateInput) {
-	if w == nil {
+func (w *PipelineWriter) WriteGate(ctx context.Context, q *db.Queries, in GateInput) {
+	if w == nil || q == nil {
 		return
 	}
-	row, err := w.queries.InsertPipelineEvent(ctx, db.InsertPipelineEventParams{
+	row, err := q.InsertPipelineEvent(ctx, db.InsertPipelineEventParams{
 		LogID:     in.LogID,
 		AppID:     in.AppID,
 		Stage:     StageGate,
@@ -156,12 +163,12 @@ type AssessmentInput struct {
 // One call per flagged log per batch — never per-batch aggregate — so the
 // Time Machine view can link each log back to the assessment that evaluated
 // it.
-func (w *PipelineWriter) WriteAssessment(ctx context.Context, in AssessmentInput) {
-	if w == nil {
+func (w *PipelineWriter) WriteAssessment(ctx context.Context, q *db.Queries, in AssessmentInput) {
+	if w == nil || q == nil {
 		return
 	}
 	assessmentID := in.AssessmentID
-	row, err := w.queries.InsertPipelineEvent(ctx, db.InsertPipelineEventParams{
+	row, err := q.InsertPipelineEvent(ctx, db.InsertPipelineEventParams{
 		LogID:        in.LogID,
 		AppID:        in.AppID,
 		Stage:        StageAssessment,

@@ -2,7 +2,6 @@ package api
 
 import (
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/hejijunhao/heimdall/backend/internal/agent"
@@ -10,11 +9,12 @@ import (
 	"github.com/hejijunhao/heimdall/backend/internal/api/middleware"
 	"github.com/hejijunhao/heimdall/backend/internal/config"
 	"github.com/hejijunhao/heimdall/backend/internal/connectors"
+	"github.com/hejijunhao/heimdall/backend/internal/db"
 	"github.com/hejijunhao/heimdall/backend/internal/github"
 )
 
-func NewRouter(cfg *config.Config, pool *pgxpool.Pool, ag *agent.Agent, jwks *middleware.JWKSClient, gh *github.Client, poller *connectors.Poller, listener *connectors.ListenerManager) *chi.Mux {
-	s := handlers.NewServer(cfg, pool, ag, jwks, gh, poller, listener)
+func NewRouter(cfg *config.Config, pools *db.Pools, ag *agent.Agent, jwks *middleware.JWKSClient, gh *github.Client, poller *connectors.Poller, listener *connectors.ListenerManager) *chi.Mux {
+	s := handlers.NewServer(cfg, pools, ag, jwks, gh, poller, listener)
 	r := chi.NewRouter()
 
 	r.Use(middleware.Logging)

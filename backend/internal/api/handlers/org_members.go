@@ -36,20 +36,34 @@ func (s *Server) resolveOrgAndRole(w http.ResponseWriter, r *http.Request) (db.O
 // resolveOrgForUser reads the X-Org-ID header to determine which org the
 // request targets, validates membership, and returns the org + membership.
 // Falls back to the user's primary org when the header is absent.
+//
+// All reads run inside one UserQueries scope so org_members and
+// organizations are queried under app.current_user_id == userID. The
+// transaction is read-only — we don't commit, just close, which rolls
+// back any incidental state. This is the entry-point helper that nearly
+// every JWT-authed handler funnels through; routing every read through
+// it (rather than direct s.Queries) is the lowest-friction way to bring
+// the bulk of Class D into the handoff pattern.
 func (s *Server) resolveOrgForUser(r *http.Request, userID uuid.UUID) (db.Organization, db.OrgMember, error) {
+	queries, _, done, err := s.UserQueries(r.Context(), userID)
+	if err != nil {
+		return db.Organization{}, db.OrgMember{}, err
+	}
+	defer done()
+
 	if orgIDStr := r.Header.Get("X-Org-ID"); orgIDStr != "" {
 		orgID, err := uuid.Parse(orgIDStr)
 		if err != nil {
 			return db.Organization{}, db.OrgMember{}, err
 		}
-		membership, err := s.Queries.GetOrgMembership(r.Context(), db.GetOrgMembershipParams{
+		membership, err := queries.GetOrgMembership(r.Context(), db.GetOrgMembershipParams{
 			UserID: userID,
 			OrgID:  orgID,
 		})
 		if err != nil {
 			return db.Organization{}, db.OrgMember{}, err
 		}
-		org, err := s.Queries.GetOrganization(r.Context(), orgID)
+		org, err := queries.GetOrganization(r.Context(), orgID)
 		if err != nil {
 			return db.Organization{}, db.OrgMember{}, err
 		}
@@ -57,11 +71,11 @@ func (s *Server) resolveOrgForUser(r *http.Request, userID uuid.UUID) (db.Organi
 	}
 
 	// Fallback: primary org (earliest membership).
-	org, err := s.Queries.GetOrganizationByUser(r.Context(), userID)
+	org, err := queries.GetOrganizationByUser(r.Context(), userID)
 	if err != nil {
 		return db.Organization{}, db.OrgMember{}, err
 	}
-	membership, err := s.Queries.GetOrgMembership(r.Context(), db.GetOrgMembershipParams{
+	membership, err := queries.GetOrgMembership(r.Context(), db.GetOrgMembershipParams{
 		UserID: userID,
 		OrgID:  org.ID,
 	})
@@ -89,8 +103,14 @@ func (s *Server) ListOrgMembers(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	userID, _ := middleware.UserIDFromContext(r.Context())
 
-	members, err := s.Queries.ListOrgMembers(r.Context(), org.ID)
+	var members []db.ListOrgMembersRow
+	err := s.Pools.WithUserQueries(r.Context(), userID, func(q *db.Queries) error {
+		var e error
+		members, e = q.ListOrgMembers(r.Context(), org.ID)
+		return e
+	})
 	if err != nil {
 		jsonServerError(w, "failed to list members", err)
 		return
@@ -161,19 +181,40 @@ func (s *Server) InviteMember(w http.ResponseWriter, r *http.Request) {
 
 	userID, _ := middleware.UserIDFromContext(r.Context())
 
-	// Look up target user by email.
-	targetUser, err := s.Queries.GetUserByEmail(r.Context(), req.Email)
-	if err != nil {
+	// Resolve the invitee's user_id via the SECURITY DEFINER helper from
+	// migration 041. Under FORCE the regular GetUserByEmail can't find
+	// users outside the caller's orgs — which is exactly the population an
+	// invite needs to address — so the helper is the only correct path.
+	// The query COALESCEs missing-user into uuid.Nil (sqlc v1.30 won't
+	// infer nullability through the SECURITY DEFINER call); we treat
+	// uuid.Nil as the "not found" sentinel here. The membership check
+	// still runs through the regular RLS-scoped query.
+	var targetUserID uuid.UUID
+	var alreadyMember bool
+	if err := s.Pools.WithUserQueries(r.Context(), userID, func(q *db.Queries) error {
+		var e error
+		targetUserID, e = q.LookupUserIDForInvite(r.Context(), req.Email)
+		if e != nil {
+			return e
+		}
+		if targetUserID == uuid.Nil {
+			return nil
+		}
+		_, e = q.GetOrgMembership(r.Context(), db.GetOrgMembershipParams{
+			UserID: targetUserID,
+			OrgID:  org.ID,
+		})
+		alreadyMember = (e == nil)
+		return nil
+	}); err != nil {
+		jsonServerError(w, "database error", err)
+		return
+	}
+	if targetUserID == uuid.Nil {
 		jsonError(w, "user not found — they must have a Heimdall account first", http.StatusNotFound)
 		return
 	}
-
-	// Check if already a member.
-	_, err = s.Queries.GetOrgMembership(r.Context(), db.GetOrgMembershipParams{
-		UserID: targetUser.ID,
-		OrgID:  org.ID,
-	})
-	if err == nil {
+	if alreadyMember {
 		jsonError(w, "user is already a member of this organization", http.StatusConflict)
 		return
 	}
@@ -186,7 +227,7 @@ func (s *Server) InviteMember(w http.ResponseWriter, r *http.Request) {
 	defer done()
 
 	if err := queries.CreateOrgMember(r.Context(), db.CreateOrgMemberParams{
-		UserID: targetUser.ID,
+		UserID: targetUserID,
 		OrgID:  org.ID,
 		Role:   role,
 	}); err != nil {
@@ -207,8 +248,8 @@ func (s *Server) InviteMember(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]string{
-		"user_id": targetUser.ID.String(),
-		"email":   targetUser.Email,
+		"user_id": targetUserID.String(),
+		"email":   req.Email,
 		"role":    string(role),
 	})
 }

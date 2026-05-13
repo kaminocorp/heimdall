@@ -58,3 +58,25 @@ func (q *Queries) HasOrgMembership(ctx context.Context, userID uuid.UUID) (bool,
 	err := row.Scan(&has_org)
 	return has_org, err
 }
+
+const lookupUserIDForInvite = `-- name: LookupUserIDForInvite :one
+SELECT COALESCE(public.lookup_user_for_invite($1), '00000000-0000-0000-0000-000000000000'::uuid)::uuid AS user_id
+`
+
+// Calls the SECURITY DEFINER helper from migration 041. Bypasses RLS
+// specifically for the invite-by-email flow: under FORCE the regular
+// GetUserByEmail returns ErrNoRows for any user not yet in the
+// caller's orgs, which is wrong for invitation lookups (the target is
+// by definition not yet a member).
+//
+// COALESCE collapses "no user has this email" into uuid.Nil so sqlc
+// generates a non-nullable uuid.UUID return — sqlc v1.30 doesn't infer
+// nullability through SECURITY DEFINER function calls, and pgx errors
+// on NULL→uuid.UUID scans. Caller must compare the result against
+// uuid.Nil to detect "not found".
+func (q *Queries) LookupUserIDForInvite(ctx context.Context, targetEmail string) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, lookupUserIDForInvite, targetEmail)
+	var user_id uuid.UUID
+	err := row.Scan(&user_id)
+	return user_id, err
+}

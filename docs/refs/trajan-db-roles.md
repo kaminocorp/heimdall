@@ -5,6 +5,8 @@
 > phase-by-phase docs in `docs/archive/cron-role-phase-*.md`, `docs/archive/post-commit-rls-context-rehydration*.md`,
 > and the completion notes in `docs/completions/cron-role-and-bypass-then-scope.md` and
 > `docs/completions/known-user-background-task-rls-audit.md`.
+>
+> **Heimdall analogue (shipped 2026-05-04):** Heimdall's eight-phase port of this topology landed as `app_user` / `cron_user` / `postgres`. See `docs/completions/rls-enforcement-phase-{1..8}.md` for the as-shipped record and the archived [`docs/archive/rls-enforcement-roadmap.md`](../archive/rls-enforcement-roadmap.md) / [`docs/archive/rls-enforcement-role-split.md`](../archive/rls-enforcement-role-split.md) for the execution plan and threat model. The rollout deviated from this reference in three places worth noting for future ports: (a) Heimdall's `cron_user` carries a narrow `DELETE on log_buffer` grant beyond the Trajan baseline (the audit-discovered pruner widening — Phase 1 §5.3 row "Log buffer pruner"); (b) the catalog drift tests (Phase 5 §5.6a) are Heimdall-specific extensions not present in Trajan's allowlist-only approach; (c) the `lookup_user_for_invite` SECURITY DEFINER helper (Heimdall migration 041) is a Phase 7 follow-up the Trajan precedent did not need because Trajan has no email-based invite flow.
 
 ---
 

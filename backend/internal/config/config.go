@@ -6,9 +6,29 @@ import (
 )
 
 type Config struct {
-	Port                  string
-	LogFormat             string // "text" (default) or "json"
-	DatabaseURL           string
+	Port      string
+	LogFormat string // "text" (default) or "json"
+	// DatabaseURL is the runtime app-pool URL. Today resolves to the
+	// `postgres` superuser; Phase 6 of the RLS role-split flips it to
+	// `app_user` (per-tenant CRUD with RLS enforced).
+	DatabaseURL string
+	// CronDatabaseURL is the runtime cron-pool URL used for cross-tenant
+	// enumeration paths (monitor's app list, scheduler's enabled list,
+	// the log_buffer pruner). Today resolves to the same role as
+	// DatabaseURL; Phase 6 flips it to `cron_user` (BYPASSRLS, narrow
+	// grants). Empty → fall back to DatabaseURL with a WARN at startup.
+	CronDatabaseURL string
+	// DirectURL is the superuser URL used by `make migrate-up` /
+	// `make migrate-down` and any other path that needs DDL or
+	// privilege-altering SQL. Phase 6's flip will downgrade
+	// DatabaseURL to a non-superuser, but DirectURL stays on
+	// `postgres`. Empty → fall back to DatabaseURL.
+	DirectURL string
+	// Environment gates production-only invariants. Currently only
+	// guards the role-split startup check (refuse to launch when
+	// DatabaseURL and CronDatabaseURL resolve to the same role).
+	// Unset → development mode; "production" → enforce the invariant.
+	Environment           string
 	AnthropicKey          string
 	OpenRouterKey         string
 	ElephantasmURL        string
@@ -31,10 +51,13 @@ type Config struct {
 
 func Load() *Config {
 	return &Config{
-		Port:           getEnv("PORT", "8080"),
-		LogFormat:      getEnv("LOG_FORMAT", "text"),
-		DatabaseURL:    getEnv("DATABASE_URL", ""),
-		AnthropicKey:   getEnv("ANTHROPIC_API_KEY", ""),
+		Port:            getEnv("PORT", "8080"),
+		LogFormat:       getEnv("LOG_FORMAT", "text"),
+		DatabaseURL:     getEnv("DATABASE_URL", ""),
+		CronDatabaseURL: getEnv("CRON_DATABASE_URL", ""),
+		DirectURL:       getEnv("DIRECT_URL", ""),
+		Environment:     getEnv("HEIMDALL_ENV", ""),
+		AnthropicKey:    getEnv("ANTHROPIC_API_KEY", ""),
 		OpenRouterKey:  getEnv("OPENROUTER_API_KEY", ""),
 		ElephantasmURL: getEnv("ELEPHANTASM_URL", ""),
 		ElephantasmKey: getEnv("ELEPHANTASM_API_KEY", ""),

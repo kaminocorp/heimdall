@@ -42,7 +42,7 @@ cd frontend && npm run lint  # ESLint
 
 ### Database
 ```bash
-# Requires DATABASE_URL env var (defined in root .env).
+# Requires DIRECT_URL (falls back to DATABASE_URL when unset).
 # make dev-backend auto-sources .env, but migrate commands do not.
 # Source it first: set -a && . ./.env && set +a && make migrate-up
 make migrate-up        # Apply all pending migrations
@@ -50,6 +50,31 @@ make migrate-down      # Rollback one migration
 make migrate-create    # Interactive: create new migration pair
 make sqlc-generate     # Regenerate Go code from SQL queries
 ```
+
+### Database URLs (RLS role split)
+
+Three URLs, three purposes — the eight-phase RLS role split is shipped
+(see `docs/completions/rls-enforcement-phase-{1..8}.md` and the
+archived [`docs/archive/rls-enforcement-roadmap.md`](docs/archive/rls-enforcement-roadmap.md)).
+Production runtime authenticates as the two non-superuser roles below;
+`DATABASE_URL` is the only required one in dev, with the others
+falling back transparently:
+
+- `DATABASE_URL` — runtime app-pool URL. Production: `app_user`
+  (per-tenant CRUD; `FORCE ROW LEVEL SECURITY` is the access boundary).
+- `CRON_DATABASE_URL` — runtime cron-pool URL for cross-tenant
+  enumeration. Empty → falls back to `DATABASE_URL` with a startup
+  WARN. Production: `cron_user` (BYPASSRLS, narrow grants —
+  `INSERT/UPDATE` on `monitoring_state`, `DELETE` on `log_buffer`,
+  blanket `SELECT`).
+- `DIRECT_URL` — superuser URL used by `make migrate-*`. Empty → falls
+  back to `DATABASE_URL`. Production: `postgres` (the only path that
+  retains DDL privileges; never serves runtime traffic).
+
+`HEIMDALL_ENV=production` enables a startup invariant that refuses to
+launch when `DATABASE_URL` and `CRON_DATABASE_URL` authenticate as the
+same role. Set in production; leave unset in dev (where all three URLs
+typically point at the local `postgres` superuser).
 
 ### Infrastructure
 ```bash

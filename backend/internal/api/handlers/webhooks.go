@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -249,7 +250,13 @@ func (s *Server) readWebhookRequest(w http.ResponseWriter, r *http.Request) (con
 	}
 	token := strings.TrimPrefix(authHeader, "Bearer ")
 
-	conn, err := s.Queries.GetConnectionByWebhookToken(r.Context(), token)
+	// Token resolution is the only DB read that fires before we know which
+	// user owns the request. Run it on the cron pool (cron_user has SELECT
+	// on connections by design) rather than on the JWT-less `s.Queries`,
+	// which post-Phase-6 would be `app_user` with no `app.current_user_id`
+	// set — i.e. zero rows. Once we have conn.UserID the transactional
+	// path below opens UserQueries normally.
+	conn, err := s.Pools.CronQueries().GetConnectionByWebhookToken(r.Context(), token)
 	if err != nil {
 		jsonWebhookError(w, "unauthorized", "invalid webhook token", "", http.StatusUnauthorized, nil)
 		return connResult{}, nil, false
@@ -291,9 +298,11 @@ func (s *Server) ingestEntries(w http.ResponseWriter, r *http.Request, conn conn
 	userID := conn.UserID
 
 	// --- Idempotency: check for cached response ---
+	// Read on cron pool — same reasoning as the token lookup above. The
+	// transactional write path opens UserQueries(conn.UserID) below.
 	idempotencyKey := strings.TrimSpace(r.Header.Get("X-Idempotency-Key"))
 	if idempotencyKey != "" {
-		cached, err := s.Queries.GetIdempotencyResult(r.Context(), db.GetIdempotencyResultParams{
+		cached, err := s.Pools.CronQueries().GetIdempotencyResult(r.Context(), db.GetIdempotencyResultParams{
 			ConnectionID:   connID,
 			IdempotencyKey: idempotencyKey,
 		})
@@ -334,14 +343,29 @@ func (s *Server) ingestEntries(w http.ResponseWriter, r *http.Request, conn conn
 	}
 
 	// --- Transactional insert: all entries succeed or none are persisted ---
-	tx, err := s.Pool.Begin(r.Context())
+	// UserQueries opens a transaction on the App pool with
+	// `app.current_user_id = conn.UserID` set, so every write below is
+	// scoped to the connection owner under RLS.
+	queries, commit, done, err := s.UserQueries(r.Context(), userID)
 	if err != nil {
 		jsonServerError(w, "failed to begin transaction", err)
 		return
 	}
-	defer tx.Rollback(r.Context())
+	defer done()
 
-	qtx := s.Queries.WithTx(tx)
+	// Defense-in-depth: token resolution above runs on the cron pool
+	// (BYPASSRLS), so an attacker holding a still-valid token whose owner
+	// has been deleted or removed from the connection's org would otherwise
+	// reach the inserts below and surface as opaque 500s when WITH CHECK
+	// fails. Re-read the connection through the user-scoped pool to
+	// confirm the owner can still see it; if not, return 401 explicitly.
+	if _, err := queries.GetConnectionByUser(r.Context(), db.GetConnectionByUserParams{
+		ID:     connID,
+		UserID: userID,
+	}); err != nil {
+		jsonWebhookError(w, "unauthorized", "webhook token owner no longer has access to this connection", "", http.StatusUnauthorized, nil)
+		return
+	}
 
 	// Phase 4 source_name_path: if the connection's config specifies a
 	// dotted JSON path, override SourceName for every entry whose parser
@@ -356,18 +380,18 @@ func (s *Server) ingestEntries(w http.ResponseWriter, r *http.Request, conn conn
 	// resolve which apps want each source (app-scoped → one app; org-scoped
 	// → fan-out), then insert the matching entries. Whole thing is atomic
 	// under this transaction.
-	routes, seenSources, err := routeSources(r.Context(), qtx, connID, conn.AppID, entries)
+	routes, seenSources, err := routeSources(r.Context(), queries, connID, conn.AppID, entries)
 	if err != nil {
 		jsonServerError(w, "source filter pipeline failed", err)
 		return
 	}
-	stats, inserted, err := insertFiltered(r.Context(), qtx, connID, userID, entries, routes, seenSources)
+	stats, inserted, err := insertFiltered(r.Context(), queries, connID, userID, entries, routes, seenSources)
 	if err != nil {
 		jsonServerError(w, "failed to insert log entry", err)
 		return
 	}
 
-	if err := tx.Commit(r.Context()); err != nil {
+	if err := commit(); err != nil {
 		jsonServerError(w, "failed to commit transaction", err)
 		return
 	}
@@ -375,17 +399,24 @@ func (s *Server) ingestEntries(w http.ResponseWriter, r *http.Request, conn conn
 	// Post-commit: emit Pipeline-page ingestion events for every newly
 	// inserted log row. Deliberately after commit so the FK from
 	// log_pipeline_events.log_id resolves; pre-commit it would race with
-	// concurrent reads. Fire-and-forget per call — writer logs its own
-	// failures and never bubbles them back.
-	if s.Agent != nil {
+	// concurrent reads. The pipeline writer no longer holds its own DB
+	// handle — we open a fresh UserQueries(conn.UserID) scope for the
+	// post-commit batch so every InsertPipelineEvent runs under the
+	// connection owner's RLS context.
+	if s.Agent != nil && len(inserted) > 0 {
 		if pw := s.Agent.Pipeline(); pw != nil {
-			for _, ins := range inserted {
-				pw.WriteIngestion(r.Context(), agent.IngestionInput{
-					LogID:      ins.LogID,
-					AppID:      ins.AppID,
-					SourceType: ins.SourceType,
-					Severity:   ins.Severity,
-				})
+			if err := s.Pools.WithUserQueries(r.Context(), userID, func(q *db.Queries) error {
+				for _, ins := range inserted {
+					pw.WriteIngestion(r.Context(), q, agent.IngestionInput{
+						LogID:      ins.LogID,
+						AppID:      ins.AppID,
+						SourceType: ins.SourceType,
+						Severity:   ins.Severity,
+					})
+				}
+				return nil
+			}); err != nil {
+				slog.Warn("webhook: pipeline ingestion emit failed", "err", err, "connection_id", connID)
 			}
 		}
 	}
@@ -434,13 +465,36 @@ func (s *Server) ingestEntries(w http.ResponseWriter, r *http.Request, conn conn
 	respBody, _ := json.Marshal(resp)
 
 	// --- Idempotency: cache the response for future replays ---
+	// Post-commit so we cache exactly the body we return. Wrapped in a
+	// short UserQueries scope so the write goes through the connection
+	// owner's RLS context — under post-Phase-7 policies the
+	// `webhook_idempotency` row will be visible to anyone who can see
+	// the parent connection, matching the cache-hit read path above.
+	//
+	// Use context.WithoutCancel + a short deadline rather than r.Context()
+	// directly: webhook senders frequently disconnect immediately after
+	// reading the response status, which cancels r.Context(). Without the
+	// shielding the cache row would never be written and a retry would
+	// re-ingest the entire batch — defeating the idempotency contract.
 	if idempotencyKey != "" {
-		_ = s.Queries.InsertIdempotencyResult(r.Context(), db.InsertIdempotencyResultParams{
-			ConnectionID:   connID,
-			IdempotencyKey: idempotencyKey,
-			ResponseStatus: int32(http.StatusCreated),
-			ResponseBody:   respBody,
-		})
+		cacheCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
+		defer cancel()
+		idemQ, idemCommit, idemDone, err := s.Pools.UserQueries(cacheCtx, userID)
+		if err != nil {
+			slog.Warn("webhook: idempotency cache UserQueries failed", "err", err, "connection_id", connID)
+		} else {
+			if err := idemQ.InsertIdempotencyResult(cacheCtx, db.InsertIdempotencyResultParams{
+				ConnectionID:   connID,
+				IdempotencyKey: idempotencyKey,
+				ResponseStatus: int32(http.StatusCreated),
+				ResponseBody:   respBody,
+			}); err != nil {
+				slog.Warn("webhook: idempotency cache insert failed", "err", err, "connection_id", connID)
+			} else if err := idemCommit(); err != nil {
+				slog.Warn("webhook: idempotency cache commit failed", "err", err, "connection_id", connID)
+			}
+			idemDone()
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")

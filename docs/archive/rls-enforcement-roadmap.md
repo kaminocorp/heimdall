@@ -1,9 +1,10 @@
 # RLS Enforcement — Implementation Roadmap
 
-**Status:** not started — execution playbook.
-**Owner:** TBD.
+**Status:** shipped 2026-05-04 — all eight phases complete. Archived.
+See `docs/completions/rls-enforcement-phase-{1..8}.md` for the as-shipped record. The phase 8 doc has the rollout summary with links to every prior phase.
+**Owner:** Phase 1–8 completion docs.
 **Parent plan:** [`rls-enforcement-role-split.md`](./rls-enforcement-role-split.md) — the *what* and *why*. This doc is the *how* and *in what order*.
-**Companion:** [`rls-enforcement-mental-model.md`](./rls-enforcement-mental-model.md) — conceptual map of which roles show up in which layers.
+**Companion:** [`../blueprints/rls-enforcement-mental-model.md`](../blueprints/rls-enforcement-mental-model.md) — conceptual map of which roles show up in which layers (lives in `blueprints/` as evergreen reference, not `executing/`).
 **Reference precedent:** [`../refs/trajan-db-roles.md`](../refs/trajan-db-roles.md) — Trajan's shipped three-role topology.
 
 ---

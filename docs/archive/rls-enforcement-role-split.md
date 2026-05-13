@@ -1,11 +1,11 @@
 # RLS Enforcement via DB Role Split
 
-**Status:** not started — planning doc.
-**Owner:** TBD.
-**Scheduling:** before any enterprise-shape customer onboarding. Not a code-red item today (no known active leak) but the defensive posture is one application bug away from a multi-tenant data leak, which is not where we want to be when selling "enterprise-grade."
+**Status:** shipped 2026-05-04 — all eight phases complete. Archived. See `docs/completions/rls-enforcement-phase-{1..8}.md` for the as-shipped record.
+**Owner:** Phase 1–8 completion docs.
+**Scheduling:** rolled out 2026-04-29 to 2026-05-04 (Phase 1 audit through Phase 8 cleanup). The original "before any enterprise-shape customer onboarding" framing held — the rollout closed before any such onboarding ran.
 **Companion docs:**
-- [`rls-enforcement-mental-model.md`](./rls-enforcement-mental-model.md) — the conceptual map: which roles show up in which layers/files, how non-JWT paths authenticate.
-- [`trajan-db-roles.md`](./trajan-db-roles.md) — canonical reference for the *shipped* Trajan three-role implementation. This plan has been revised against that doc; lessons learned from Trajan's rollout are folded in throughout (post-commit rehydration, known-user background tasks, policy allowlist, pairing tripwire, opt-in role-flip fixture, named revert lever).
+- [`../blueprints/rls-enforcement-mental-model.md`](../blueprints/rls-enforcement-mental-model.md) — the conceptual map: which roles show up in which layers/files, how non-JWT paths authenticate. Lives in `blueprints/` as evergreen reference; this archived plan is its execution sibling.
+- [`../refs/trajan-db-roles.md`](../refs/trajan-db-roles.md) — canonical reference for the *shipped* Trajan three-role implementation. This plan was revised against that doc; lessons learned from Trajan's rollout are folded in throughout (post-commit rehydration, known-user background tasks, policy allowlist, pairing tripwire, opt-in role-flip fixture, named revert lever).
 
 ---
 

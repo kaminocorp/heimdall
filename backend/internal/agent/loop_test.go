@@ -56,7 +56,7 @@ func newTestAgent(t *testing.T, server *httptest.Server) *Agent {
 	)
 	queries := db.New(&stubDBTX{})
 	return &Agent{
-		queries: queries,
+		cronQ: queries,
 		providers: map[string]Provider{
 			defaultProviderName: NewAnthropicProviderWithClient(&client),
 		},
@@ -115,7 +115,7 @@ func TestRunLoop_SimpleResponse(t *testing.T) {
 	ctx := context.Background()
 	userID := uuid.New()
 
-	result, err := agent.RunLoop(ctx, userID, "Hello")
+	result, err := agent.RunLoop(ctx, agent.cronQ, userID, "Hello")
 
 	require.NoError(t, err)
 	assert.Equal(t, "Hello! I am Heimdall, your monitoring agent.", result)
@@ -142,7 +142,7 @@ func TestRunLoop_MaxIterations(t *testing.T) {
 	ctx := context.Background()
 	userID := uuid.New()
 
-	result, err := agent.RunLoop(ctx, userID, "Find all errors")
+	result, err := agent.RunLoop(ctx, agent.cronQ, userID, "Find all errors")
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "exceeded max iterations")
@@ -178,7 +178,7 @@ func TestRunLoop_ToolError(t *testing.T) {
 	ctx := context.Background()
 	userID := uuid.New()
 
-	result, err := agent.RunLoop(ctx, userID, "Search for errors")
+	result, err := agent.RunLoop(ctx, agent.cronQ, userID, "Search for errors")
 
 	require.NoError(t, err)
 	assert.Equal(t, "I encountered an error while searching logs.", result)
@@ -214,7 +214,7 @@ func TestRunLoop_RoutesThroughOpenRouter(t *testing.T) {
 
 	queries := db.New(&stubDBTX{})
 	ag := &Agent{
-		queries: queries,
+		cronQ: queries,
 		providers: map[string]Provider{
 			// Swap the default provider to OpenRouter so RunLoop (which runs
 			// with appID=uuid.Nil and can't consult app_agent_config.provider)
@@ -225,7 +225,7 @@ func TestRunLoop_RoutesThroughOpenRouter(t *testing.T) {
 		classifier: &PassthroughClassifier{},
 	}
 
-	result, err := ag.RunLoop(context.Background(), uuid.New(), "hello")
+	result, err := ag.RunLoop(context.Background(), queries, uuid.New(), "hello")
 	require.NoError(t, err)
 	assert.Equal(t, "routed via openrouter", result)
 	assert.Equal(t, int32(1), hits.Load())

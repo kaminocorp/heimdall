@@ -4,6 +4,8 @@ import (
 	"context"
 
 	"github.com/google/uuid"
+
+	"github.com/hejijunhao/heimdall/backend/internal/db"
 )
 
 // AgentEvent is a single progress event emitted by RunConversationStream as
@@ -45,19 +47,24 @@ const streamBufferSize = 16
 // "error" event). The caller must drain the channel — abandoning it would
 // leak the producer goroutine if the buffer fills.
 //
+// q is the per-message UserQueriesForLoop scope (parent plan §5.3b /
+// Option A). The chat handler opens it once per inbound message and
+// passes it through; the loop's tool dispatch and agent_log emits all
+// run inside it.
+//
 // The underlying LLM call is still blocking. The streaming here is purely
 // over the loop's progress: tool_start fires immediately before each
 // Dispatch call, tool_result fires immediately after, and the final message
 // event lands once the model returns StopReasonEndTurn. Token-by-token
 // streaming inside a single ChatCompletion call is the next iteration —
 // see docs/executing/streaming-implementation.md.
-func (a *Agent) RunConversationStream(ctx context.Context, userID uuid.UUID, appID uuid.UUID, conversationID *uuid.UUID, history []Message, input string) <-chan AgentEvent {
+func (a *Agent) RunConversationStream(ctx context.Context, q *db.Queries, userID uuid.UUID, appID uuid.UUID, conversationID *uuid.UUID, history []Message, input string) <-chan AgentEvent {
 	ch := make(chan AgentEvent, streamBufferSize)
 
 	go func() {
 		defer close(ch)
 
-		text, err := a.runConversationCore(ctx, userID, appID, conversationID, history, input, ch)
+		text, err := a.runConversationCore(ctx, q, userID, appID, conversationID, history, input, ch)
 		// Terminal sends are ctx-aware for the same reason emitEvent is: if
 		// the WebSocket consumer has already walked away, the buffer may be
 		// full and a blind send would pin this goroutine indefinitely.

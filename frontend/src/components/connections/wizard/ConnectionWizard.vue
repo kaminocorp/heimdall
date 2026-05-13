@@ -157,7 +157,8 @@ async function createConnection() {
     // __scope controls whether app_id is sent — the server treats the absence
     // of app_id as "create an org-scoped connection" (see backend
     // CreateConnection / supportsOrgScope).
-    const { flyio_mode: _mode, __scope, ...cleanConfig } = state.config
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { flyio_mode, __scope, ...cleanConfig } = state.config
     const scope = (__scope as 'app' | 'org' | undefined) ?? 'app'
     const conn = await store.createConnection({
       // Omit app_id entirely for org-scoped — sending "" or null would be a

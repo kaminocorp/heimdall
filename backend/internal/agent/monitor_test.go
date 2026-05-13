@@ -208,7 +208,7 @@ func TestRunMonitoring_SimpleResponse(t *testing.T) {
 		Model: "claude-sonnet-4-6",
 	}
 
-	assessment, severity, providerFailed := agent.RunMonitoring(ctx, userID, appConfig, "Flagged logs:\nERROR: connection refused")
+	assessment, severity, providerFailed := agent.RunMonitoring(ctx, agent.cronQ, userID, appConfig, "Flagged logs:\nERROR: connection refused")
 
 	assert.Contains(t, assessment, "connection errors detected")
 	assert.Equal(t, "error", severity)
@@ -245,7 +245,7 @@ func TestRunMonitoring_WithToolUse(t *testing.T) {
 		Model: "claude-sonnet-4-6",
 	}
 
-	assessment, severity, providerFailed := agent.RunMonitoring(ctx, userID, appConfig, "Flagged: ERROR connection refused")
+	assessment, severity, providerFailed := agent.RunMonitoring(ctx, agent.cronQ, userID, appConfig, "Flagged: ERROR connection refused")
 
 	assert.Contains(t, assessment, "transient network issue")
 	assert.Equal(t, "warning", severity)
@@ -270,7 +270,7 @@ func TestRunMonitoring_MaxIterations(t *testing.T) {
 		Model: "claude-sonnet-4-6",
 	}
 
-	assessment, severity, providerFailed := agent.RunMonitoring(ctx, userID, appConfig, "Flagged: some error")
+	assessment, severity, providerFailed := agent.RunMonitoring(ctx, agent.cronQ, userID, appConfig, "Flagged: some error")
 
 	assert.Contains(t, assessment, "exceeded max iterations")
 	assert.Equal(t, "warning", severity)

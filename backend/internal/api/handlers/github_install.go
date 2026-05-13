@@ -71,12 +71,15 @@ func (s *Server) InstallGitHub(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verify app belongs to user's org.
-	_, err = s.Queries.GetApplicationByOrgUser(r.Context(), db.GetApplicationByOrgUserParams{
-		AppID:  appID,
-		UserID: userID,
-	})
-	if err != nil {
+	// Verify app belongs to user's org via UserQueries so the
+	// GetApplicationByOrgUser read sees app.current_user_id == userID.
+	if err := s.Pools.WithUserQueries(r.Context(), userID, func(q *db.Queries) error {
+		_, e := q.GetApplicationByOrgUser(r.Context(), db.GetApplicationByOrgUserParams{
+			AppID:  appID,
+			UserID: userID,
+		})
+		return e
+	}); err != nil {
 		jsonError(w, "application not found", http.StatusNotFound)
 		return
 	}

@@ -137,8 +137,14 @@ func (s *Server) ListSchedules(w http.ResponseWriter, r *http.Request) {
 	if app == nil {
 		return
 	}
+	userID, _ := middleware.UserIDFromContext(r.Context())
 
-	schedules, err := s.Queries.ListSchedulesByApp(r.Context(), app.ID)
+	var schedules []db.InvestigationSchedule
+	err := s.Pools.WithUserQueries(r.Context(), userID, func(q *db.Queries) error {
+		var e error
+		schedules, e = q.ListSchedulesByApp(r.Context(), app.ID)
+		return e
+	})
 	if err != nil {
 		jsonServerError(w, "failed to list schedules", err)
 		return
@@ -354,9 +360,14 @@ func (s *Server) RunScheduleNow(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "invalid schedule id", http.StatusBadRequest)
 		return
 	}
+	userID, _ := middleware.UserIDFromContext(r.Context())
 
-	schedule, err := s.Queries.GetSchedule(r.Context(), scheduleID)
-	if err != nil {
+	var schedule db.InvestigationSchedule
+	if err := s.Pools.WithUserQueries(r.Context(), userID, func(q *db.Queries) error {
+		var e error
+		schedule, e = q.GetSchedule(r.Context(), scheduleID)
+		return e
+	}); err != nil {
 		jsonError(w, "schedule not found", http.StatusNotFound)
 		return
 	}
@@ -371,8 +382,12 @@ func (s *Server) RunScheduleNow(w http.ResponseWriter, r *http.Request) {
 	s.Agent.RunScheduledInvestigation(r.Context(), schedule)
 
 	// Re-read to return the updated fields.
-	updated, err := s.Queries.GetSchedule(r.Context(), scheduleID)
-	if err != nil {
+	var updated db.InvestigationSchedule
+	if err := s.Pools.WithUserQueries(r.Context(), userID, func(q *db.Queries) error {
+		var e error
+		updated, e = q.GetSchedule(r.Context(), scheduleID)
+		return e
+	}); err != nil {
 		jsonServerError(w, "failed to reload schedule after run", err)
 		return
 	}

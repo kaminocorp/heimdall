@@ -1,8 +1,6 @@
 package handlers
 
 import (
-	"github.com/jackc/pgx/v5/pgxpool"
-
 	"github.com/hejijunhao/heimdall/backend/internal/agent"
 	"github.com/hejijunhao/heimdall/backend/internal/api/middleware"
 	"github.com/hejijunhao/heimdall/backend/internal/config"
@@ -12,10 +10,16 @@ import (
 )
 
 // Server holds shared dependencies for all handlers.
+//
+// Pools is the only DB entry point — handlers go through Pools.UserQueries
+// (per-request, RLS-scoped) or Pools.CronQueries (cross-tenant, BYPASSRLS).
+// The transitional Pool/Queries shims that lived here through Phase 7 were
+// removed in Phase 9: every handler now routes through the chokepoint, so
+// the pairing tripwire (rls_pairing_test.go) no longer needs an exception
+// for raw pool access in this package.
 type Server struct {
 	Config   *config.Config
-	Pool     *pgxpool.Pool
-	Queries  *db.Queries
+	Pools    *db.Pools
 	Agent    *agent.Agent
 	JWKS     *middleware.JWKSClient
 	GitHub   *github.Client
@@ -38,11 +42,10 @@ func (s *Server) SetPipelineBootstrapCacheForTest() {
 	s.pipelineBootstrap = newBootstrapCache()
 }
 
-func NewServer(cfg *config.Config, pool *pgxpool.Pool, ag *agent.Agent, jwks *middleware.JWKSClient, gh *github.Client, poller *connectors.Poller, listener *connectors.ListenerManager) *Server {
+func NewServer(cfg *config.Config, pools *db.Pools, ag *agent.Agent, jwks *middleware.JWKSClient, gh *github.Client, poller *connectors.Poller, listener *connectors.ListenerManager) *Server {
 	return &Server{
 		Config:             cfg,
-		Pool:               pool,
-		Queries:            db.New(pool),
+		Pools:              pools,
 		Agent:              ag,
 		JWKS:               jwks,
 		GitHub:             gh,

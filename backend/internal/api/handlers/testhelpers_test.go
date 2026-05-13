@@ -60,6 +60,10 @@ func testSetup(t *testing.T) *testEnv {
 	pool, err := pgxpool.New(ctx, dbURL)
 	require.NoError(t, err)
 
+	// Test-side raw queries handle. Phase 9 dropped Server.Queries from
+	// the production Server struct, but tests still need a non-RLS read
+	// path to set up fixtures and assert state — pgx + db.New on the
+	// shared pool is the right shape for that.
 	queries := db.New(pool)
 
 	// Create a test user. The public.users table has a FK to auth.users,
@@ -123,12 +127,13 @@ func testSetup(t *testing.T) *testEnv {
 		SupabaseURL: supabaseURL,
 	}
 
+	pools := db.NewPools(pool, pool)
+
 	srv := &handlers.Server{
-		Config:  cfg,
-		Pool:    pool,
-		Queries: queries,
-		Agent:   nil, // Agent not needed for handler tests
-		Poller:  connectors.NewPoller(queries),
+		Config: cfg,
+		Pools:  pools,
+		Agent:  nil, // Agent not needed for handler tests
+		Poller: connectors.NewPoller(pools),
 		// v0.45.2 pause/resume logic calls Listener.Stop unconditionally on
 		// every UpdateConnection — the nil default panics the handler test.
 		Listener: connectors.NewListenerManager(),

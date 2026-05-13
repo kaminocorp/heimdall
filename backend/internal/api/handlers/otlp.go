@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/hejijunhao/heimdall/backend/internal/agent"
+	"github.com/hejijunhao/heimdall/backend/internal/db"
 )
 
 // OTLP JSON types — subset of the OpenTelemetry Protocol ExportLogsServiceRequest.
@@ -81,7 +82,11 @@ func (s *Server) IngestOTLPLogs(w http.ResponseWriter, r *http.Request) {
 	}
 	token := strings.TrimPrefix(authHeader, "Bearer ")
 
-	conn, err := s.Queries.GetConnectionByWebhookToken(r.Context(), token)
+	// Token resolution runs on the cron pool — same reasoning as the
+	// webhook ingestion handler: we don't yet know which user owns the
+	// request, so a UserQueries scope can't be opened. Cron pool has
+	// SELECT on connections by design.
+	conn, err := s.Pools.CronQueries().GetConnectionByWebhookToken(r.Context(), token)
 	if err != nil {
 		jsonError(w, "invalid token", http.StatusUnauthorized)
 		return
@@ -114,42 +119,64 @@ func (s *Server) IngestOTLPLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tx, err := s.Pool.Begin(r.Context())
+	// UserQueries opens a transaction on the App pool with
+	// `app.current_user_id = conn.UserID`, so every write below sees the
+	// connection owner's RLS context. Mirror of the shape used in
+	// webhooks.go's ingestEntries.
+	queries, commit, done, err := s.UserQueries(r.Context(), conn.UserID)
 	if err != nil {
 		jsonServerError(w, "failed to begin transaction", err)
 		return
 	}
-	defer tx.Rollback(r.Context())
+	defer done()
 
-	qtx := s.Queries.WithTx(tx)
+	// Defense-in-depth: confirm the connection is still visible to its
+	// owner inside the user-scoped transaction. Token resolution above
+	// uses the cron pool (BYPASSRLS), so without this re-check a still-
+	// valid token belonging to a deleted/removed user would surface as
+	// an opaque 500 from the first WITH-CHECK violation. See
+	// webhooks.go:ingestEntries for the parallel guard.
+	if _, err := queries.GetConnectionByUser(r.Context(), db.GetConnectionByUserParams{
+		ID:     conn.ID,
+		UserID: conn.UserID,
+	}); err != nil {
+		jsonError(w, "webhook token owner no longer has access to this connection", http.StatusUnauthorized)
+		return
+	}
 
-	routes, seenSources, err := routeSources(r.Context(), qtx, conn.ID, conn.AppID, entries)
+	routes, seenSources, err := routeSources(r.Context(), queries, conn.ID, conn.AppID, entries)
 	if err != nil {
 		jsonServerError(w, "source filter pipeline failed", err)
 		return
 	}
-	stats, inserted, err := insertFiltered(r.Context(), qtx, conn.ID, conn.UserID, entries, routes, seenSources)
+	stats, inserted, err := insertFiltered(r.Context(), queries, conn.ID, conn.UserID, entries, routes, seenSources)
 	if err != nil {
 		jsonServerError(w, "failed to insert log entry", err)
 		return
 	}
 
-	if err := tx.Commit(r.Context()); err != nil {
+	if err := commit(); err != nil {
 		jsonServerError(w, "failed to commit transaction", err)
 		return
 	}
 
 	// Pipeline-page ingestion emits — see the parallel block in
-	// ingestEntries (webhooks.go) for why this is post-commit.
-	if s.Agent != nil {
+	// ingestEntries (webhooks.go) for why this is post-commit and why
+	// it opens its own UserQueries scope.
+	if s.Agent != nil && len(inserted) > 0 {
 		if pw := s.Agent.Pipeline(); pw != nil {
-			for _, ins := range inserted {
-				pw.WriteIngestion(r.Context(), agent.IngestionInput{
-					LogID:      ins.LogID,
-					AppID:      ins.AppID,
-					SourceType: ins.SourceType,
-					Severity:   ins.Severity,
-				})
+			if err := s.Pools.WithUserQueries(r.Context(), conn.UserID, func(q *db.Queries) error {
+				for _, ins := range inserted {
+					pw.WriteIngestion(r.Context(), q, agent.IngestionInput{
+						LogID:      ins.LogID,
+						AppID:      ins.AppID,
+						SourceType: ins.SourceType,
+						Severity:   ins.Severity,
+					})
+				}
+				return nil
+			}); err != nil {
+				slog.Warn("otlp: pipeline ingestion emit failed", "err", err, "connection_id", conn.ID)
 			}
 		}
 	}

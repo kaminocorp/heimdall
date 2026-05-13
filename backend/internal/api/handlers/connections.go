@@ -248,7 +248,7 @@ func (s *Server) CreateConnection(w http.ResponseWriter, r *http.Request) {
 
 	// Start listener for syslog connections.
 	if req.Type == "syslog" {
-		sl, err := logs.NewSyslog(config, conn.ID, userID, appIDOrZero(conn.AppID), s.Queries)
+		sl, err := logs.NewSyslog(config, conn.ID, userID, appIDOrZero(conn.AppID), s.Pools)
 		if err != nil {
 			slog.Error("syslog listener init failed", "connection_id", conn.ID, "err", err)
 			conn.Status = "error"
@@ -425,7 +425,7 @@ func (s *Server) UpdateConnection(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if req.Type == "syslog" {
-			sl, err := logs.NewSyslog(config, conn.ID, userID, appIDOrZero(conn.AppID), s.Queries)
+			sl, err := logs.NewSyslog(config, conn.ID, userID, appIDOrZero(conn.AppID), s.Pools)
 			if err != nil {
 				slog.Error("syslog listener init failed", "connection_id", conn.ID, "err", err)
 				conn.Status = "error"

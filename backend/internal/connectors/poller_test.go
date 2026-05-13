@@ -31,7 +31,7 @@ func TestPoller_StartStop(t *testing.T) {
 	mock := &mockPollConnector{}
 	connID := uuid.New()
 
-	p.Start(mock, connID, 10*time.Millisecond)
+	p.Start(mock, connID, uuid.Nil, 10*time.Millisecond)
 
 	// Wait for at least one poll.
 	time.Sleep(50 * time.Millisecond)
@@ -53,8 +53,8 @@ func TestPoller_StopAll(t *testing.T) {
 	id1 := uuid.New()
 	id2 := uuid.New()
 
-	p.Start(mock1, id1, 10*time.Millisecond)
-	p.Start(mock2, id2, 10*time.Millisecond)
+	p.Start(mock1, id1, uuid.Nil, 10*time.Millisecond)
+	p.Start(mock2, id2, uuid.Nil, 10*time.Millisecond)
 
 	time.Sleep(50 * time.Millisecond)
 	require.Greater(t, mock1.pollCount.Load(), int32(0))
@@ -75,11 +75,11 @@ func TestPoller_StartReplacesExisting(t *testing.T) {
 	mock2 := &mockPollConnector{}
 	connID := uuid.New()
 
-	p.Start(mock1, connID, 10*time.Millisecond)
+	p.Start(mock1, connID, uuid.Nil, 10*time.Millisecond)
 	time.Sleep(30 * time.Millisecond)
 
 	// Replace with a new connector on the same ID.
-	p.Start(mock2, connID, 10*time.Millisecond)
+	p.Start(mock2, connID, uuid.Nil, 10*time.Millisecond)
 	time.Sleep(30 * time.Millisecond)
 
 	// mock1 should have stopped; record its count.

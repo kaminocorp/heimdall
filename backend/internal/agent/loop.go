@@ -26,16 +26,19 @@ const (
 
 // RunLoop executes the agent's tool-use loop for a single input with no prior history.
 // It delegates to RunConversation with an empty history.
-func (a *Agent) RunLoop(ctx context.Context, userID uuid.UUID, input string) (string, error) {
-	return a.RunConversation(ctx, userID, uuid.Nil, nil, nil, input)
+//
+// q must be a UserQueriesForLoop-bound *db.Queries — the loop runs every
+// internal read/write through it under app.current_user_id == userID.
+func (a *Agent) RunLoop(ctx context.Context, q *db.Queries, userID uuid.UUID, input string) (string, error) {
+	return a.RunConversation(ctx, q, userID, uuid.Nil, nil, nil, input)
 }
 
 // RunConversation executes the agent's tool-use loop with full conversation history.
 // This is the blocking entry point — callers that want progress events as the
 // loop iterates (tool start/result) should use RunConversationStream instead.
 // Internally both methods funnel through runConversationCore.
-func (a *Agent) RunConversation(ctx context.Context, userID uuid.UUID, appID uuid.UUID, conversationID *uuid.UUID, history []Message, input string) (string, error) {
-	return a.runConversationCore(ctx, userID, appID, conversationID, history, input, nil)
+func (a *Agent) RunConversation(ctx context.Context, q *db.Queries, userID uuid.UUID, appID uuid.UUID, conversationID *uuid.UUID, history []Message, input string) (string, error) {
+	return a.runConversationCore(ctx, q, userID, appID, conversationID, history, input, nil)
 }
 
 // emitEvent is a nil-safe, ctx-aware send used by runConversationCore. When
@@ -65,7 +68,13 @@ func emitEvent(ctx context.Context, events chan<- AgentEvent, ev AgentEvent) {
 //
 // conversationID is optional — when provided, agent observations are emitted to agent_log.
 // appID is optional — when provided, enables app-scoped tools like search_codebase.
-func (a *Agent) runConversationCore(ctx context.Context, userID uuid.UUID, appID uuid.UUID, conversationID *uuid.UUID, history []Message, input string, events chan<- AgentEvent) (string, error) {
+//
+// Option A invariant (parent plan §5.3b): one transactional *db.Queries spans
+// the whole loop, including every tool dispatch. The caller is expected to
+// have opened it via Pools.UserQueriesForLoop, which disables
+// idle_in_transaction_session_timeout for the duration so a slow LLM
+// round-trip doesn't abort the txn.
+func (a *Agent) runConversationCore(ctx context.Context, q *db.Queries, userID uuid.UUID, appID uuid.UUID, conversationID *uuid.UUID, history []Message, input string, events chan<- AgentEvent) (string, error) {
 	// Derive *uuid.UUID for EmitLog calls: nil when no app context.
 	var appIDPtr *uuid.UUID
 	if appID != uuid.Nil {
@@ -79,7 +88,7 @@ func (a *Agent) runConversationCore(ctx context.Context, userID uuid.UUID, appID
 	providerName := defaultProviderName
 
 	if appID != uuid.Nil {
-		appCfg, err := a.queries.GetAppAgentConfig(ctx, appID)
+		appCfg, err := q.GetAppAgentConfig(ctx, appID)
 		if err == nil {
 			if appCfg.Model != "" {
 				model = appCfg.Model
@@ -92,7 +101,7 @@ func (a *Agent) runConversationCore(ctx context.Context, userID uuid.UUID, appID
 			}
 		}
 	} else {
-		cfg, err := a.queries.GetAgentConfig(ctx)
+		cfg, err := q.GetAgentConfig(ctx)
 		if err == nil {
 			if cfg.Model != "" {
 				model = cfg.Model
@@ -110,7 +119,7 @@ func (a *Agent) runConversationCore(ctx context.Context, userID uuid.UUID, appID
 	// are available, paused, or errored — preventing blind tool calls
 	// against paused connections and enabling proactive user guidance.
 	if appID != uuid.Nil {
-		if conns, err := a.queries.ListConnectionsByApp(ctx, appID); err == nil && len(conns) > 0 {
+		if conns, err := q.ListConnectionsByApp(ctx, appID); err == nil && len(conns) > 0 {
 			sysPrompt += "\n\nConnected data sources for this application:\n"
 			for _, c := range conns {
 				sysPrompt += fmt.Sprintf("- %s (%s, %s) — status: %s, id: %s\n",
@@ -157,7 +166,7 @@ func (a *Agent) runConversationCore(ctx context.Context, userID uuid.UUID, appID
 			if utf8.RuneCountInString(summary) > 200 {
 				summary = string([]rune(summary)[:200]) + "..."
 			}
-			a.EmitLog(ctx, userID, appIDPtr, conversationID, "observation", summary, nil)
+			EmitLog(ctx, q, userID, appIDPtr, conversationID, "observation", summary, nil)
 
 			return text, nil
 		}
@@ -187,7 +196,7 @@ func (a *Agent) runConversationCore(ctx context.Context, userID uuid.UUID, appID
 				}
 
 				// Emit tool_call log entry.
-				a.EmitLog(ctx, userID, appIDPtr, conversationID, "tool_call",
+				EmitLog(ctx, q, userID, appIDPtr, conversationID, "tool_call",
 					fmt.Sprintf("Called %s", tu.Name),
 					map[string]any{"tool": tu.Name, "input": toolInput},
 				)
@@ -196,7 +205,7 @@ func (a *Agent) runConversationCore(ctx context.Context, userID uuid.UUID, appID
 				emitEvent(ctx, events, AgentEvent{Type: "tool_start", Tool: tu.Name})
 
 				slog.Info("agent dispatching tool", "tool", tu.Name, "user_id", userID)
-				result, err := a.Dispatch(ctx, userID, appID, tu.Name, toolInput)
+				result, err := a.Dispatch(ctx, q, userID, appID, tu.Name, toolInput)
 				if err != nil {
 					slog.Warn("agent tool error", "tool", tu.Name, "err", err)
 					toolResults = append(toolResults, ToolResult{
@@ -206,7 +215,7 @@ func (a *Agent) runConversationCore(ctx context.Context, userID uuid.UUID, appID
 					})
 
 					// Emit tool_result error entry.
-					a.EmitLog(ctx, userID, appIDPtr, conversationID, "tool_result",
+					EmitLog(ctx, q, userID, appIDPtr, conversationID, "tool_result",
 						fmt.Sprintf("%s failed: %v", tu.Name, err),
 						map[string]any{"tool": tu.Name, "error": err.Error()},
 					)
@@ -222,7 +231,7 @@ func (a *Agent) runConversationCore(ctx context.Context, userID uuid.UUID, appID
 					if utf8.RuneCountInString(resultSummary) > 200 {
 						resultSummary = string([]rune(resultSummary)[:200]) + "..."
 					}
-					a.EmitLog(ctx, userID, appIDPtr, conversationID, "tool_result",
+					EmitLog(ctx, q, userID, appIDPtr, conversationID, "tool_result",
 						fmt.Sprintf("%s returned results", tu.Name),
 						map[string]any{"tool": tu.Name, "result_preview": resultSummary},
 					)
@@ -255,7 +264,11 @@ func (a *Agent) runConversationCore(ctx context.Context, userID uuid.UUID, appID
 // limiter wraps each invocation as a single atomic unit; streaming would
 // muddy that contract. See docs/executing/openrouter-implementation.md
 // (Phase 1, Task 1.4) for the full reasoning.
-func (a *Agent) RunMonitoring(ctx context.Context, userID uuid.UUID, appConfig db.AppAgentConfig, flaggedLogs string) (string, string, bool) {
+//
+// q is the loop's UserQueriesForLoop-bound *db.Queries — every tool
+// dispatch and every EmitLog inside the loop runs under
+// app.current_user_id == userID.
+func (a *Agent) RunMonitoring(ctx context.Context, q *db.Queries, userID uuid.UUID, appConfig db.AppAgentConfig, flaggedLogs string) (string, string, bool) {
 	monAppID := appConfig.AppID // local copy for pointer-taking
 	model := appConfig.Model
 	if model == "" {
@@ -319,13 +332,13 @@ func (a *Agent) RunMonitoring(ctx context.Context, userID uuid.UUID, appConfig d
 					continue
 				}
 
-				a.EmitLog(ctx, userID, &monAppID, nil, "tool_call",
+				EmitLog(ctx, q, userID, &monAppID, nil, "tool_call",
 					fmt.Sprintf("Monitoring: called %s", tu.Name),
 					map[string]any{"tool": tu.Name, "input": toolInput, "app_id": appConfig.AppID},
 				)
 
 				slog.Info("monitoring dispatching tool", "tool", tu.Name, "app_id", appConfig.AppID)
-				result, err := a.Dispatch(ctx, userID, appConfig.AppID, tu.Name, toolInput)
+				result, err := a.Dispatch(ctx, q, userID, appConfig.AppID, tu.Name, toolInput)
 				if err != nil {
 					slog.Warn("monitoring tool error", "tool", tu.Name, "err", err)
 					toolResults = append(toolResults, ToolResult{
@@ -333,7 +346,7 @@ func (a *Agent) RunMonitoring(ctx context.Context, userID uuid.UUID, appConfig d
 						Content:    fmt.Sprintf("Tool error: %v", err),
 						IsError:    true,
 					})
-					a.EmitLog(ctx, userID, &monAppID, nil, "tool_result",
+					EmitLog(ctx, q, userID, &monAppID, nil, "tool_result",
 						fmt.Sprintf("Monitoring: %s failed: %v", tu.Name, err),
 						map[string]any{"tool": tu.Name, "error": err.Error(), "app_id": appConfig.AppID},
 					)
@@ -346,7 +359,7 @@ func (a *Agent) RunMonitoring(ctx context.Context, userID uuid.UUID, appConfig d
 					if utf8.RuneCountInString(resultSummary) > 200 {
 						resultSummary = string([]rune(resultSummary)[:200]) + "..."
 					}
-					a.EmitLog(ctx, userID, &monAppID, nil, "tool_result",
+					EmitLog(ctx, q, userID, &monAppID, nil, "tool_result",
 						fmt.Sprintf("Monitoring: %s returned results", tu.Name),
 						map[string]any{"tool": tu.Name, "result_preview": resultSummary, "app_id": appConfig.AppID},
 					)

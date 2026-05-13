@@ -81,11 +81,6 @@ const selectedModel = computed(() =>
   props.models.find(m => m.id === props.modelValue)
 )
 
-function formatContext(tokens: number): string {
-  if (tokens >= 1_000_000) return `${tokens / 1_000_000}M`
-  return `${Math.round(tokens / 1_000)}k`
-}
-
 // ── Open / close ───────────────────────────────────────────────────────
 
 function openPicker() {

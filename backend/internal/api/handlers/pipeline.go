@@ -197,22 +197,31 @@ func (s *Server) PipelineBootstrap(w http.ResponseWriter, r *http.Request) {
 	}
 
 	since := time.Now().Add(-window)
+	userID, _ := middleware.UserIDFromContext(r.Context())
 
-	stats, err := s.Queries.PipelineStatsByApp(r.Context(), db.PipelineStatsByAppParams{
-		AppID:      app.ID,
-		OccurredAt: since,
+	// Both reads share one UserQueries scope so they see the same RLS
+	// context and snapshot. The bootstrap endpoint is a single
+	// dashboard-paint round-trip, so per-call transaction overhead is
+	// negligible relative to the LLM-classification work it surfaces.
+	var stats db.PipelineStatsByAppRow
+	var recent []db.LogPipelineEvent
+	err := s.Pools.WithUserQueries(r.Context(), userID, func(q *db.Queries) error {
+		var e error
+		stats, e = q.PipelineStatsByApp(r.Context(), db.PipelineStatsByAppParams{
+			AppID:      app.ID,
+			OccurredAt: since,
+		})
+		if e != nil {
+			return e
+		}
+		recent, e = q.GetRecentPipelineEventsByApp(r.Context(), db.GetRecentPipelineEventsByAppParams{
+			AppID: app.ID,
+			Limit: tickerLimit,
+		})
+		return e
 	})
 	if err != nil {
-		jsonServerError(w, "failed to load pipeline stats", err)
-		return
-	}
-
-	recent, err := s.Queries.GetRecentPipelineEventsByApp(r.Context(), db.GetRecentPipelineEventsByAppParams{
-		AppID: app.ID,
-		Limit: tickerLimit,
-	})
-	if err != nil {
-		jsonServerError(w, "failed to load recent pipeline events", err)
+		jsonServerError(w, "failed to load pipeline bootstrap", err)
 		return
 	}
 
@@ -272,8 +281,14 @@ func (s *Server) PipelineJourney(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "invalid log id", http.StatusBadRequest)
 		return
 	}
+	userID, _ := middleware.UserIDFromContext(r.Context())
 
-	rows, err := s.Queries.GetPipelineEventsByLog(r.Context(), logID)
+	var rows []db.LogPipelineEvent
+	err = s.Pools.WithUserQueries(r.Context(), userID, func(q *db.Queries) error {
+		var e error
+		rows, e = q.GetPipelineEventsByLog(r.Context(), logID)
+		return e
+	})
 	if err != nil {
 		jsonServerError(w, "failed to load log journey", err)
 		return
@@ -444,12 +459,18 @@ func (s *Server) PipelineLogs(w http.ResponseWriter, r *http.Request) {
 	limit := parseLogsLimit(r.URL.Query().Get("limit"))
 	offset := parseLogsOffset(r.URL.Query().Get("offset"))
 
-	rows, err := s.Queries.ListPipelineLogsByApp(r.Context(), db.ListPipelineLogsByAppParams{
-		AppID:        app.ID,
-		OccurredAt:   since,
-		OccurredAt_2: until,
-		Limit:        limit,
-		Offset:       offset,
+	userID, _ := middleware.UserIDFromContext(r.Context())
+	var rows []db.ListPipelineLogsByAppRow
+	err := s.Pools.WithUserQueries(r.Context(), userID, func(q *db.Queries) error {
+		var e error
+		rows, e = q.ListPipelineLogsByApp(r.Context(), db.ListPipelineLogsByAppParams{
+			AppID:        app.ID,
+			OccurredAt:   since,
+			OccurredAt_2: until,
+			Limit:        limit,
+			Offset:       offset,
+		})
+		return e
 	})
 	if err != nil {
 		jsonServerError(w, "failed to list pipeline logs", err)
@@ -509,9 +530,12 @@ func (s *Server) PipelineStream(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"invalid app id"}`, http.StatusBadRequest)
 		return
 	}
-	if _, err := s.Queries.GetApplicationByOrgUser(r.Context(), db.GetApplicationByOrgUserParams{
-		AppID:  appID,
-		UserID: userID,
+	if err := s.Pools.WithUserQueries(r.Context(), userID, func(q *db.Queries) error {
+		_, e := q.GetApplicationByOrgUser(r.Context(), db.GetApplicationByOrgUserParams{
+			AppID:  appID,
+			UserID: userID,
+		})
+		return e
 	}); err != nil {
 		http.Error(w, `{"error":"application not found"}`, http.StatusNotFound)
 		return
@@ -551,10 +575,15 @@ func (s *Server) PipelineStream(w http.ResponseWriter, r *http.Request) {
 	if raw := r.URL.Query().Get("since"); raw != "" {
 		since, err := time.Parse(time.RFC3339Nano, raw)
 		if err == nil {
-			rows, err := s.Queries.GetPipelineEventsSince(ctx, db.GetPipelineEventsSinceParams{
-				AppID:      appID,
-				OccurredAt: since,
-				Limit:      streamReplayCap,
+			var rows []db.LogPipelineEvent
+			err := s.Pools.WithUserQueries(ctx, userID, func(q *db.Queries) error {
+				var e error
+				rows, e = q.GetPipelineEventsSince(ctx, db.GetPipelineEventsSinceParams{
+					AppID:      appID,
+					OccurredAt: since,
+					Limit:      streamReplayCap,
+				})
+				return e
 			})
 			if err != nil {
 				slog.Warn("pipeline stream: replay query failed", "err", err, "app_id", appID)

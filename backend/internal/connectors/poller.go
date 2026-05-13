@@ -14,8 +14,20 @@ import (
 const minPollInterval = 5 * time.Second
 
 // Poller manages one goroutine per active poll-based connection.
+//
+// Per-tick handoff: each call to a connector's Poll method runs inside a
+// fresh UserQueries(ownerUserID) scope minted from pools.App. The
+// connector is handed the resulting *db.Queries; every read/write it
+// performs against Heimdall's DB sees `app.current_user_id ==
+// ownerUserID` and so satisfies the post-Phase-7 RLS policies on
+// log_buffer, connection_sources, etc.
+//
+// The transaction is per-tick rather than per-poller-lifetime because
+// the poll work is short (a single ingestion batch) and we don't want
+// long-held connections during the inter-tick sleep. Per-tick keeps the
+// pool free and avoids the idle-in-txn surface.
 type Poller struct {
-	queries *db.Queries
+	pools   *db.Pools
 	mu      sync.Mutex
 	wg      sync.WaitGroup
 	pollers map[uuid.UUID]pollerEntry
@@ -26,10 +38,12 @@ type pollerEntry struct {
 	done   chan struct{} // closed when the goroutine exits
 }
 
-// NewPoller creates a new Poller manager.
-func NewPoller(queries *db.Queries) *Poller {
+// NewPoller creates a new Poller manager. Holding *db.Pools (rather than
+// *db.Queries) lets every per-tick poll mint its own UserQueries scope
+// for the connection owner.
+func NewPoller(pools *db.Pools) *Poller {
 	return &Poller{
-		queries: queries,
+		pools:   pools,
 		pollers: make(map[uuid.UUID]pollerEntry),
 	}
 }
@@ -37,7 +51,11 @@ func NewPoller(queries *db.Queries) *Poller {
 // Start launches a goroutine that calls conn.Poll() on the given interval.
 // If a poller for this connectionID already exists, it is stopped first.
 // Interval is clamped to a minimum of 5s to prevent ticker panics.
-func (p *Poller) Start(conn PollConnector, connectionID uuid.UUID, interval time.Duration) {
+//
+// userID is the connection owner — used to scope the per-tick
+// UserQueries transaction so RLS policies evaluate against the right
+// caller.
+func (p *Poller) Start(conn PollConnector, connectionID, userID uuid.UUID, interval time.Duration) {
 	if interval < minPollInterval {
 		interval = minPollInterval
 	}
@@ -61,7 +79,7 @@ func (p *Poller) Start(conn PollConnector, connectionID uuid.UUID, interval time
 	go func() {
 		defer p.wg.Done()
 		defer close(done)
-		p.run(ctx, conn, connectionID, interval)
+		p.run(ctx, conn, connectionID, userID, interval)
 	}()
 	slog.Info("poller started", "connection_id", connectionID, "interval", interval)
 }
@@ -99,9 +117,11 @@ func (p *Poller) StopAll() {
 	p.wg.Wait()
 }
 
-func (p *Poller) run(ctx context.Context, conn PollConnector, connectionID uuid.UUID, interval time.Duration) {
+func (p *Poller) run(ctx context.Context, conn PollConnector, connectionID, userID uuid.UUID, interval time.Duration) {
 	// pollWithTimeout wraps each poll call with a per-poll deadline so a hung
-	// upstream can't block the goroutine indefinitely.
+	// upstream can't block the goroutine indefinitely. The poll executes
+	// inside a UserQueries(userID) transaction so connector writes see
+	// the owner's RLS context.
 	pollWithTimeout := func() {
 		timeout := 2 * interval
 		if timeout < 30*time.Second {
@@ -109,7 +129,20 @@ func (p *Poller) run(ctx context.Context, conn PollConnector, connectionID uuid.
 		}
 		pollCtx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
-		if err := conn.Poll(pollCtx, p.queries); err != nil {
+		// Tests pass nil pools (and nil userID) to exercise the
+		// goroutine lifecycle without DB plumbing — fall through to a
+		// queries-less Poll so mocks observe Poll calls without
+		// dereferencing nil pools. Production main.go always wires
+		// non-nil pools.
+		if p.pools == nil {
+			if err := conn.Poll(pollCtx, nil); err != nil {
+				slog.Error("poll failed", "connection_id", connectionID, "err", err)
+			}
+			return
+		}
+		if err := p.pools.WithUserQueries(pollCtx, userID, func(q *db.Queries) error {
+			return conn.Poll(pollCtx, q)
+		}); err != nil {
 			slog.Error("poll failed", "connection_id", connectionID, "err", err)
 		}
 	}
@@ -122,10 +155,10 @@ func (p *Poller) run(ctx context.Context, conn PollConnector, connectionID uuid.
 
 	for {
 		select {
-		case <-ticker.C:
-			pollWithTimeout()
 		case <-ctx.Done():
 			return
+		case <-ticker.C:
+			pollWithTimeout()
 		}
 	}
 }

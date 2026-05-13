@@ -4,6 +4,26 @@ How Heimdall's Go backend talks to its primary Postgres database (Supabase-hoste
 
 This document is **descriptive, not prescriptive** — it captures the connection topology that is actually in place as of `master`. Planned migrations away from this setup (e.g. moving to Supavisor for horizontal scale) live as follow-up docs, not edits to this file.
 
+> **Post-rollout reading note (Phase 8 of the RLS role split, 2026-05).** The document below was originally written when the backend authenticated as a single `postgres` superuser via one `DATABASE_URL`. The eight-phase RLS rollout (see `docs/completions/rls-enforcement-phase-{1..8}.md` and the archived [`rls-enforcement-roadmap.md`](../archive/rls-enforcement-roadmap.md)) replaced that with a **three-role topology** under three env vars. Read §0 first; the rest of this doc still applies, but every inline mention of "the pool" / "the URL" / "the password" should be read as "the *app* pool / app URL / app password" plus an analogous *cron* pool, with `DIRECT_URL` carrying the migration-only superuser path.
+
+---
+
+## 0. Three URLs, three roles, two runtime pools
+
+The runtime authenticates as one of two non-superuser roles — never `postgres`. Migrations run as `postgres` via a separate URL that the application process never reads.
+
+| Env var | Role (post-rollout) | `BYPASSRLS` | Used by | Pool size |
+|---|---|---|---|---|
+| `DATABASE_URL` | `app_user` | **no** (`FORCE ROW LEVEL SECURITY` is the boundary) | JWT/WebSocket request path, `Pools.UserQueries` / `Pools.WithUserQueries` | ~30 |
+| `CRON_DATABASE_URL` | `cron_user` | yes | Background loops with no user identity at entry — monitor, scheduler, pollers, log-buffer pruner. Cross-tenant enumerate, then hand off to the app pool via `WithUserQueries` for the actual write. | ~5 |
+| `DIRECT_URL` | `postgres` | yes (superuser) | `make migrate-up` / `migrate-down` only — DDL needs ownership and can't be served by the runtime pools. | n/a (one-shot) |
+
+`HEIMDALL_ENV=production` enables a startup invariant (`backend/cmd/heimdall/main.go:79–84`) that refuses to launch when `DATABASE_URL` and `CRON_DATABASE_URL` authenticate as the same role. The three URLs are independent secrets in the production environment; rotate them independently.
+
+The "bypass-then-scope" pattern is the load-bearing handoff: `cron_user` does the smallest possible cross-tenant lookup (`SELECT owner_user_id FROM applications WHERE id = $1`), then the per-tenant work continues on the `app_user` pool inside a `WithUserQueries(ctx, ownerUserID, ...)` scope where `SET LOCAL app.current_user_id` is set. Audit trail and policy evaluation are identical to a normal JWT request.
+
+For the *why* (threat model, design alternatives considered and rejected), see the archived [`rls-enforcement-role-split.md`](../archive/rls-enforcement-role-split.md). For the *what shipped where*, walk the eight phase completion docs in `docs/completions/`. For the conceptual map of which roles surface in which layers, see [`rls-enforcement-mental-model.md`](./rls-enforcement-mental-model.md). For the precedent codebase that pioneered this shape, see [`../refs/trajan-db-roles.md`](../refs/trajan-db-roles.md).
+
 ---
 
 ## 1. The connection string
@@ -42,7 +62,7 @@ Heimdall uses the **direct session connection on 5432** today. §8 explains why 
 
 ## 3. The application-side pool
 
-The server does not open one connection per request. `backend/cmd/heimdall/main.go:45` constructs a single pool at startup:
+The server does not open one connection per request. `backend/cmd/heimdall/main.go` constructs **two pools** at startup — the *app pool* (size ~30) and the *cron pool* (size ~5) — and threads both into a `*db.Pools` struct that every subsystem receives. The single-pool snippet below is the original construction shape; today it runs twice with different URLs:
 
 ```go
 pool, err := pgxpool.New(context.Background(), cfg.DatabaseURL)

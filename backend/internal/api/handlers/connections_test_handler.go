@@ -158,7 +158,7 @@ func (s *Server) TestConnection(w http.ResponseWriter, r *http.Request) {
 			result = testResult{Success: true, Message: "Connected to MongoDB Atlas API"}
 		}
 	case "syslog":
-		sl, err := logs.NewSyslog(conn.Config, conn.ID, userID, appIDOrZero(conn.AppID), s.Queries)
+		sl, err := logs.NewSyslog(conn.Config, conn.ID, userID, appIDOrZero(conn.AppID), s.Pools)
 		if err != nil {
 			slog.Error("connection test failed", "connection_id", connID, "err", err)
 			result = testResult{Success: false, Message: "Invalid configuration. Check your settings."}

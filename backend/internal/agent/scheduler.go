@@ -82,11 +82,14 @@ func (a *Agent) InvestigationScheduler(ctx context.Context) {
 }
 
 // schedulerTick performs a single scheduling pass: list enabled schedules,
-// fire any whose interval has elapsed. Schedules run concurrently with a
-// semaphore cap (maxConcurrentSchedules) to prevent a hung LLM call from
-// blocking all other schedules.
+// fire any whose interval has elapsed. Cross-tenant enumeration runs on
+// the cron pool. Per-schedule fire-paths hand off to a per-tenant
+// UserQueriesForLoop scope inside RunScheduledInvestigation.
+//
+// Schedules run concurrently with a semaphore cap (maxConcurrentSchedules)
+// to prevent a hung LLM call from blocking all other schedules.
 func (a *Agent) schedulerTick(ctx context.Context, sem chan struct{}) {
-	schedules, err := a.queries.ListEnabledSchedules(ctx)
+	schedules, err := a.cronQ.ListEnabledSchedules(ctx)
 	if err != nil {
 		slog.Error("scheduler: list enabled schedules failed", "err", err)
 		return
@@ -101,10 +104,13 @@ func (a *Agent) schedulerTick(ctx context.Context, sem chan struct{}) {
 		if cronErr != "" {
 			// Emit to agent_log so the user sees broken cron expressions in the Activity feed.
 			// Resolve app → org → user for log attribution (best-effort).
-			if app, err := a.queries.GetApplication(ctx, s.AppID); err == nil {
+			if app, err := a.cronQ.GetApplication(ctx, s.AppID); err == nil {
 				if userID, err := a.resolveOrgUser(ctx, app.OrgID); err == nil {
-					a.EmitLog(ctx, userID, &s.AppID, nil, "schedule_error", cronErr,
-						map[string]any{"schedule_id": s.ID, "cron_expr": s.CronExpr.String})
+					_ = a.pools.WithUserQueries(ctx, userID, func(q *db.Queries) error {
+						EmitLog(ctx, q, userID, &s.AppID, nil, "schedule_error", cronErr,
+							map[string]any{"schedule_id": s.ID, "cron_expr": s.CronExpr.String})
+						return nil
+					})
 				}
 			}
 		}
@@ -184,14 +190,18 @@ func shouldFire(s db.InvestigationSchedule, now time.Time) (bool, string) {
 // this synchronously without going through the tick loop. Accepts the full
 // schedule row rather than just an ID so tests can construct stubs without
 // round-tripping through the DB.
+//
+// Pre-handoff reads (app, owner-user resolution) run on the cron pool. The
+// per-schedule transactional block — config load, rate limit, RunMonitoring,
+// EmitLog, MarkScheduleRun — runs inside one UserQueriesForLoop scope so
+// the LLM round-trip can't time out the transaction and every write
+// commits atomically with a consistent app.current_user_id.
 func (a *Agent) RunScheduledInvestigation(ctx context.Context, s db.InvestigationSchedule) {
 	runCtx, cancel := context.WithTimeout(ctx, schedulerRunTimeout)
 	defer cancel()
 
-	// Resolve app → OrgID → a user for agent_log attribution. We use the
-	// existing GetApplication query (not GetApplicationByID, which the plan
-	// assumed might not exist — it already does, just under a different name).
-	app, err := a.queries.GetApplication(runCtx, s.AppID)
+	// Pre-handoff cron-pool reads.
+	app, err := a.cronQ.GetApplication(runCtx, s.AppID)
 	if err != nil {
 		slog.Error("scheduler: load app failed", "err", err, "schedule_id", s.ID)
 		a.markRunError(ctx, s.ID, "load app: "+err.Error())
@@ -204,7 +214,15 @@ func (a *Agent) RunScheduledInvestigation(ctx context.Context, s db.Investigatio
 		return
 	}
 
-	appConfig, err := a.queries.GetAppAgentConfig(runCtx, s.AppID)
+	q, commit, done, err := a.pools.UserQueriesForLoop(runCtx, userID)
+	if err != nil {
+		slog.Error("scheduler: open per-tenant tx failed", "err", err, "schedule_id", s.ID)
+		a.markRunError(ctx, s.ID, "begin tx: "+err.Error())
+		return
+	}
+	defer done()
+
+	appConfig, err := q.GetAppAgentConfig(runCtx, s.AppID)
 	if err != nil {
 		// Missing config is survivable — the agent uses the default model
 		// and an empty provider (which falls back to anthropic). We log
@@ -228,12 +246,13 @@ func (a *Agent) RunScheduledInvestigation(ctx context.Context, s db.Investigatio
 	// RunMonitoring doesn't care; it just feeds the string to the LLM as the
 	// first user message. This is the architectural reuse that justifies not
 	// building a parallel loop body.
-	assessment, severity, providerFailed := a.RunMonitoring(runCtx, userID, appConfig, s.Prompt)
+	assessment, severity, providerFailed := a.RunMonitoring(runCtx, q, userID, appConfig, s.Prompt)
 	if providerFailed {
 		slog.Warn("scheduler: LLM provider failed", "schedule_id", s.ID, "app_id", s.AppID)
 		// Mark the run as errored so last_run_at advances. Without this, the
 		// schedule fires again on the very next tick (every 60s), creating a
 		// tight retry loop that burns rate-limiter tokens while the provider is down.
+		// Done outside the txn because the txn is rolling back here.
 		a.markRunError(ctx, s.ID, "LLM provider failed")
 		return
 	}
@@ -249,11 +268,7 @@ func (a *Agent) RunScheduledInvestigation(ctx context.Context, s db.Investigatio
 	// Emit to agent_log with a distinct entry_type so the UI (Phase 4) can
 	// render scheduled-investigation rows differently from classifier-driven
 	// monitoring rows. Detail carries the schedule metadata for traceability.
-	//
-	// We use ctx (parent) rather than runCtx (timed-out) for the emit so that
-	// a slow-but-succeeded RunMonitoring can still persist its result even if
-	// the run context is on the edge of expiring.
-	a.EmitLogWithSeverity(ctx, userID, &s.AppID, nil, "scheduled_investigation", summary,
+	EmitLogWithSeverity(runCtx, q, userID, &s.AppID, nil, "scheduled_investigation", summary,
 		map[string]any{
 			"schedule_id":   s.ID,
 			"schedule_name": s.Name,
@@ -265,33 +280,59 @@ func (a *Agent) RunScheduledInvestigation(ctx context.Context, s db.Investigatio
 		severity,
 	)
 
-	a.markRunSuccess(ctx, s.ID, summary)
-}
-
-// markRunSuccess updates last_run_at, sets last_status='success', and
-// stores the truncated summary. Errors are logged and swallowed — MarkRun
-// is best-effort bookkeeping, not load-bearing for correctness (the next
-// tick's `shouldFire` only uses last_run_at, which is advanced regardless).
-func (a *Agent) markRunSuccess(ctx context.Context, id uuid.UUID, summary string) {
-	if err := a.queries.MarkScheduleRun(ctx, db.MarkScheduleRunParams{
-		ID:          id,
+	// Mark the run inside the same transaction so a successful agent_log
+	// row can't ship without the schedule's last_run_at advancing.
+	// `investigation_schedules` is RLS-protected (org-member policy) so
+	// the user-scoped tx satisfies the policy.
+	if err := q.MarkScheduleRun(runCtx, db.MarkScheduleRunParams{
+		ID:          s.ID,
 		LastStatus:  pgtype.Text{String: "success", Valid: true},
 		LastError:   pgtype.Text{}, // explicit NULL clears any stale error
 		LastSummary: pgtype.Text{String: summary, Valid: true},
 	}); err != nil {
-		slog.Warn("scheduler: failed to mark run success", "err", err, "schedule_id", id)
+		slog.Warn("scheduler: failed to mark run success", "err", err, "schedule_id", s.ID)
+	}
+
+	if err := commit(); err != nil {
+		slog.Error("scheduler: commit failed", "err", err, "schedule_id", s.ID)
+		// The schedule didn't commit but the LLM ran; the next tick will
+		// retry. Log loudly — this is the kind of state divergence ops
+		// should know about.
 	}
 }
 
-// markRunError is the error-path counterpart to markRunSuccess. Captures the
+// markRunError is the error-path counterpart used when no per-tenant tx
+// is open (e.g. early failures before UserQueriesForLoop). Captures the
 // error text in last_error so the UI can surface it to operators without
-// digging through server logs.
+// digging through server logs. Opens its own short UserQueries scope —
+// these error paths are rare and don't justify keeping the txn machinery
+// in the caller's stack frame.
 func (a *Agent) markRunError(ctx context.Context, id uuid.UUID, errMsg string) {
-	if err := a.queries.MarkScheduleRun(ctx, db.MarkScheduleRunParams{
-		ID:          id,
-		LastStatus:  pgtype.Text{String: "error", Valid: true},
-		LastError:   pgtype.Text{String: errMsg, Valid: true},
-		LastSummary: pgtype.Text{}, // clear any previous success summary
+	// Resolve the schedule's app → org → user for the UserQueries scope.
+	// If any lookup fails we drop the markRunError call rather than
+	// blocking — the schedule will fire again next tick anyway.
+	sched, err := a.cronQ.GetSchedule(ctx, id)
+	if err != nil {
+		slog.Warn("scheduler: failed to load schedule for markRunError", "err", err, "schedule_id", id)
+		return
+	}
+	app, err := a.cronQ.GetApplication(ctx, sched.AppID)
+	if err != nil {
+		slog.Warn("scheduler: failed to load app for markRunError", "err", err, "schedule_id", id)
+		return
+	}
+	userID, err := a.resolveOrgUser(ctx, app.OrgID)
+	if err != nil {
+		slog.Warn("scheduler: failed to resolve user for markRunError", "err", err, "schedule_id", id)
+		return
+	}
+	if err := a.pools.WithUserQueries(ctx, userID, func(q *db.Queries) error {
+		return q.MarkScheduleRun(ctx, db.MarkScheduleRunParams{
+			ID:          id,
+			LastStatus:  pgtype.Text{String: "error", Valid: true},
+			LastError:   pgtype.Text{String: errMsg, Valid: true},
+			LastSummary: pgtype.Text{}, // clear any previous success summary
+		})
 	}); err != nil {
 		slog.Warn("scheduler: failed to mark run error", "err", err, "schedule_id", id)
 	}

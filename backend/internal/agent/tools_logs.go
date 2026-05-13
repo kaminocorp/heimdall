@@ -20,7 +20,7 @@ func escapeLike(s string) string {
 	return s
 }
 
-func (a *Agent) toolSearchLogs(ctx context.Context, userID uuid.UUID, input map[string]any) (string, error) {
+func (a *Agent) toolSearchLogs(ctx context.Context, q *db.Queries, userID uuid.UUID, input map[string]any) (string, error) {
 	// Parse limit (default 20, max 200).
 	limit := int32(20)
 	if v, ok := input["limit"].(float64); ok {
@@ -42,27 +42,27 @@ func (a *Agent) toolSearchLogs(ctx context.Context, userID uuid.UUID, input map[
 
 	switch {
 	case query != "" && severity != "":
-		logs, err = a.queries.SearchLogsByUserAndSeverity(ctx, db.SearchLogsByUserAndSeverityParams{
+		logs, err = q.SearchLogsByUserAndSeverity(ctx, db.SearchLogsByUserAndSeverityParams{
 			UserID:   userID,
 			Query:    escapeLike(query),
 			Severity: pgtype.Text{String: severity, Valid: true},
 			RowLimit: limit,
 		})
 	case query != "":
-		logs, err = a.queries.SearchLogsByUser(ctx, db.SearchLogsByUserParams{
+		logs, err = q.SearchLogsByUser(ctx, db.SearchLogsByUserParams{
 			UserID:   userID,
 			Query:    escapeLike(query),
 			RowLimit: limit,
 		})
 	case severity != "":
-		logs, err = a.queries.ListLogsByUserAndSeverity(ctx, db.ListLogsByUserAndSeverityParams{
+		logs, err = q.ListLogsByUserAndSeverity(ctx, db.ListLogsByUserAndSeverityParams{
 			UserID:   userID,
 			Severity: pgtype.Text{String: severity, Valid: true},
 			Limit:    limit,
 			Offset:   0,
 		})
 	default:
-		logs, err = a.queries.ListLogsByUser(ctx, db.ListLogsByUserParams{
+		logs, err = q.ListLogsByUser(ctx, db.ListLogsByUserParams{
 			UserID: userID,
 			Limit:  limit,
 			Offset: 0,

@@ -55,7 +55,7 @@ type Syslog struct {
 	connectionID uuid.UUID
 	userID       uuid.UUID
 	appID        uuid.UUID
-	queries      *db.Queries
+	pools        *db.Pools // nil only on the connections_validate path
 
 	listener net.Listener
 	mu       sync.Mutex
@@ -81,8 +81,11 @@ type Syslog struct {
 }
 
 // NewSyslog creates a Syslog connector from a connection's config JSONB.
-// The queries handle is used for inserting log entries as they arrive.
-func NewSyslog(configJSON json.RawMessage, connectionID, userID, appID uuid.UUID, queries *db.Queries) (*Syslog, error) {
+// pools is the source of UserQueries scopes for per-message inserts and
+// the periodic enabled-hostname refresh. May be nil on the
+// connections_validate path, which only exercises Connect/Close to test
+// that the port can be bound — never reaches the DB-touching paths.
+func NewSyslog(configJSON json.RawMessage, connectionID, userID, appID uuid.UUID, pools *db.Pools) (*Syslog, error) {
 	var cfg SyslogConfig
 	if err := json.Unmarshal(configJSON, &cfg); err != nil {
 		return nil, fmt.Errorf("syslog: invalid config: %w", err)
@@ -106,11 +109,24 @@ func NewSyslog(configJSON json.RawMessage, connectionID, userID, appID uuid.UUID
 		connectionID: connectionID,
 		userID:       userID,
 		appID:        appID,
-		queries:      queries,
+		pools:        pools,
 		connSem:      make(chan struct{}, syslogMaxConnections),
 		enabled:      make(map[string]struct{}),
 		discovered:   make(map[string]struct{}),
 	}, nil
+}
+
+// withQueries opens a short UserQueries scope on the syslog connection
+// owner's user_id and runs fn against it. Returns an error if pools is
+// nil (validate path) or the transaction fails to open. Called per
+// inserted message and per source-discovery upsert; the per-call cost
+// is one transaction setup, which the original cosmetic-RLS shape
+// avoided but which is unavoidable under the role split.
+func (s *Syslog) withQueries(ctx context.Context, fn func(*db.Queries) error) error {
+	if s.pools == nil {
+		return fmt.Errorf("syslog: pools not configured (validate path)")
+	}
+	return s.pools.WithUserQueries(ctx, s.userID, fn)
 }
 
 // ParsedConfig returns the parsed SyslogConfig.
@@ -376,15 +392,17 @@ func (s *Syslog) handleConnection(ctx context.Context, conn net.Conn) {
 
 		severity := mapSyslogSeverity(msg.Severity)
 
-		_, err = s.queries.InsertLogEntry(ctx, db.InsertLogEntryParams{
-			ConnectionID: s.connectionID,
-			SourceType:   "syslog",
-			Severity:     severity,
-			Payload:      payload,
-			UserID:       s.userID,
-			AppID:        s.appID,
-		})
-		if err != nil {
+		if err := s.withQueries(ctx, func(q *db.Queries) error {
+			_, e := q.InsertLogEntry(ctx, db.InsertLogEntryParams{
+				ConnectionID: s.connectionID,
+				SourceType:   "syslog",
+				Severity:     severity,
+				Payload:      payload,
+				UserID:       s.userID,
+				AppID:        s.appID,
+			})
+			return e
+		}); err != nil {
 			slog.Error("syslog: insert log entry", "err", err, "connection_id", s.connectionID)
 		}
 	}
@@ -498,11 +516,15 @@ func mapSyslogSeverity(sev int) pgtype.Text {
 // cache intact — preferable to suddenly flipping every host off because of
 // a transient DB hiccup.
 func (s *Syslog) refreshEnabledSet(ctx context.Context) error {
-	rows, err := s.queries.ListEnabledSourceNames(ctx, db.ListEnabledSourceNamesParams{
-		ConnectionID: s.connectionID,
-		AppID:        s.appID,
-	})
-	if err != nil {
+	var rows []string
+	if err := s.withQueries(ctx, func(q *db.Queries) error {
+		var e error
+		rows, e = q.ListEnabledSourceNames(ctx, db.ListEnabledSourceNamesParams{
+			ConnectionID: s.connectionID,
+			AppID:        s.appID,
+		})
+		return e
+	}); err != nil {
 		slog.Warn("syslog: refresh enabled set failed, keeping previous cache",
 			"err", err, "connection_id", s.connectionID)
 		return err
@@ -553,9 +575,12 @@ func (s *Syslog) discoverHostname(ctx context.Context, hostname string) {
 		return
 	}
 
-	if _, err := s.queries.UpsertConnectionSource(ctx, db.UpsertConnectionSourceParams{
-		ConnectionID: s.connectionID,
-		SourceName:   hostname,
+	if err := s.withQueries(ctx, func(q *db.Queries) error {
+		_, e := q.UpsertConnectionSource(ctx, db.UpsertConnectionSourceParams{
+			ConnectionID: s.connectionID,
+			SourceName:   hostname,
+		})
+		return e
 	}); err != nil {
 		// Don't mark discovered — leaves the door open for the next packet
 		// from this host to retry. Logged at warn so sustained failures

@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useAppStore } from '@/stores/app'
-import type { OrganizationWithRole } from '@/types/organization'
 
 const app = useAppStore()
 

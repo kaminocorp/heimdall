@@ -86,9 +86,12 @@ func (s *Server) ListLogs(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// Validate ownership: the app must belong to the user's org.
-		if _, authErr := s.Queries.GetApplicationByOrgUser(r.Context(), db.GetApplicationByOrgUserParams{
-			AppID:  parsed,
-			UserID: userID,
+		if authErr := s.Pools.WithUserQueries(r.Context(), userID, func(q *db.Queries) error {
+			_, e := q.GetApplicationByOrgUser(r.Context(), db.GetApplicationByOrgUserParams{
+				AppID:  parsed,
+				UserID: userID,
+			})
+			return e
 		}); authErr != nil {
 			jsonError(w, "application not found", http.StatusNotFound)
 			return

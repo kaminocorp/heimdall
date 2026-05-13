@@ -8,9 +8,10 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/hejijunhao/heimdall/backend/internal/connectors/codebase"
+	"github.com/hejijunhao/heimdall/backend/internal/db"
 )
 
-func (a *Agent) toolSearchCodebase(ctx context.Context, userID uuid.UUID, appID uuid.UUID, input map[string]any) (string, error) {
+func (a *Agent) toolSearchCodebase(ctx context.Context, q *db.Queries, userID uuid.UUID, appID uuid.UUID, input map[string]any) (string, error) {
 	if a.githubClient == nil {
 		return "", fmt.Errorf("search_codebase: GitHub App not configured on this server")
 	}
@@ -25,7 +26,7 @@ func (a *Agent) toolSearchCodebase(ctx context.Context, userID uuid.UUID, appID 
 	}
 
 	// Find enabled GitHub repos for this app.
-	repos, err := a.queries.ListEnabledGitHubReposByApp(ctx, appID)
+	repos, err := q.ListEnabledGitHubReposByApp(ctx, appID)
 	if err != nil {
 		return "", fmt.Errorf("search_codebase: failed to find GitHub repos: %w", err)
 	}

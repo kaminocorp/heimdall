@@ -22,8 +22,24 @@ var monitorLLMRate = rate.Every(2 * time.Second)
 // defaultProviderName is the provider used when no app-level override is set.
 const defaultProviderName = "anthropic"
 
+// Agent owns the long-running background subsystems plus the synchronous
+// chat/scheduled-investigation entry points.
+//
+// pools is the source of truth for DB access. Internally:
+//
+//   - cronQ is `pools.CronQueries()` — used for cross-tenant enumeration
+//     (ListActiveApplications, ListEnabledSchedules, PruneExpiredLogs).
+//     Reads only; writes through this handle would fail under cron_user
+//     once the role flip happens.
+//   - Per-tenant work opens `pools.UserQueries(ctx, ownerUserID)` for
+//     each app/schedule iteration, so RLS sees the right user. The
+//     handoff lives in monitor.go and scheduler.go.
+//   - The interactive chat loop opens `pools.UserQueriesForLoop(...)`
+//     (idle-in-txn timeout disabled) for the one-transaction-per-message
+//     scope. See chat.go.
 type Agent struct {
-	queries      *db.Queries
+	pools        *db.Pools
+	cronQ        *db.Queries
 	providers    map[string]Provider
 	config       *config.Config
 	classifier   Classifier
@@ -37,7 +53,7 @@ type Agent struct {
 	wg           sync.WaitGroup
 }
 
-func New(queries *db.Queries, cfg *config.Config, classifier Classifier, notifier *notifications.Dispatcher, gh *github.Client, pipeline *PipelineWriter, bus *PipelineBus) *Agent {
+func New(pools *db.Pools, cfg *config.Config, classifier Classifier, notifier *notifications.Dispatcher, gh *github.Client, pipeline *PipelineWriter, bus *PipelineBus) *Agent {
 	providers := map[string]Provider{
 		// Anthropic is always available — ANTHROPIC_API_KEY is required at config load.
 		defaultProviderName: NewAnthropicProvider(cfg.AnthropicKey),
@@ -51,7 +67,8 @@ func New(queries *db.Queries, cfg *config.Config, classifier Classifier, notifie
 		slog.Info("openrouter provider enabled")
 	}
 	return &Agent{
-		queries:      queries,
+		pools:        pools,
+		cronQ:        pools.CronQueries(),
 		providers:    providers,
 		config:       cfg,
 		classifier:   classifier,
@@ -82,6 +99,16 @@ func (a *Agent) PipelineBus() *PipelineBus {
 		return nil
 	}
 	return a.pipelineBus
+}
+
+// Pools returns the underlying *db.Pools so handler code that needs to
+// open a UserQueries scope around a pipeline-writer batch can do so
+// without reaching into the agent's internals. Nil-safe.
+func (a *Agent) Pools() *db.Pools {
+	if a == nil {
+		return nil
+	}
+	return a.pools
 }
 
 // providerFor resolves a provider by name, falling back to the default

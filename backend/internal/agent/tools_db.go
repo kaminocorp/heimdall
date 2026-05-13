@@ -12,7 +12,7 @@ import (
 	"github.com/hejijunhao/heimdall/backend/internal/db"
 )
 
-func (a *Agent) toolQueryDatabase(ctx context.Context, userID uuid.UUID, input map[string]any) (string, error) {
+func (a *Agent) toolQueryDatabase(ctx context.Context, q *db.Queries, userID uuid.UUID, input map[string]any) (string, error) {
 	sql, _ := input["sql"].(string)
 	if sql == "" {
 		return "", fmt.Errorf("query_database: sql parameter is required")
@@ -33,7 +33,7 @@ func (a *Agent) toolQueryDatabase(ctx context.Context, userID uuid.UUID, input m
 	}
 
 	// Fetch the connection — user-scoped to prevent unauthorized access.
-	conn, err := a.queries.GetConnectionByUser(ctx, db.GetConnectionByUserParams{
+	conn, err := q.GetConnectionByUser(ctx, db.GetConnectionByUserParams{
 		ID:     connID,
 		UserID: userID,
 	})

@@ -5,6 +5,8 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
+
+	"github.com/hejijunhao/heimdall/backend/internal/db"
 )
 
 // ToolRegistry returns the provider-agnostic tool definitions available to the
@@ -76,15 +78,19 @@ func ToolRegistry() []ToolDef {
 	}
 }
 
-// Dispatch routes a tool call to the appropriate implementation.
-func (a *Agent) Dispatch(ctx context.Context, userID uuid.UUID, appID uuid.UUID, name string, input map[string]any) (string, error) {
+// Dispatch routes a tool call to the appropriate implementation. The
+// caller-supplied *db.Queries handle is the loop's UserQueriesForLoop
+// transaction — every tool that reads from Heimdall's DB does so under
+// the calling user's RLS context, so per-user isolation holds whether
+// RLS is cosmetic (today) or enforced (post-Phase-7).
+func (a *Agent) Dispatch(ctx context.Context, q *db.Queries, userID uuid.UUID, appID uuid.UUID, name string, input map[string]any) (string, error) {
 	switch name {
 	case "search_logs":
-		return a.toolSearchLogs(ctx, userID, input)
+		return a.toolSearchLogs(ctx, q, userID, input)
 	case "query_database":
-		return a.toolQueryDatabase(ctx, userID, input)
+		return a.toolQueryDatabase(ctx, q, userID, input)
 	case "search_codebase":
-		return a.toolSearchCodebase(ctx, userID, appID, input)
+		return a.toolSearchCodebase(ctx, q, userID, appID, input)
 	default:
 		return "", fmt.Errorf("unknown tool: %s", name)
 	}
