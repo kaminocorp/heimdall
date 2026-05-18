@@ -4,7 +4,7 @@ How Heimdall's Go backend talks to its primary Postgres database (Supabase-hoste
 
 This document is **descriptive, not prescriptive** — it captures the connection topology that is actually in place as of `master`. Planned migrations away from this setup (e.g. moving to Supavisor for horizontal scale) live as follow-up docs, not edits to this file.
 
-> **Post-rollout reading note (Phase 8 of the RLS role split, 2026-05).** The document below was originally written when the backend authenticated as a single `postgres` superuser via one `DATABASE_URL`. The eight-phase RLS rollout (see `docs/completions/rls-enforcement-phase-{1..8}.md` and the archived [`rls-enforcement-roadmap.md`](../archive/rls-enforcement-roadmap.md)) replaced that with a **three-role topology** under three env vars. Read §0 first; the rest of this doc still applies, but every inline mention of "the pool" / "the URL" / "the password" should be read as "the *app* pool / app URL / app password" plus an analogous *cron* pool, with `DIRECT_URL` carrying the migration-only superuser path.
+> **Post-rollout note (Phase 10 of the RLS role split, 2026-05).** This document originated as a single-pool, single-superuser description. The eight-phase RLS rollout plus the 0.48.1 polish pass and 0.48.2 review-pass fixes (see `docs/completions/rls-enforcement-phase-{1..10}.md`, the archived [`rls-enforcement-roadmap.md`](../archive/rls-enforcement-roadmap.md), and `docs/changelog.md` entries 0.48.0–0.48.2) replaced that with the **three-URL / two-runtime-pool** topology described below. The post-Phase-2 chat handler's "Option A" long-transaction pattern (§6) and the `UserQueriesForLoop` helper (§4) are also rollout artefacts. Read §0 first.
 
 ---
 
@@ -14,11 +14,18 @@ The runtime authenticates as one of two non-superuser roles — never `postgres`
 
 | Env var | Role (post-rollout) | `BYPASSRLS` | Used by | Pool size |
 |---|---|---|---|---|
-| `DATABASE_URL` | `app_user` | **no** (`FORCE ROW LEVEL SECURITY` is the boundary) | JWT/WebSocket request path, `Pools.UserQueries` / `Pools.WithUserQueries` | ~30 |
-| `CRON_DATABASE_URL` | `cron_user` | yes | Background loops with no user identity at entry — monitor, scheduler, pollers, log-buffer pruner. Cross-tenant enumerate, then hand off to the app pool via `WithUserQueries` for the actual write. | ~5 |
+| `DATABASE_URL` | `app_user` | **no** (`FORCE ROW LEVEL SECURITY` is the boundary) | JWT/WebSocket request path, `Pools.UserQueries` / `Pools.UserQueriesForLoop` / `Pools.WithUserQueries` | 30 |
+| `CRON_DATABASE_URL` | `cron_user` | yes | Background loops with no user identity at entry — monitor, scheduler, pollers, log-buffer pruner. Cross-tenant enumerate, then hand off to the app pool via `WithUserQueries` for the actual write. | 5 |
 | `DIRECT_URL` | `postgres` | yes (superuser) | `make migrate-up` / `migrate-down` only — DDL needs ownership and can't be served by the runtime pools. | n/a (one-shot) |
 
-`HEIMDALL_ENV=production` enables a startup invariant (`backend/cmd/heimdall/main.go:79–84`) that refuses to launch when `DATABASE_URL` and `CRON_DATABASE_URL` authenticate as the same role. The three URLs are independent secrets in the production environment; rotate them independently.
+Pool sizes are not defaults — `backend/cmd/heimdall/main.go::buildPool` sets `MaxConns` explicitly on both pools (`appPool, … := buildPool(ctx, cfg.DatabaseURL, 30, "app")`, `cronPool, … := buildPool(ctx, cronURL, 5, "cron")`).
+
+Two startup checks gate the role split:
+
+1. **Always-on role probe** (`main.go::logPoolRoles`). Runs unconditionally on every boot. Issues `SELECT current_user` against each pool and logs `app_role` / `cron_role` at INFO. If both pools resolve to the same role, emits a WARN with actionable text — the breadcrumb that catches a production deploy that forgot to set `HEIMDALL_ENV`.
+2. **Production hard-fail** (`main.go::assertRoleSplit`). Gated on `HEIMDALL_ENV=production`. Same `SELECT current_user` probe, but `os.Exit(1)`s when the roles collide. Authoritative check — URL string comparison would miss the case where two distinct URLs both resolve to `postgres`.
+
+The three URLs are independent secrets in the production environment; rotate them independently.
 
 The "bypass-then-scope" pattern is the load-bearing handoff: `cron_user` does the smallest possible cross-tenant lookup (`SELECT owner_user_id FROM applications WHERE id = $1`), then the per-tenant work continues on the `app_user` pool inside a `WithUserQueries(ctx, ownerUserID, ...)` scope where `SET LOCAL app.current_user_id` is set. Audit trail and policy evaluation are identical to a normal JWT request.
 
@@ -62,16 +69,24 @@ Heimdall uses the **direct session connection on 5432** today. §8 explains why 
 
 ## 3. The application-side pool
 
-The server does not open one connection per request. `backend/cmd/heimdall/main.go` constructs **two pools** at startup — the *app pool* (size ~30) and the *cron pool* (size ~5) — and threads both into a `*db.Pools` struct that every subsystem receives. The single-pool snippet below is the original construction shape; today it runs twice with different URLs:
+The server does not open one connection per request. `backend/cmd/heimdall/main.go` constructs **two pools** at startup — the *app pool* (size 30) and the *cron pool* (size 5) — via `buildPool`, then wraps them in a `*db.Pools` struct that every subsystem receives:
 
 ```go
-pool, err := pgxpool.New(context.Background(), cfg.DatabaseURL)
-if err != nil {
-    slog.Error("failed to connect to database", "err", err)
-    os.Exit(1)
+appPool, err := buildPool(ctx, cfg.DatabaseURL, 30, "app")
+// ... error handling, defer appPool.Close()
+
+cronURL := cfg.CronDatabaseURL
+if cronURL == "" {
+    slog.Warn("CRON_DATABASE_URL unset; falling back to DATABASE_URL until Phase 6 of the RLS role split")
+    cronURL = cfg.DatabaseURL
 }
-defer pool.Close()
+cronPool, err := buildPool(ctx, cronURL, 5, "cron")
+// ... error handling, defer cronPool.Close()
+
+pools := db.NewPools(appPool, cronPool)
 ```
+
+`buildPool` is a thin wrapper around `pgxpool.NewWithConfig` that applies `MaxConns` and logs the result; everything else (`MinConns`, lifetimes, healthcheck) stays at pgx defaults today.
 
 This is **`pgx/v5`'s own client-side pool** (`github.com/jackc/pgx/v5/pgxpool`). It is entirely separate from any server-side pooler — pgxpool just keeps a set of live `*pgx.Conn` values, hands them out on `Acquire`, and returns them on `Release`.
 
@@ -81,28 +96,31 @@ This is **`pgx/v5`'s own client-side pool** (`github.com/jackc/pgx/v5/pgxpool`).
 HTTP Request
   │
   ▼
-pgxpool.Pool               (bounded set of reusable connections)
+pgxpool.Pool (App)         (bounded set of reusable connections, MaxConns=30)
   │
-  ├─ Pool.Begin(ctx)       (acquires a connection, starts a transaction)
+  ├─ App.Begin(ctx)        (acquires a connection, starts a transaction)
   │
-  ├─ SET LOCAL app.current_user_id = '<uuid>'   (sets RLS identity for this tx)
+  ├─ set_config('app.current_user_id', $1, true)   (RLS identity, tx-local)
   │
   ├─ Execute queries via Queries.WithTx(tx)
   │
-  └─ tx.Commit(ctx)        (commits, releases connection back to pool)
+  ├─ commit() → tx.Commit(WithoutCancel(ctx))      (caller-controlled,
+  │                                                 success path only)
+  │
+  └─ done()  → tx.Rollback if commit wasn't called (always deferred)
 ```
 
-That per-request transaction wrapper is `UserQueries` — see §4.
+That per-request transaction wrapper is `UserQueries`; the long-tx variant for the chat path is `UserQueriesForLoop`; both live on `*db.Pools` — see §4.
 
-### Where the pool goes
+### Where the pools go
 
-The pool is threaded explicitly through the dependency graph; nothing ever reaches out to a package-level global:
+The `*db.Pools` value is threaded explicitly through the dependency graph; nothing reaches out to a package-level global. The struct is the single chokepoint for "where does a query run?" decisions (see `backend/internal/db/pools.go::Pools`):
 
-- `db.New(pool)` at `main.go:91` wraps the pool in sqlc's generated `*db.Queries` façade, which is what most handler and agent code calls.
-- `api.NewRouter(cfg, pool, ag, jwks, ...)` at `main.go:111` hands the pool to the HTTP layer, which stores it on `handlers.Server.Pool` (`internal/api/handlers/server.go:17`) for the small set of handlers that need a raw tx (RLS session-variable setup — see §4).
-- `notifications.NewDispatcher(queries, cfg)` and `agent.New(queries, cfg, ...)` take the `queries` façade rather than the raw pool — most of the codebase works through sqlc, not pgx directly.
+- `api.NewRouter(cfg, pools, ag, jwks, ...)` hands the pair to the HTTP layer, which stores it on `handlers.Server.Pools` (`internal/api/handlers/server.go::Server`). Handlers reach the per-tenant pool via `s.Pools.UserQueries(...)` (or the shim `s.UserQueries(...)`, a one-line forwarder kept for ergonomics).
+- `notifications.NewDispatcher(pools, cfg)` and `agent.New(pools, cfg, ...)` take the full `Pools` value rather than a bare `*Queries` — background subsystems need both the cron path (cross-tenant enumeration) and the per-tenant handoff in the same package.
+- `connectors.NewPoller(pools)` and the syslog listener manager receive `Pools` for the same reason: enumerate active connections on `Cron`, then per-message ingestion runs against `App` under `WithUserQueries`.
 
-On shutdown, `defer pool.Close()` at `main.go:50` waits for all in-flight queries to finish before returning. This is chained after `srv.Shutdown(ctx)` and the connector/agent stop sequence so the pool is the last thing to go.
+On shutdown, both `defer appPool.Close()` and `defer cronPool.Close()` in `main.go` wait for in-flight queries to drain before returning. These are chained after `srv.Shutdown(ctx)` and the connector/agent stop sequence so the pools are the last things to go.
 
 ### One-shot connections (not pooled)
 
@@ -113,40 +131,75 @@ Two call sites deliberately skip the pool:
 
 ---
 
-## 4. RLS via per-request transactions — the `UserQueries` helper
+## 4. RLS via per-request transactions — the `Pools` helpers
 
-Every authenticated handler that needs user-scoped data calls `UserQueries(ctx, userID)` on `*handlers.Server` (`internal/api/handlers/userqueries.go`). It does four things:
+The canonical helpers live on `*db.Pools` (`backend/internal/db/pools.go`); handlers reach them via a one-line `s.UserQueries(...)` shim. The two per-tenant variants share a single implementation (`userTx`) with one bool flag that toggles agent-loop-friendly timeout disables.
 
-1. Acquires a connection from the pool and begins a transaction: `Pool.Begin(ctx)`.
-2. Runs `SET LOCAL app.current_user_id = $1` to set the RLS session variable. `SET LOCAL` is scoped to the transaction — it cannot leak to other requests, even if the same backend is reused.
-3. Returns a `*db.Queries` bound to that transaction (via sqlc's generated `WithTx`), plus a `done()` cleanup function.
-4. The caller defers `done()`, which commits the transaction and releases the connection.
+### `Pools.UserQueries` — short HTTP / ingestion transactions
+
+For HTTP handlers and webhook ingestion. Acquires a connection from the **app pool**, begins a transaction, sets `app.current_user_id` for RLS, and returns four values:
 
 ```go
-func (s *Server) UserQueries(ctx context.Context, userID uuid.UUID) (*db.Queries, func(), error) {
-    tx, err := s.Pool.Begin(ctx)
-    // ...
-    tx.Exec(ctx, "SET LOCAL app.current_user_id = $1", userID.String())
-    return s.Queries.WithTx(tx), func() { tx.Commit(ctx) }, nil
-}
+func (p *Pools) UserQueries(ctx context.Context, userID uuid.UUID) (
+    queries *Queries,     // bound to the tx via sqlc's WithTx
+    commit  func() error, // call on success path before encoding the response
+    done    func(),       // always defer — rolls back if commit was not called
+    err     error,
+)
 ```
+
+The cleanup pattern is split into `commit` + `done` rather than a single `done()` that auto-commits, because the original auto-commit shape silently persisted partial writes when a handler returned early on error after a successful first write. The current contract: read-only callers assign `_` to `commit` and just defer `done()`; write callers call `commit()` explicitly on the success path before encoding their response, and `done()` rolls back if `commit()` never ran.
+
+The session-variable write uses `SELECT set_config('app.current_user_id', $1, true)` — the `true` third arg makes it transaction-local, equivalent to `SET LOCAL` but parameterisable (`SET LOCAL` does not accept bind parameters). It cannot leak to other requests, even if the same backend is reused.
+
+Both error-path rollbacks and the deferred `done()` use `context.WithoutCancel(ctx)` so a client disconnect can't strand a half-applied transaction. Per-statement `Exec` calls still use the caller's context, so an in-flight query can still cancel on disconnect — only cleanup is shielded.
+
+### `Pools.UserQueriesForLoop` — long agent transactions
+
+For the WebSocket chat handler's per-turn transaction (see §6). Identical to `UserQueries` plus two `SET LOCAL` guards inside the tx:
+
+- `SET LOCAL idle_in_transaction_session_timeout = 0` — the gap between tool calls while Claude is thinking would otherwise trip Postgres' idle-in-txn limit and abort the transaction mid-loop.
+- `SET LOCAL statement_timeout = 0` — Phase 10 fix. The first guard alone wasn't enough on Supabase: Supabase enforces a per-role 8s `statement_timeout` by default, which would abort the *next tool query* inside the same txn after a long ChatCompletion, not the LLM call itself.
+
+The trade-off is documented inline: one app-pool connection is pinned for the loop's lifetime, typically tens of seconds, occasionally minutes. App-pool sizing (30) accounts for this.
+
+### `Pools.WithUserQueries` — the closure-shaped sibling
+
+Cleaner shape when the caller has a single linear block of work and doesn't need an explicit commit point. Used heavily by background subsystems' per-tenant work:
+
+```go
+err := pools.WithUserQueries(ctx, ownerUserID, func(q *db.Queries) error {
+    // ... writes via q
+    return nil
+})
+```
+
+Opens a transaction, sets the user-id GUC, runs `fn`, commits on `nil` error, rolls back otherwise. Same underlying `userTx` path as `UserQueries`.
+
+### `Pools.CronQueries` — the BYPASSRLS path
+
+Returns a `*Queries` bound *directly* to the cron pool — no transaction, no GUC. Used by cross-tenant enumeration paths (monitor's `ListActiveApplications`, scheduler's `ListEnabledSchedules`, the log-buffer pruner, the connector resume helpers in `main.go`). The `cron_user` role's narrow grants are the safety net: SELECT-only on tenant tables; targeted INSERT/UPDATE on `monitoring_state`; DELETE on `log_buffer`. An accidental tenant write from this path fails loudly on a privilege violation.
+
+The "bypass-then-scope" handoff: enumerate on `CronQueries`, then for each tenant call `WithUserQueries(ctx, ownerUserID, ...)` for the actual work. Audit trail and RLS policy evaluation are identical to a normal JWT request.
 
 ### Why this pattern
 
 | Concern | How it's addressed |
 |---|---|
-| **Connection efficiency** | Pool multiplexes many concurrent requests over a small number of DB connections. We don't need one connection per user — only one per concurrent query. |
-| **RLS isolation** | `SET LOCAL` is scoped to the transaction. Concurrent requests from different users never share session state. This is the canonical way to do RLS with connection pooling. |
-| **No connection leaks** | Connections are acquired and released within a single handler call. No long-lived connection holds. |
-| **WebSocket safety** | The chat handler opens short-lived transactions per DB op, not one for the whole WebSocket session. Connections aren't held during slow Claude API calls (see §6). |
+| **Connection efficiency** | App pool multiplexes many concurrent requests over 30 backend connections. We don't need one connection per user — only one per concurrent query (plus one per active chat turn — see §6). |
+| **RLS isolation** | `app.current_user_id` is set transaction-locally via `set_config(..., true)`. Concurrent transactions from different users never share session state. This is the canonical way to do RLS with connection pooling. |
+| **No partial commits** | Explicit `commit` / `done` split. Early returns after the first write roll back instead of silently persisting. |
+| **Disconnect safety** | Cleanup paths use `context.WithoutCancel`, so a client hang-up doesn't strand a half-applied tx. |
+| **Long agent loops** | `UserQueriesForLoop` disables both timeouts via `SET LOCAL`; the loop survives Claude's think time without bleeding into other paths. |
 
 ### Alternatives considered (and rejected)
 
-- **Session pooling** (one connection per user session): wasteful — holds connections during idle time. Doesn't scale past a few hundred concurrent users.
+- **One DB connection per user session** (HTTP or WebSocket scope): wasteful — pins connections during idle time. Doesn't scale past a few hundred concurrent users, and is the opposite of the pgxpool model.
 - **Direct connections with no pool**: every request pays TCP + TLS handshake. Slow and resource-heavy.
 - **Single shared connection**: no concurrency. Non-starter.
+- **Per-tool-call short transactions inside the agent loop** (the pre-Phase-2 shape): would have made the loop compatible with Supavisor transaction mode, but lost the snapshot guarantee — a tool query mid-loop could see writes from a concurrent turn that landed between iterations. Option A (one tx per turn) was chosen for consistency; the cost is the pinned connection covered above.
 
-The pool-with-per-request-transactions approach is the standard for Go services and composes cleanly with PgBouncer transaction mode if we ever move to Supavisor.
+The pool-with-per-request-transactions approach is the standard for Go services and composes cleanly with Supavisor transaction mode for everything except the agent-loop path (see §8).
 
 ---
 
@@ -154,101 +207,109 @@ The pool-with-per-request-transactions approach is the standard for Go services 
 
 `db.New(pool)` (`backend/internal/db/`) returns a `*Queries` value generated by sqlc from `backend/internal/db/queries/*.sql`. sqlc-generated methods call into the pool by type-asserting the `DBTX` interface, which is satisfied by both `*pgxpool.Pool` and `pgx.Tx` — that's how the same generated code runs pooled or inside a manual transaction.
 
-Key config from `backend/sqlc.yaml`: uuid → `google/uuid.UUID`, jsonb → `json.RawMessage`, timestamptz → `time.Time`. Migrations live in `backend/migrations/` (latest visible: `038_log_pipeline_events.up.sql`) and are applied with golang-migrate (`make migrate-up`). **Migrations are immutable once applied** — 0.46.4's schema-drift audit (see `docs/changelog.md`) covers why drift-auditing is a recurring concern.
+Key config from `backend/sqlc.yaml`: uuid → `google/uuid.UUID`, jsonb → `json.RawMessage`, timestamptz → `time.Time`. Migrations live in `backend/migrations/` (latest visible: `041_lookup_user_for_invite.up.sql`; the 039–041 trio is the role-split landing: `runtime_role_grants`, `rls_force_enforcement`, and the sqlc-stable `LookupUserIDForInvite` rewrite) and are applied with golang-migrate (`make migrate-up`). **Migrations are immutable once applied** — 0.46.4's schema-drift audit (see `docs/changelog.md`) covers why drift-auditing is a recurring concern; the catalog-drift test added in Phase 7 (`internal/db/catalog_drift_test.go`) pins `forcerowsecurity = true` on every tenant-scoped table to prevent silent regressions.
 
 ---
 
 ## 6. The WebSocket chat connection pattern
 
-The chat handler deserves special mention: it does **not** hold a database connection for the lifetime of the WebSocket.
+The chat handler is the one place that deliberately pins a connection. Phase 2 of the RLS role-split rollout introduced "Option A": run each chat *turn* (one user message → one assistant response, with N tool dispatches in between) inside a single `UserQueriesForLoop` transaction. The earlier shape (short txn per DB op, no connection held during Claude calls) was traded away for transactional consistency — a tool query mid-loop must see the same snapshot as the persist that opened the turn.
 
 ```
 WebSocket connected
   │
-  [UserQueries → load conversation → done()]      ← connection borrowed & returned
-  │
-  for each message:
-    [UserQueries → persist user message → done()] ← brief borrow
-    [UserQueries → update title → done()]         ← brief borrow
-    [Claude API call... seconds pass]             ← NO connection held
-    [UserQueries → persist agent response → done()] ← brief borrow
+  [UserQueries → setupConversation → commit → done()]  ← brief borrow,
+  │                                                       ~ms
+  for each user message:
+    [UserQueriesForLoop: BEGIN, set GUCs, disable timeouts]   ← borrow,
+      persist user message                                       held for
+      RunConversationStream (up to 10 LLM iterations):           the
+        tool_start / tool_result emits via q                     entire
+        Claude API call (seconds — sometimes 30s+)               turn
+        tool query via q
+        ...
+      persist agent response
+    commit() → done()                                         ← release
 ```
 
-This means 1000 open WebSocket sessions might only need 10–20 pool connections, since most sessions are idle or waiting on Claude at any given moment. Pool sizing (§7) is driven by concurrent *queries*, not concurrent *users*.
+Per-turn DB connection cost is therefore: **one app-pool connection per active chat turn**, held for the wall-clock duration of the turn (LLM round-trips dominate). Between turns, the connection is back in the pool — idle WebSockets are still cheap.
+
+**Concurrency invariant.** The producer goroutine in `agent.RunConversationStream` (`agent/loop_stream.go`) holds exclusive use of `q` while it's emitting events; `pgx.Tx` is not safe for concurrent use. The consumer in `chat.go` must drain the events channel to completion *before* `done()` runs, even on the error path. A `wsWriteErr` flag captures the failure, the loop keeps draining (still capturing terminal `message`/`error` events for symmetry), and the early `return` happens only after the producer's `defer close(ch)` has fired. The 0.48.2 review pass caught a regression here: returning on the first WS write error fired `defer done()` while the producer was still issuing `q.X` calls, racing `tx.Rollback` against concurrent statements. The fix is documented inline at `chat.go:194–222` and the contract is explained in detail in the `pools.go::UserQueriesForLoop` docstring.
+
+**Sizing implication.** 30 app-pool connections supports ~25 concurrent active chat turns plus normal HTTP traffic. That's the headroom number, not "30 concurrent WebSocket sessions" — idle sockets don't count. If chat concurrency outgrows app-pool capacity during the operator bake, the planned response is to add a third dedicated "loop" pool rather than reverting to per-iteration short transactions; the snapshot guarantee the loop relies on is load-bearing for tool-result correctness.
 
 ---
 
-## 7. Current pgxpool defaults and production tuning
+## 7. Current pgxpool sizing and production tuning
 
-Today the pool is created with **default settings** via `pgxpool.New(ctx, databaseURL)`:
+`MaxConns` is set explicitly per pool in `buildPool`; everything else stays at pgx defaults:
 
-| Setting | Default | Notes |
-|---|---|---|
-| `MaxConns` | `max(4, runtime.NumCPU())` | Typically 4–8 on most machines |
-| `MinConns` | 0 | No connections kept warm at idle |
-| `MaxConnLifetime` | 1 hour | Connections recycled after 1h |
-| `MaxConnIdleTime` | 30 minutes | Idle connections closed after 30m |
-| `HealthCheckPeriod` | 1 minute | Background liveness check |
+| Setting | App pool | Cron pool | Notes |
+|---|---|---|---|
+| `MaxConns` | **30** | **5** | Set in `main.go`. App size accounts for §6's pinned-during-turn cost; cron is enumeration-only and rarely concurrent. |
+| `MinConns` | 0 | 0 | pgx default. No connections kept warm at idle; first request pays the open cost. |
+| `MaxConnLifetime` | 1 hour | 1 hour | Connections recycled after 1h |
+| `MaxConnIdleTime` | 30 minutes | 30 minutes | Idle connections closed after 30m |
+| `HealthCheckPeriod` | 1 minute | 1 minute | Background liveness check |
 
-These are fine for development and low traffic but should be tuned for production.
+### When to tune further
 
-### When to tune
+The current sizing is sufficient through the operator bake. Signals that say "increase":
 
-When the system serves more than ~50 concurrent users, or when `pgxpool.Stat().EmptyAcquireCount()` (see §11) grows steadily in logs — that's the unambiguous signal that acquirers are waiting.
+- `pgxpool.Stat().EmptyAcquireCount()` (see §11) grows steadily — acquirers waiting.
+- Tail latency on chat-turn start climbs without a corresponding LLM-side slowdown.
+- Supabase dashboard shows the app pool sitting at 30 backends for sustained periods.
 
-### Recommended production configuration
+Signals that say "split" (introduce a third pool, e.g. a dedicated "loop" pool for `UserQueriesForLoop`):
+
+- Short HTTP requests start blocking on chat-turn acquisition while plenty of cron capacity sits idle. Symptom is HTTP p95 climbing in lockstep with active chat count.
+
+### Knobs worth tuning before changing pool count
 
 ```go
-config, err := pgxpool.ParseConfig(cfg.DatabaseURL)
-if err != nil {
-    // handle error
-}
-
-config.MaxConns = 25                        // match your Supabase/Postgres plan limit
-config.MinConns = 5                         // keep connections warm for fast acquisition
-config.MaxConnLifetime = 30 * time.Minute   // recycle before server-side timeout
-config.MaxConnIdleTime = 5 * time.Minute    // release idle connections sooner
-config.HealthCheckPeriod = 30 * time.Second // catch dead connections faster
-
-pool, err := pgxpool.NewWithConfig(context.Background(), config)
+poolCfg.MinConns = 5                         // keep a warm baseline
+poolCfg.MaxConnLifetime = 30 * time.Minute   // recycle before any server-side timeout
+poolCfg.MaxConnIdleTime = 5 * time.Minute    // release idle conns sooner under bursty load
+poolCfg.HealthCheckPeriod = 30 * time.Second // catch dead conns faster
 ```
 
-### Choosing `MaxConns`
+None of these are wired today; doing so is a 10-line change to `buildPool`.
 
-`MaxConns` should be set based on the **database's connection limit**, not the number of users:
+### Choosing `MaxConns` (when sizing changes)
+
+`MaxConns` is bounded by the **database's connection limit**, not the number of users:
 
 - **Supabase Free**: 60 direct connections (leave headroom for migrations, admin)
 - **Supabase Pro**: 200+ direct connections
 - **Self-hosted Postgres**: check `SHOW max_connections`
 
-A good starting point is **50–75% of the database limit** for the application pool, reserving the rest for admin, migrations, and monitoring connections.
-
-If you deploy multiple backend replicas, divide the pool limit across them (e.g. 3 replicas with `MaxConns=15` each against a 60-connection database). The scale trigger is **replica count × `MaxConns`**, not RPS per replica — once that product approaches `max_connections`, you either shrink the pool, move to Supavisor, or raise the Supabase plan.
+Today's `30 + 5 = 35` per replica leaves comfortable headroom on Free for single-replica deploys, and would fit ~5 replicas on Pro before approaching the ceiling. The scale trigger is **replica count × (app + cron `MaxConns`)**, not RPS per replica — once that product approaches `max_connections`, you either shrink the pool, move to Supavisor for the non-loop traffic (§8), or raise the Supabase plan.
 
 ### Scaling characteristics
 
-| Concurrent users | Concurrent DB ops (est.) | Pool size | Notes |
+| Active chats + HTTP RPS | Likely bottleneck | Pool action | Notes |
 |---|---|---|---|
-| < 100 | ~10–20 | 4–8 (defaults) | Fine as-is |
-| 100–500 | ~20–50 | 15–25 | Tune `MaxConns` explicitly |
-| 500–2000 | ~50–200 | 25–50 client-side | Move to Supavisor (§8) |
-| 2000+ | ~200+ | 50+ client-side | Supavisor + multiple backend replicas |
+| < ~25 concurrent turns, < 100 RPS | None | Hold at 30/5 | Current state |
+| 25–100 concurrent turns | App-pool saturation during turns | Bump app to 50, consider third "loop" pool | Splits the chat path from short HTTP |
+| 500+ concurrent turns | App-pool × backend replicas vs Supabase ceiling | Multi-replica + dedicated loop pool + Supavisor for non-loop | The migration plan in §8 becomes load-bearing |
+| 2000+ | Postgres throughput, not pool size | Supavisor + multi-replica + plan upgrade / read replica | Reshape the workload |
 
-These are rough estimates. Actual concurrency depends on query duration, request patterns, and how many users are chatting vs. idle (§6 keeps the idle ones cheap).
+These are estimates. Actual concurrency depends on turn duration (LLM-dominated), HTTP request mix, and how many connectors are actively ingesting (each ingestion handler also takes an app-pool conn briefly).
 
 ---
 
 ## 8. Why we're on direct (5432) and not the transaction pooler today
 
-Our RLS pattern (`UserQueries`: `BEGIN` → `SET LOCAL` → queries → `COMMIT`) is **fully compatible with Supavisor transaction mode** — `SET LOCAL` is tx-scoped, and the transaction is the atomic unit PgBouncer hands to a backend. If RLS were the only constraint, we could move to port 6543 with no code change.
+Our RLS pattern (`UserQueries`: `BEGIN` → `set_config('app.current_user_id', ..., true)` → queries → `COMMIT`) is **fully compatible with Supavisor transaction mode** — the GUC is tx-scoped, and the transaction is the atomic unit PgBouncer hands to a backend. If RLS were the only constraint, we could move to port 6543 with no code change.
 
 The reasons we stay on direct today are about *other* things that would break under transaction-mode pooling:
 
-1. **Session GUCs on user-owned Postgres connectors.** `internal/connectors/database/postgres.go` connects to *user-supplied* Postgres databases (the DB-activity data source) and enforces `default_transaction_read_only=on` as a session parameter — set once on connect, applies to every transaction on that connection. That's a session-scoped GUC; it would be reset at every `COMMIT` under PgBouncer transaction mode. This applies to the *downstream* connector, not to Heimdall's own DB, but it illustrates the invariant, and if we ever share connection handling patterns we'd need to rework it.
-2. **Prepared statement cache.** pgx prepares queries on first use and caches plans on the connection. Under transaction-mode pooling the cache is invalidated on every `COMMIT`, killing the performance benefit and risking "prepared statement already exists" errors when the same backend comes back around. Supavisor has partial mitigations, but no complete fix.
-3. **Future `LISTEN/NOTIFY`.** Pub/sub-style event fan-out (currently TODO-tier — `pipeline_bus.go` runs in-process today) *requires* session persistence. A future decision to use Postgres-backed pub/sub across replicas would force a carve-out for those connections regardless of which port handles HTTP traffic.
+1. **Long-lived agent-loop transactions.** `UserQueriesForLoop` holds one transaction across an entire chat turn — multiple Claude round-trips, multiple tool dispatches, often 10s+ wall-clock. Transaction-mode pooling's whole pitch is *"the backend is free between transactions, so it can serve other clients."* Long transactions pin a backend regardless of pooling mode — txn-mode multiplexing gives us zero benefit on this path, while we'd still pay the costs in items 2–4 below. The Phase 2 `SET LOCAL idle_in_transaction_session_timeout = 0` + Phase 10 `SET LOCAL statement_timeout = 0` guards are also tx-scoped, so they survive a hypothetical port-6543 move — the constraint is genuinely about lost performance, not correctness.
+2. **Session GUCs on user-owned Postgres connectors.** `internal/connectors/database/postgres.go` connects to *user-supplied* Postgres databases (the DB-activity data source) and enforces `default_transaction_read_only=on` as a session parameter — set once on connect, applies to every transaction on that connection. That's a session-scoped GUC; it would be reset at every `COMMIT` under PgBouncer transaction mode. This applies to the *downstream* connector, not to Heimdall's own DB, but it illustrates the invariant, and if we ever share connection handling patterns we'd need to rework it.
+3. **Prepared statement cache.** pgx prepares queries on first use and caches plans on the connection. Under transaction-mode pooling the cache is invalidated on every `COMMIT`, killing the performance benefit and risking "prepared statement already exists" errors when the same backend comes back around. Supavisor has partial mitigations, but no complete fix.
+4. **Future `LISTEN/NOTIFY`.** Pub/sub-style event fan-out (currently TODO-tier — `pipeline_bus.go` runs in-process today) *requires* session persistence. A future decision to use Postgres-backed pub/sub across replicas would force a carve-out for those connections regardless of which port handles HTTP traffic.
 
-**Takeaway:** moving the primary endpoint to Supavisor is a project, not a config change, but it's a smaller project than one might assume — the RLS pattern is safe. A future migration doc should enumerate the call sites above and their replacement patterns before anyone flips the URL.
+**Takeaway:** moving the primary endpoint to Supavisor is a project, not a config change. The RLS pattern is safe, but item 1 means the chat path would need to stay on a session-mode endpoint (direct or session-pooler) regardless — a future migration doc should describe a split (chat / loop on session-mode, short HTTP on transaction-mode) rather than a single flip, and enumerate items 2–4 with their replacement patterns.
 
 ### Supavisor when you do move
 
@@ -266,12 +327,14 @@ A Supabase project on a given plan has a fixed `max_connections` ceiling on the 
 Per deployment we therefore consume, against Heimdall's own DB:
 
 ```
-effective_connections = pool.MaxConns × replicas + sidecar / migration tooling
+effective_connections = (app.MaxConns + cron.MaxConns) × replicas
+                      + migration / sidecar tooling on DIRECT_URL
+                      = 35 × replicas (+ migrations)
 ```
 
 User-owned Postgres connectors (`internal/connectors/database/postgres.go`) don't count against this — they go to the user's database, not ours.
 
-Today the default pool sizing (4 or `NumCPU`) times a small number of backend replicas sits comfortably under any Supabase plan ceiling. **The scale trigger is horizontal replica count, not traffic per replica.** In ascending cost, the options when we approach the ceiling:
+Today's 30 + 5 = 35 per replica times a small number of backend replicas sits comfortably under any Supabase plan ceiling. **The scale trigger is horizontal replica count, not traffic per replica.** In ascending cost, the options when we approach the ceiling:
 
 1. Cap `pool.MaxConns` lower (starves request concurrency first).
 2. Move `DATABASE_URL` to Supabase's session pooler (same semantics as direct, PgBouncer-fronted — preserves session state, adds a network hop).
@@ -296,6 +359,14 @@ Rotating the DB password is a Supabase-side operation: regenerate in the Supabas
 
 ## 11. Monitoring
 
+### What's wired today
+
+- **Role attribution at startup.** `logPoolRoles` (always on) emits an INFO with `app_role` / `cron_role` from a `SELECT current_user` on each pool. If both roles match, a WARN with actionable text fires regardless of environment. This is the breadcrumb that catches a production deploy that forgot to flip the URLs.
+- **Production hard-fail.** `assertRoleSplit` (under `HEIMDALL_ENV=production`) runs the same probe and `os.Exit(1)`s on a role collision.
+- **Pool-ready INFO.** `buildPool` logs `database pool ready` with `label` and `max_conns` for each pool so the sizing is auditable from log search.
+
+### What's not wired
+
 `pgxpool.Pool` exposes a `Stat()` snapshot we don't currently sample:
 
 ```go
@@ -310,20 +381,19 @@ stats := pool.Stat()
 
 When `EmptyAcquireCount` grows steadily, the pool is too small.
 
-We don't currently log or export these. When pool saturation becomes a question ("are 502s from pool exhaustion or upstream slowness?"), the fast answer is to wire a periodic `slog.Info("pool", "acquired", stat.AcquiredConns(), ...)` ticker into `main.go` alongside the existing connector heartbeats. This is a one-hour change that pays off the first time there's an incident.
+We don't currently log or export these. When pool saturation becomes a question ("are 502s from pool exhaustion or upstream slowness?"), the fast answer is to wire a periodic `slog.Info("pool", "label", "app", "acquired", stat.AcquiredConns(), ...)` ticker into `main.go` alongside the existing connector heartbeats — one for each pool. This is a one-hour change that pays off the first time there's an incident.
 
-Supabase also surfaces per-project connection and query metrics in its dashboard — those are authoritative for server-side backend count; pgxpool's numbers are authoritative for client-side pressure. Mismatches between the two (e.g. pgxpool idle but Supabase reports connections held) almost always mean long-running queries rather than a pooling bug.
+Supabase also surfaces per-project connection and query metrics in its dashboard — those are authoritative for server-side backend count; pgxpool's numbers are authoritative for client-side pressure. Mismatches between the two (e.g. pgxpool idle but Supabase reports connections held) almost always mean long-running queries rather than a pooling bug — `UserQueriesForLoop` transactions are a known and intentional cause.
 
 ---
 
 ## 12. Summary
 
-- `DATABASE_URL` is a libpq URI pointing at `db.<project-ref>.supabase.co:5432` — Supabase's **direct Postgres** endpoint on the Postgres-native port.
-- Port 5432 is session-mode: one TCP socket = one backend process. Alternative endpoints (5432-via-session-pooler, 6543 transaction pooler) trade session semantics for scale and are **not** what we use today.
-- In-process, `pgxpool.New` at `backend/cmd/heimdall/main.go:45` builds one client-side pool; it is passed explicitly into the router, agent, and notifications dispatcher, and wrapped by sqlc's `db.Queries` for typed access.
-- Every authenticated request funnels through `UserQueries`: `Pool.Begin` → `SET LOCAL app.current_user_id` → sqlc queries → `tx.Commit`. This composes cleanly with Supavisor transaction mode, so the RLS pattern is not a blocker to eventual migration.
-- What *is* a blocker: session GUCs on user-owned Postgres connectors, the prepared-statement cache, and any future `LISTEN/NOTIFY` use. Moving to Supavisor is a project, not a config change.
-- WebSocket chat handlers borrow and release connections per DB op, not per session — 1000 open sockets cost roughly the query concurrency of an active few.
-- Scale ceiling is `pool.MaxConns × replicas` vs. Supabase's `max_connections`. The trigger is replica count, not RPS.
-- Defaults are acceptable to ~50 concurrent users; beyond that, set `MaxConns` to 50–75% of the DB's `max_connections` divided across replicas, set `MinConns` > 0 to keep connections warm, and shorten `MaxConnIdleTime`.
-- Observability: `pgxpool.Stat()` exists, we don't sample it yet, wiring it up is cheap and pays off at the first incident.
+- **Three URLs, three roles, two runtime pools.** `DATABASE_URL` → `app_user` (per-tenant CRUD, FORCE RLS), `CRON_DATABASE_URL` → `cron_user` (BYPASSRLS, narrow grants), `DIRECT_URL` → `postgres` (migrations only). `HEIMDALL_ENV=production` hard-fails if app and cron resolve to the same role; an always-on WARN catches the same misconfig in any environment.
+- All three URLs are libpq URIs pointing at `db.<project-ref>.supabase.co:5432` — Supabase's **direct Postgres** endpoint. Port 5432 is session-mode: one TCP socket = one backend process. Alternative endpoints (session-pooler, 6543 transaction pooler) trade session semantics for scale and are **not** what we use today.
+- In-process, `buildPool` constructs two client-side pools with explicit `MaxConns` (`app = 30`, `cron = 5`); both are wrapped in `*db.Pools` and passed explicitly into the router, agent, connectors, and notifications dispatcher.
+- Per-tenant work funnels through one of three Pools helpers: `UserQueries` (short HTTP / ingestion), `UserQueriesForLoop` (agent chat turn, with timeout disables for LLM round-trips), or `WithUserQueries` (closure shape for background subsystems). All three set `app.current_user_id` transaction-locally via `set_config(..., true)`. Cross-tenant enumeration uses `CronQueries` on the cron pool; the bypass-then-scope handoff is the load-bearing pattern for background work.
+- The chat path pins one app-pool connection per active *turn* (Option A from the Phase 2 rollout). Idle WebSockets are still free; concurrent turns are not. Sizing accounts for this; if needed, the next move is a dedicated "loop" pool rather than reverting to per-iteration short transactions.
+- RLS composes cleanly with Supavisor transaction mode, so it is not a blocker to eventual migration. What *is* a blocker: long-lived agent transactions (item 1 of §8), session GUCs on user-owned Postgres connectors, the prepared-statement cache, and any future `LISTEN/NOTIFY` use. Moving to Supavisor is a project — and probably a split, not a single flip — not a config change.
+- Scale ceiling is `(app + cron) × replicas = 35 × replicas` vs. Supabase's `max_connections`. The trigger is replica count, not RPS.
+- Observability: role probes log at startup (both pools), `pgxpool.Stat()` is not yet sampled — wiring it up per pool is cheap and pays off at the first incident.
